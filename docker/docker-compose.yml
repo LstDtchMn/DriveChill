@@ -1,0 +1,22 @@
+version: "3.9"
+
+services:
+  drivechill:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: drivechill
+    ports:
+      - "8085:8085"
+    volumes:
+      - drivechill_data:/app/data
+    environment:
+      - DRIVECHILL_HARDWARE_BACKEND=auto
+      - DRIVECHILL_SENSOR_POLL_INTERVAL=1.0
+      - DRIVECHILL_HISTORY_RETENTION_HOURS=168
+    # Required for hardware sensor access on Linux
+    privileged: true
+    restart: unless-stopped
+
+volumes:
+  drivechill_data:
