@@ -81,7 +81,7 @@ export function PresetSelector({ onProfileChange }: PresetSelectorProps) {
                 borderColor: 'var(--accent)',
                 boxShadow: '0 0 0 2px var(--accent-muted)',
               } : {}}
-            >
+              >
               <div className="flex items-center gap-2 mb-2">
                 <div
                   className="w-8 h-8 rounded-lg flex items-center justify-center"

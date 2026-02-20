@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useAppStore } from '@/stores/appStore';
 import { api } from '@/lib/api';
 import type { FanTestProgress, FanTestResult, FanTestStep } from '@/lib/types';
@@ -131,10 +131,11 @@ export function FanTestPanel({ fanId, fanName }: Props) {
   }, [fanId]);
 
   // When live progress transitions to completed, fetch the full result
-  const prevStatus = result?.status;
-  if (liveProgress?.status === 'completed' && prevStatus !== 'completed' && !result) {
-    handleFetchResult();
-  }
+  useEffect(() => {
+    if (liveProgress?.status === 'completed' && !result) {
+      handleFetchResult();
+    }
+  }, [liveProgress?.status, result, handleFetchResult]);
 
   // ── Idle state ──────────────────────────────────────────────────────────────
   if (!isRunning && !result) {
@@ -230,8 +231,8 @@ export function FanTestPanel({ fanId, fanName }: Props) {
       result.status === 'completed'
         ? 'badge-success'
         : result.status === 'cancelled'
-        ? 'badge-warning'
-        : 'badge-error';
+          ? 'badge-warning'
+          : 'badge-error';
 
     return (
       <div className="card p-4">

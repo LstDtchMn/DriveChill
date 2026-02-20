@@ -35,7 +35,9 @@ _init_default_profiles()
 @router.get("")
 async def get_profiles():
     """Get all profiles."""
-    return {"profiles": [p.model_dump() for p in _profiles.values()]}
+    data = {"profiles": [p.model_dump() for p in _profiles.values()]}
+    print(f"DEBUG: get_profiles returning: {data}")
+    return data
 
 
 @router.get("/{profile_id}")
