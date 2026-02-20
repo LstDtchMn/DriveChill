@@ -92,7 +92,8 @@ export function SystemOverview() {
         <h3 className="section-title mb-3 px-1">Fan Speeds</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {fanRpms.map((fan, i) => {
-            const pct = fanPcts.find((f) => f.id.replace('_rpm', '') === fan.id.replace('_rpm', ''));
+            const fanBase = fan.id.replace(/_rpm$/, '');
+            const pct = fanPcts.find((f) => f.id.replace(/_pct$/, '') === fanBase);
             return (
               <FanSpeedCard
                 key={fan.id}

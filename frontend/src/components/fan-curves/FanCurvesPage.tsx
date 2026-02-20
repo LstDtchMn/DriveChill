@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { CurveEditor } from './CurveEditor';
 import { PresetSelector } from './PresetSelector';
+import { FanTestPanel } from '@/components/fans/FanTestPanel';
 import { useSensors } from '@/hooks/useSensors';
 import { api } from '@/lib/api';
 import type { FanCurvePoint, FanCurve } from '@/lib/types';
@@ -158,6 +159,26 @@ export function FanCurvesPage() {
           </div>
         )}
       </div>
+
+      {/* Fan Benchmarks */}
+      {allFans.length > 0 && (
+        <div className="border-t pt-6" style={{ borderColor: 'var(--border)' }}>
+          <h3 className="section-title mb-4">Fan Benchmarks</h3>
+          <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
+            Sweep each fan from 0% to 100% to find its stall point and maximum RPM.
+            The curve engine pauses for the fan under test.
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+            {allFans.map((fanId) => (
+              <FanTestPanel
+                key={fanId}
+                fanId={fanId}
+                fanName={fanId.replace(/_/g, ' ').toUpperCase()}
+              />
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

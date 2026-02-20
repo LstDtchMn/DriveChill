@@ -15,9 +15,13 @@ def get_backend() -> HardwareBackend:
     if backend_type == "auto":
         system = platform.system()
         if system == "Windows":
-            backend_type = "lhm"
+            backend_type = "lhm_direct"
         else:
             backend_type = "lm_sensors"
+
+    if backend_type == "lhm_direct":
+        from app.hardware.lhm_direct_backend import LHMDirectBackend
+        return LHMDirectBackend()
 
     if backend_type == "lhm":
         from app.hardware.lhm_backend import LHMBackend

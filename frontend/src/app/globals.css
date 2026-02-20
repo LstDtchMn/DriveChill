@@ -144,6 +144,16 @@ body {
     color: var(--danger);
   }
 
+  .badge-error {
+    background: rgba(239, 68, 68, 0.15);
+    color: var(--danger);
+  }
+
+  .badge-info {
+    background: rgba(99, 179, 237, 0.15);
+    color: #63b3ed;
+  }
+
   .section-title {
     @apply text-sm font-semibold uppercase tracking-wider;
     color: var(--text-secondary);

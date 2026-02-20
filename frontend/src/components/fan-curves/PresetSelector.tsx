@@ -79,7 +79,6 @@ export function PresetSelector({ onProfileChange }: PresetSelectorProps) {
               }`}
               style={profile.is_active ? {
                 borderColor: 'var(--accent)',
-                ringColor: 'var(--accent)',
                 boxShadow: '0 0 0 2px var(--accent-muted)',
               } : {}}
             >

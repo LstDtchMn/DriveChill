@@ -32,6 +32,11 @@ data/
 *.db
 *.sqlite
 
+# C# / .NET
+bin/
+obj/
+*.user
+
 # Logs
 *.log
 logs/

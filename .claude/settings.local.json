@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node:*)",
+      "Bash(npm:*)",
+      "Bash(pip install:*)",
+      "Bash(python -m pip install:*)",
+      "Bash(find:*)",
+      "Bash(curl:*)",
+      "Bash(dotnet build:*)",
+      "Bash(taskkill:*)",
+      "Bash(tasklist:*)",
+      "Bash(powershell.exe -Command \"Stop-Process -Id 29108 -Force\")",
+      "Bash(python3:*)",
+      "Bash(ls:*)",
+      "Bash(powershell.exe -Command \"Stop-Process -Name DriveChill -Force -ErrorAction SilentlyContinue\")",
+      "Bash(git add:*)"
+    ]
+  }
+}

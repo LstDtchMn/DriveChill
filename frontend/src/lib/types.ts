@@ -58,6 +58,41 @@ export interface AlertEvent {
   message: string;
 }
 
+export interface FanTestOptions {
+  steps: number;
+  settle_ms: number;
+  min_rpm_threshold: number;
+}
+
+export interface FanTestStep {
+  speed_pct: number;
+  rpm: number | null;
+  spinning: boolean;
+}
+
+export interface FanTestResult {
+  fan_id: string;
+  status: 'running' | 'completed' | 'cancelled' | 'failed';
+  started_at: string;
+  completed_at: string | null;
+  steps: FanTestStep[];
+  min_operational_pct: number | null;
+  max_rpm: number | null;
+  options: FanTestOptions;
+  error: string | null;
+}
+
+export interface FanTestProgress {
+  fan_id: string;
+  status: 'running' | 'completed' | 'cancelled' | 'failed';
+  steps_done: number;
+  steps_total: number;
+  current_pct: number;
+  current_rpm: number | null;
+  steps: FanTestStep[];
+  min_operational_pct: number | null;
+}
+
 export interface WSMessage {
   type: 'sensor_update' | 'heartbeat';
   timestamp?: string;
@@ -65,6 +100,7 @@ export interface WSMessage {
   applied_speeds?: Record<string, number>;
   alerts?: AlertEvent[];
   active_alerts?: string[];
+  fan_test?: FanTestProgress[];
 }
 
 export type Page = 'dashboard' | 'curves' | 'alerts' | 'settings';

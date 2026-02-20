@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>DriveChill</RootNamespace>
+    <AssemblyName>DriveChill</AssemblyName>
+    <Version>1.0.0</Version>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+
+    <!--
+      UAC manifest — only embedded when explicitly requested (i.e. during dotnet publish).
+      This lets 'dotnet run' work from a non-elevated terminal for development.
+      The build_cs.ps1 script passes -p:ApplicationManifest=app.manifest on publish.
+    -->
+    <ApplicationManifest Condition="'$(EmbedManifest)' == 'true'">app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <!--
+    Copy the Next.js static export (frontend/out/) into wwwroot/ at publish time.
+    ASP.NET Core's UseStaticFiles() serves these automatically.
+    Run 'npm run build' in frontend/ before dotnet publish.
+  -->
+  <ItemGroup>
+    <None Include="..\frontend\out\**\*"
+          CopyToOutputDirectory="PreserveNewest"
+          Link="wwwroot\%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.3" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.0" />
+  </ItemGroup>
+
+</Project>

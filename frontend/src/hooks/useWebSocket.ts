@@ -18,6 +18,7 @@ export function useWebSocket() {
     setAppliedSpeeds,
     addAlertEvents,
     setActiveAlerts,
+    setFanTestProgress,
     setConnected,
   } = useAppStore();
 
@@ -55,6 +56,9 @@ export function useWebSocket() {
             if (msg.active_alerts) {
               setActiveAlerts(msg.active_alerts);
             }
+
+            // Fan benchmark progress (only present when tests are running)
+            setFanTestProgress(msg.fan_test ?? []);
           }
         } catch {
           // Ignore parse errors
@@ -72,7 +76,7 @@ export function useWebSocket() {
     } catch {
       scheduleReconnect();
     }
-  }, [setReadings, addHistoryPoint, setAppliedSpeeds, addAlertEvents, setActiveAlerts, setConnected]);
+  }, [setReadings, addHistoryPoint, setAppliedSpeeds, addAlertEvents, setActiveAlerts, setFanTestProgress, setConnected]);
 
   const scheduleReconnect = useCallback(() => {
     const delay = RECONNECT_DELAYS[Math.min(reconnectAttempt.current, RECONNECT_DELAYS.length - 1)];

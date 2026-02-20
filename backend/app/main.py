@@ -95,7 +95,13 @@ app.include_router(ws_router)
 
 
 # Serve frontend static files (built Next.js export)
-frontend_dist = Path(__file__).parent.parent.parent / "frontend" / "out"
+# In a PyInstaller bundle, files land in sys._MEIPASS/frontend_out/
+import sys as _sys
+if getattr(_sys, "frozen", False):
+    frontend_dist = Path(_sys._MEIPASS) / "frontend_out"
+else:
+    frontend_dist = Path(__file__).parent.parent.parent / "frontend" / "out"
+
 if frontend_dist.exists():
     app.mount("/", StaticFiles(directory=str(frontend_dist), html=True), name="frontend")
 

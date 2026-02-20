@@ -44,6 +44,19 @@ export const api = {
   updateSettings: (settings: any) =>
     fetchAPI('/api/settings', { method: 'PUT', body: JSON.stringify(settings) }),
 
+  // Fan benchmarks
+  fanTests: {
+    start: (fanId: string, options?: Partial<{ steps: number; settle_ms: number; min_rpm_threshold: number }>) =>
+      fetchAPI<{ ok: boolean; fan_id: string; estimated_duration_s: number }>(
+        `/api/fans/${fanId}/test`,
+        { method: 'POST', body: JSON.stringify(options ?? {}) }
+      ),
+    getResult: (fanId: string) =>
+      fetchAPI<import('./types').FanTestResult>(`/api/fans/${fanId}/test`),
+    cancel: (fanId: string) =>
+      fetchAPI<{ ok: boolean }>(`/api/fans/${fanId}/test`, { method: 'DELETE' }),
+  },
+
   // Health
   health: () => fetchAPI<any>('/api/health'),
 };

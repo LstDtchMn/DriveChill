@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { SensorReading, AlertEvent, Page, Profile, FanCurve } from '@/lib/types';
+import type { SensorReading, AlertEvent, Page, Profile, FanCurve, FanTestProgress } from '@/lib/types';
 
 interface HistoryPoint {
   timestamp: string;
@@ -37,6 +37,10 @@ interface AppState {
   activeAlerts: string[];
   setActiveAlerts: (alerts: string[]) => void;
   clearAlerts: () => void;
+
+  // Fan benchmark progress (live, from WebSocket)
+  fanTestProgress: FanTestProgress[];
+  setFanTestProgress: (progress: FanTestProgress[]) => void;
 
   // Connection
   connected: boolean;
@@ -94,6 +98,10 @@ export const useAppStore = create<AppState>((set) => ({
   activeAlerts: [],
   setActiveAlerts: (alerts) => set({ activeAlerts: alerts }),
   clearAlerts: () => set({ alertEvents: [], activeAlerts: [] }),
+
+  // Fan benchmark progress
+  fanTestProgress: [],
+  setFanTestProgress: (progress) => set({ fanTestProgress: progress }),
 
   // Connection
   connected: false,
