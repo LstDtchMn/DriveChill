@@ -17,11 +17,19 @@ node_modules/
 out/
 .cache/
 
-# IDE
+# IDE / tools
 .vscode/
 .idea/
+.claude/
 *.swp
 *.swo
+
+# TypeScript build cache
+tsconfig.tsbuildinfo
+
+# Local env overrides
+.env.local
+.env.*.local
 
 # OS
 .DS_Store
