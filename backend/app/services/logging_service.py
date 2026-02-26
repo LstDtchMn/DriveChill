@@ -1,5 +1,7 @@
+import csv
+import io
 import aiosqlite
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from app.models.sensors import SensorReading, SensorSnapshot
@@ -15,26 +17,9 @@ class LoggingService:
     async def initialize(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._db = await aiosqlite.connect(str(self._db_path))
-        await self._db.execute("""
-            CREATE TABLE IF NOT EXISTS sensor_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp TEXT NOT NULL,
-                sensor_id TEXT NOT NULL,
-                sensor_name TEXT NOT NULL,
-                sensor_type TEXT NOT NULL,
-                value REAL NOT NULL,
-                unit TEXT
-            )
-        """)
-        await self._db.execute("""
-            CREATE INDEX IF NOT EXISTS idx_sensor_log_ts
-            ON sensor_log (timestamp)
-        """)
-        await self._db.execute("""
-            CREATE INDEX IF NOT EXISTS idx_sensor_log_sensor
-            ON sensor_log (sensor_id, timestamp)
-        """)
-        await self._db.commit()
+        # Table and indexes are created by the migration framework
+        # (001_initial_schema.sql).  WAL mode for better concurrent reads.
+        await self._db.execute("PRAGMA journal_mode=WAL")
 
     async def shutdown(self) -> None:
         if self._db:
@@ -45,7 +30,9 @@ class LoggingService:
         if not self._db:
             return
 
-        ts = snapshot.timestamp.isoformat()
+        # M-4: normalise to UTC so ISO string comparisons work correctly
+        # across DST boundary changes.
+        ts = snapshot.timestamp.astimezone(timezone.utc).isoformat()
         rows = [
             (ts, r.id, r.name, r.sensor_type.value, r.value, r.unit)
             for r in snapshot.readings
@@ -67,8 +54,9 @@ class LoggingService:
         if not self._db:
             return []
 
-        cutoff = datetime.now().timestamp() - hours * 3600
-        cutoff_iso = datetime.fromtimestamp(cutoff).isoformat()
+        # M-4: use UTC for cutoff so comparisons with UTC-stored timestamps
+        # remain correct across DST changes.
+        cutoff_iso = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
 
         if sensor_id:
             cursor = await self._db.execute(
@@ -103,8 +91,7 @@ class LoggingService:
         if not self._db:
             return 0
 
-        cutoff = datetime.now().timestamp() - retention_hours * 3600
-        cutoff_iso = datetime.fromtimestamp(cutoff).isoformat()
+        cutoff_iso = (datetime.now(timezone.utc) - timedelta(hours=retention_hours)).isoformat()
 
         cursor = await self._db.execute(
             "DELETE FROM sensor_log WHERE timestamp < ?", (cutoff_iso,)
@@ -113,12 +100,15 @@ class LoggingService:
         return cursor.rowcount
 
     async def export_csv(self, sensor_id: str | None = None, hours: int = 24) -> str:
-        """Export history as CSV string."""
+        """Export history as CSV string.
+
+        C-4: uses csv.DictWriter so field values with commas/newlines are
+        properly quoted rather than corrupting the output.
+        """
         rows = await self.get_history(sensor_id=sensor_id, hours=hours, limit=100000)
-        lines = ["timestamp,sensor_id,sensor_name,sensor_type,value,unit"]
-        for r in rows:
-            lines.append(
-                f"{r['timestamp']},{r['sensor_id']},{r['sensor_name']},"
-                f"{r['sensor_type']},{r['value']},{r['unit']}"
-            )
-        return "\n".join(lines)
+        buf = io.StringIO()
+        fieldnames = ["timestamp", "sensor_id", "sensor_name", "sensor_type", "value", "unit"]
+        writer = csv.DictWriter(buf, fieldnames=fieldnames, lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(rows)
+        return buf.getvalue()

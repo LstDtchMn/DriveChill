@@ -40,3 +40,57 @@ def evaluate_curve(curve: FanCurve, current_temp: float) -> float:
     if not curve.enabled:
         return -1  # -1 means "don't control this fan"
     return max(0, min(100, interpolate_speed(curve.points, current_temp)))
+
+
+# ── Dangerous curve detection ────────────────────────────────────────
+
+DANGER_TEMP_THRESHOLD = 75.0   # °C
+DANGER_SPEED_THRESHOLD = 20.0  # %
+
+
+def check_dangerous_curve(points: list[FanCurvePoint]) -> list[dict]:
+    """Check if a curve has dangerously low fan speeds at high temps.
+
+    Returns a list of warning dicts (empty = safe).  Each warning
+    contains the offending point's temp and speed.
+    """
+    warnings: list[dict] = []
+    for pt in points:
+        if pt.temp > DANGER_TEMP_THRESHOLD and pt.speed < DANGER_SPEED_THRESHOLD:
+            warnings.append({
+                "temp": pt.temp,
+                "speed": pt.speed,
+                "message": (
+                    f"Fan speed {pt.speed:.0f}% at {pt.temp:.0f}°C is dangerously low. "
+                    f"Temperatures above {DANGER_TEMP_THRESHOLD:.0f}°C with fans below "
+                    f"{DANGER_SPEED_THRESHOLD:.0f}% risk thermal damage."
+                ),
+            })
+
+    # Also check interpolated values at key high-temp checkpoints.
+    # M-7: only add a checkpoint warning when no existing warning covers the
+    # same danger zone (within 5°C) at the same speed (within 1%).  This
+    # prevents a single dangerous point from generating 5 near-duplicate
+    # warnings while still catching interpolated danger between explicit points.
+    if points:
+        explicit_temps = {pt.temp for pt in points}
+        for check_temp in [80.0, 85.0, 90.0, 95.0, 100.0]:
+            if check_temp in explicit_temps:
+                continue  # already evaluated as an explicit point above
+            speed = interpolate_speed(points, check_temp)
+            if speed < DANGER_SPEED_THRESHOLD:
+                already_warned = any(
+                    abs(w["temp"] - check_temp) <= 5 and abs(w["speed"] - speed) < 1
+                    for w in warnings
+                )
+                if not already_warned:
+                    warnings.append({
+                        "temp": check_temp,
+                        "speed": round(speed, 1),
+                        "message": (
+                            f"Interpolated fan speed is {speed:.0f}% at {check_temp:.0f}°C. "
+                            f"This could allow dangerous temperatures."
+                        ),
+                    })
+
+    return warnings

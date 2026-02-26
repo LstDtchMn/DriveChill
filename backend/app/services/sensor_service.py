@@ -1,9 +1,12 @@
 import asyncio
+import logging
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.hardware.base import HardwareBackend
 from app.models.sensors import SensorReading, SensorSnapshot
+
+logger = logging.getLogger(__name__)
 
 
 class SensorService:
@@ -58,7 +61,7 @@ class SensorService:
                 readings = await self._backend.get_sensor_readings()
                 self._latest = readings
 
-                snapshot = SensorSnapshot(timestamp=datetime.now(), readings=readings)
+                snapshot = SensorSnapshot(timestamp=datetime.now(timezone.utc), readings=readings)
                 self._history.append(snapshot)
 
                 # Notify all listeners
@@ -77,6 +80,8 @@ class SensorService:
                             pass
 
             except Exception:
-                pass  # Log errors but keep polling
+                # H-3: log the failure so hardware errors are visible; the
+                # loop continues so fans keep running on the last known state.
+                logger.exception("Sensor poll failed")
 
             await asyncio.sleep(self._poll_interval)

@@ -12,7 +12,7 @@ _default_data_dir = Path(_appdata) / "DriveChill" if _appdata else Path("data")
 class Settings(BaseSettings):
     app_name: str = "DriveChill"
     app_version: str = "1.0.0"
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"
     port: int = 8085
     cors_origins: list[str] = ["http://localhost:3000", "http://localhost:8085"]
 

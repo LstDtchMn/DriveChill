@@ -1,14 +1,17 @@
-from fastapi import APIRouter, Request
-from pydantic import BaseModel
+from datetime import datetime, timezone
 
-from app.models.fan_curves import FanCurve
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, Field
+
+from app.models.fan_curves import FanCurve, FanCurvePoint
+from app.services.curve_engine import check_dangerous_curve
 
 router = APIRouter(prefix="/api/fans", tags=["fans"])
 
 
 class SetSpeedRequest(BaseModel):
     fan_id: str
-    speed: float  # 0-100
+    speed: float = Field(ge=0.0, le=100.0, description="Fan speed 0–100 %")
 
 
 @router.get("")
@@ -34,12 +37,63 @@ async def get_curves(request: Request):
     return {"curves": [c.model_dump() for c in fan_service.curves]}
 
 
+class UpdateCurveRequest(BaseModel):
+    curve: FanCurve
+    allow_dangerous: bool = False
+
+
 @router.put("/curves")
-async def update_curve(curve: FanCurve, request: Request):
-    """Update or create a fan curve."""
+async def update_curve(body: UpdateCurveRequest, request: Request):
+    """Update or create a fan curve.
+
+    If the curve has dangerously low fan speeds at high temperatures,
+    the request is rejected with 409 unless ``allow_dangerous`` is true.
+    Overrides are logged to the auth_log audit table.
+    """
+    warnings = check_dangerous_curve(body.curve.points)
+
+    if warnings and not body.allow_dangerous:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Curve has dangerous speed settings at high temperatures. "
+                           "Set allow_dangerous=true to override.",
+                "warnings": warnings,
+            },
+        )
+
     fan_service = request.app.state.fan_service
-    fan_service.update_curve(curve)
-    return {"success": True, "curve": curve.model_dump()}
+    fan_service.update_curve(body.curve)
+
+    # M-8: write the audit entry BEFORE persisting curves so that if the
+    # process crashes between the two commits the override is still logged.
+    if warnings and body.allow_dangerous:
+        db = request.app.state.db
+        await db.execute(
+            "INSERT INTO auth_log (timestamp, event_type, ip_address, username, outcome, detail) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                datetime.now(timezone.utc).isoformat(),
+                "dangerous_curve_override",
+                request.client.host if request.client else "unknown",
+                "user",
+                "allowed",
+                f"Curve {body.curve.id}: {len(warnings)} warning(s) overridden",
+            ),
+        )
+        await db.commit()
+
+    # Persist to the active profile in the database
+    profile_repo = request.app.state.profile_repo
+    active_profile = await profile_repo.get_active()
+    if active_profile:
+        await profile_repo.set_curves(active_profile.id, fan_service.curves)
+
+    resp: dict = {"success": True, "curve": body.curve.model_dump()}
+    if warnings:
+        resp["dangerous_curve_warnings"] = warnings
+        resp["override_logged"] = True
+    return resp
 
 
 @router.delete("/curves/{curve_id}")
@@ -47,4 +101,26 @@ async def delete_curve(curve_id: str, request: Request):
     """Delete a fan curve."""
     fan_service = request.app.state.fan_service
     fan_service.remove_curve(curve_id)
+
+    # Persist to the active profile in the database
+    profile_repo = request.app.state.profile_repo
+    active_profile = await profile_repo.get_active()
+    if active_profile:
+        await profile_repo.set_curves(active_profile.id, fan_service.curves)
+
     return {"success": True}
+
+
+class ValidateCurveRequest(BaseModel):
+    points: list[FanCurvePoint]
+
+
+@router.post("/curves/validate")
+async def validate_curve(body: ValidateCurveRequest):
+    """Pre-check curve points for dangerous configurations.
+
+    Returns warnings without applying anything.  The frontend calls
+    this before saving so it can show a confirmation dialog.
+    """
+    warnings = check_dangerous_curve(body.points)
+    return {"safe": len(warnings) == 0, "warnings": warnings}
