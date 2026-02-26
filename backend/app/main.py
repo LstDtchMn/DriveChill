@@ -1,3 +1,4 @@
+import atexit
 import asyncio
 import logging
 import signal
@@ -6,7 +7,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import aiosqlite
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -14,14 +15,18 @@ from app.config import settings
 from app.db.migration_runner import run_migrations
 from app.db.repositories.profile_repo import ProfileRepo
 from app.db.repositories.settings_repo import SettingsRepo
+from app.db.repositories.fan_settings_repo import FanSettingsRepo
 from app.hardware import get_backend
 from app.services.sensor_service import SensorService
 from app.services.fan_service import FanService
 from app.services.fan_test_service import FanTestService
 from app.services.alert_service import AlertService
+from app.services.auth_service import AuthService
 from app.services.logging_service import LoggingService
 from app.services.quiet_hours_service import QuietHoursService
+from app.api.dependencies.auth import require_auth
 from app.api.routes import sensors, fans, profiles, alerts, settings as settings_route
+from app.api.routes.auth import router as auth_router
 from app.api.routes.quiet_hours import router as quiet_hours_router
 from app.api.websocket import router as ws_router
 
@@ -47,9 +52,12 @@ async def lifespan(app: FastAPI):
     profile_repo = ProfileRepo(db)
     settings_repo = SettingsRepo(db)
     await profile_repo.seed_defaults()
+    await profile_repo.seed_missing_presets()
     await settings_repo.seed_defaults()
+    fan_settings_repo = FanSettingsRepo(db)
     app.state.profile_repo = profile_repo
     app.state.settings_repo = settings_repo
+    app.state.fan_settings_repo = fan_settings_repo
 
     # ------------------------------------------------------------------
     # Hardware backend
@@ -77,12 +85,38 @@ async def lifespan(app: FastAPI):
         panic_gpu_temp=panic_gpu,
         panic_hysteresis=panic_hyst,
     )
+    await fan_service.load_fan_settings(fan_settings_repo)
     app.state.fan_service = fan_service
 
-    alert_service = AlertService()
+    alert_service = AlertService(db)
+    await alert_service.load_rules()
     app.state.alert_service = alert_service
 
-    fan_test_service = FanTestService(backend, sensor_service, fan_service)
+    # ------------------------------------------------------------------
+    # Auth service
+    # ------------------------------------------------------------------
+    auth_service = AuthService(db, session_ttl_seconds=settings.session_ttl_seconds)
+    app.state.auth_service = auth_service
+
+    if settings.auth_required:
+        has_user = await auth_service.user_exists()
+        if not has_user and not settings.password:
+            raise RuntimeError(
+                "Session auth required for non-localhost binding "
+                f"(host={settings.host}). Set DRIVECHILL_PASSWORD environment "
+                "variable before starting so the admin user can be created "
+                "automatically."
+            )
+        if not has_user and settings.password:
+            await auth_service.create_user("admin", settings.password)
+            logger.info("Created admin user from DRIVECHILL_PASSWORD env var")
+            await auth_service._log_auth_event(
+                "user_created", "localhost", "admin", "success",
+                "Auto-created from DRIVECHILL_PASSWORD env var",
+            )
+
+    fan_test_service = FanTestService(backend, sensor_service, fan_service,
+                                      fan_settings_repo=fan_settings_repo)
     app.state.fan_test_service = fan_test_service
 
     # LoggingService shares the same DB file but keeps its own connection
@@ -152,6 +186,47 @@ async def lifespan(app: FastAPI):
     log_task = asyncio.create_task(log_loop())
 
     # ------------------------------------------------------------------
+    # Background task: auth cleanup (expired sessions + old auth logs)
+    # ------------------------------------------------------------------
+    async def auth_cleanup_loop():
+        while True:
+            await asyncio.sleep(3600)  # every hour
+            try:
+                expired = await auth_service.cleanup_expired_sessions()
+                old_logs = await auth_service.cleanup_old_auth_logs()
+                if expired or old_logs:
+                    logger.info(
+                        "Auth cleanup: %d expired sessions, %d old auth logs",
+                        expired, old_logs,
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Auth cleanup failed")
+
+    auth_cleanup_task = asyncio.create_task(auth_cleanup_loop())
+
+    # ------------------------------------------------------------------
+    # Background task: prune old sensor log data based on retention setting
+    # ------------------------------------------------------------------
+    async def retention_prune_loop():
+        while True:
+            await asyncio.sleep(3600)  # every hour
+            try:
+                retention_hours = await settings_repo.get_int(
+                    "history_retention_hours", settings.history_retention_hours
+                )
+                pruned = await logging_service.prune(retention_hours)
+                if pruned:
+                    logger.info("Retention prune: deleted %d old sensor log rows", pruned)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Retention prune failed")
+
+    retention_prune_task = asyncio.create_task(retention_prune_loop())
+
+    # ------------------------------------------------------------------
     # Signal handlers: release fan control on SIGTERM / SIGINT so fans
     # return to BIOS auto mode instead of staying at the last set speed.
     # (v1.0 release gate v1.0-7: graceful fan restore on process exit)
@@ -180,6 +255,28 @@ async def lifespan(app: FastAPI):
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, lambda s=sig: _on_signal(s.name))
 
+    # atexit handler: best-effort fan restore for paths where signal handlers
+    # don't fire (unhandled exceptions, sys.exit from non-main threads, etc.).
+    # Task Manager "End Task" on Windows sends no signal and also skips atexit,
+    # but this covers more exit paths than signal handlers alone.
+    _atexit_called = False
+
+    def _atexit_release_fans(*_args: object, **_kwargs: object) -> None:
+        nonlocal _atexit_called
+        if _atexit_called:
+            return
+        _atexit_called = True
+        try:
+            backend.release_fan_control_sync()
+            logger.info("atexit: released fan control to BIOS/auto mode")
+        except AttributeError:
+            # Backend doesn't have a sync release method — skip silently
+            pass
+        except Exception:
+            logger.debug("atexit: fan release failed (best-effort)", exc_info=True)
+
+    atexit.register(_atexit_release_fans)
+
     print(f"  DriveChill v{settings.app_version} started")
     print(f"  Backend: {backend.get_backend_name()}")
     print(f"  Dashboard: http://localhost:{settings.port}")
@@ -190,8 +287,18 @@ async def lifespan(app: FastAPI):
     # Shutdown
     # ------------------------------------------------------------------
     log_task.cancel()
+    auth_cleanup_task.cancel()
+    retention_prune_task.cancel()
     try:
         await log_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await auth_cleanup_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await retention_prune_task
     except asyncio.CancelledError:
         pass
 
@@ -220,13 +327,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# API routes
-app.include_router(sensors.router)
-app.include_router(fans.router)
-app.include_router(profiles.router)
-app.include_router(alerts.router)
-app.include_router(settings_route.router)
-app.include_router(quiet_hours_router)
+# Auth routes (unprotected — login/setup must be accessible without a session)
+app.include_router(auth_router)
+
+# API routes (auth-protected when auth is enabled)
+_auth_deps = [Depends(require_auth)]
+app.include_router(sensors.router, dependencies=_auth_deps)
+app.include_router(fans.router, dependencies=_auth_deps)
+app.include_router(profiles.router, dependencies=_auth_deps)
+app.include_router(alerts.router, dependencies=_auth_deps)
+app.include_router(settings_route.router, dependencies=_auth_deps)
+app.include_router(quiet_hours_router, dependencies=_auth_deps)
+# WebSocket auth is handled inside the endpoint (require_ws_auth) because
+# router-level Depends(require_auth) injects Request, which fails for WS.
 app.include_router(ws_router)
 
 # Health endpoint — must be registered via include_router (not @app.get)

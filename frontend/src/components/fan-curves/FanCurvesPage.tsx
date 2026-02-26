@@ -1,10 +1,11 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { CurveEditor } from './CurveEditor';
 import { PresetSelector } from './PresetSelector';
 import { FanTestPanel } from '@/components/fans/FanTestPanel';
 import { useSensors } from '@/hooks/useSensors';
+import { useAppStore } from '@/stores/appStore';
 import { APIError, api } from '@/lib/api';
 import type { FanCurvePoint, FanCurve } from '@/lib/types';
 import { Plus, Save } from 'lucide-react';
@@ -27,13 +28,42 @@ function formatDangerWarnings(detail: unknown): string[] {
 }
 
 export function FanCurvesPage() {
-  const { cpuTemps, gpuTemps, hddTemps, caseTemps, fanRpms } = useSensors();
+  const { all: allReadings, cpuTemps, gpuTemps, hddTemps, caseTemps, fanRpms, fanPcts } = useSensors();
+  const appliedSpeeds = useAppStore((s) => s.appliedSpeeds);
   const [curves, setCurves] = useState<FanCurve[]>([]);
   const [selectedCurve, setSelectedCurve] = useState<string | null>(null);
   const [editingPoints, setEditingPoints] = useState<FanCurvePoint[]>(DEFAULT_POINTS);
 
   const allTempSensors = [...cpuTemps, ...gpuTemps, ...hddTemps, ...caseTemps];
   const allFans = fanRpms.map((f) => f.id.replace('_rpm', ''));
+
+  // Compute the current operating point for the selected curve
+  const operatingPoint = useMemo(() => {
+    if (!selectedCurve) return { temp: undefined, speed: undefined };
+    const curve = curves.find((c) => c.id === selectedCurve);
+    if (!curve) return { temp: undefined, speed: undefined };
+
+    // Find current temperature: use composite MAX if sensor_ids set, else primary sensor_id
+    const sensorIds = curve.sensor_ids?.length ? curve.sensor_ids : [curve.sensor_id];
+    let maxTemp: number | undefined;
+    for (const sid of sensorIds) {
+      const reading = allReadings.find((r) => r.id === sid);
+      if (reading != null) {
+        maxTemp = maxTemp == null ? reading.value : Math.max(maxTemp, reading.value);
+      }
+    }
+
+    // Find current applied speed for this fan
+    const fanKey = curve.fan_id;
+    let currentSpeed: number | undefined = appliedSpeeds[fanKey] ?? appliedSpeeds[`${fanKey}_pct`];
+    // Fallback: try fan_percent sensor
+    if (currentSpeed == null) {
+      const pctSensor = fanPcts.find((f) => f.id.replace(/_pct$/, '') === fanKey);
+      currentSpeed = pctSensor?.value;
+    }
+
+    return { temp: maxTemp, speed: currentSpeed };
+  }, [selectedCurve, curves, allReadings, appliedSpeeds, fanPcts]);
 
   useEffect(() => {
     const fetchCurves = async () => {
@@ -77,11 +107,28 @@ export function FanCurvesPage() {
         );
         if (!confirmOverride) return;
 
-        await api.updateCurve(updated, true);
-        setCurves(curves.map((c) => (c.id === selectedCurve ? updated : c)));
+        try {
+          await api.updateCurve(updated, true);
+          setCurves(curves.map((c) => (c.id === selectedCurve ? updated : c)));
+        } catch {
+          alert('Failed to save curve.');
+        }
         return;
       }
+      alert('Failed to save curve. Check your connection.');
     }
+  };
+
+  const handleToggleSensor = (sensorId: string) => {
+    if (!selectedCurve) return;
+    const curve = curves.find((c) => c.id === selectedCurve);
+    if (!curve) return;
+    const ids = curve.sensor_ids ?? [];
+    const next = ids.includes(sensorId)
+      ? ids.filter((s) => s !== sensorId)
+      : [...ids, sensorId];
+    const updated = { ...curve, sensor_ids: next };
+    setCurves(curves.map((c) => (c.id === selectedCurve ? updated : c)));
   };
 
   const handleNewCurve = async () => {
@@ -92,6 +139,7 @@ export function FanCurvesPage() {
       fan_id: allFans[0] || 'fan_cpu',
       points: [...DEFAULT_POINTS],
       enabled: true,
+      sensor_ids: [],
     };
 
     try {
@@ -132,7 +180,10 @@ export function FanCurvesPage() {
                 >
                   <p className="text-sm font-medium" style={{ color: 'var(--text)' }}>{curve.name}</p>
                   <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
-                    {curve.sensor_id} → {curve.fan_id}
+                    {curve.sensor_ids?.length > 0
+                      ? `MAX(${curve.sensor_ids.join(', ')})`
+                      : curve.sensor_id}{' '}
+                    → {curve.fan_id}
                   </p>
                   <div className="flex items-center gap-2 mt-2">
                     <span className={`badge ${curve.enabled ? 'badge-success' : 'badge-warning'}`}>
@@ -153,7 +204,48 @@ export function FanCurvesPage() {
                 onChange={setEditingPoints}
                 width={500}
                 height={300}
+                currentTemp={operatingPoint.temp}
+                currentSpeed={operatingPoint.speed}
               />
+
+              {/* Composite sensor selector */}
+              {selectedCurve && (() => {
+                const curve = curves.find((c) => c.id === selectedCurve);
+                const ids = curve?.sensor_ids ?? [];
+                return (
+                  <div className="mt-3 p-3 rounded" style={{ background: 'var(--card-bg)', border: '1px solid var(--border)' }}>
+                    <p className="text-xs font-medium mb-2" style={{ color: 'var(--text)' }}>
+                      Temperature Sources {ids.length > 1 && <span className="badge badge-info ml-1">Composite — MAX</span>}
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {allTempSensors.map((sensor) => (
+                        <button
+                          key={sensor.id}
+                          onClick={() => handleToggleSensor(sensor.id)}
+                          className={`text-xs px-2 py-1 rounded transition-all ${
+                            ids.includes(sensor.id)
+                              ? 'ring-1'
+                              : ''
+                          }`}
+                          style={{
+                            background: ids.includes(sensor.id) ? 'var(--accent-muted)' : 'var(--bg)',
+                            color: ids.includes(sensor.id) ? 'var(--accent)' : 'var(--text-secondary)',
+                            borderColor: ids.includes(sensor.id) ? 'var(--accent)' : 'var(--border)',
+                            border: '1px solid',
+                          }}
+                        >
+                          {sensor.name || sensor.id}
+                        </button>
+                      ))}
+                    </div>
+                    {ids.length === 0 && (
+                      <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
+                        Using primary sensor: {curve?.sensor_id}. Select multiple for composite MAX.
+                      </p>
+                    )}
+                  </div>
+                );
+              })()}
 
               <div className="mt-4 flex items-center justify-between">
                 <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>

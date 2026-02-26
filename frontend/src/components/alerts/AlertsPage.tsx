@@ -2,13 +2,16 @@
 
 import { useState, useEffect } from 'react';
 import { useAppStore } from '@/stores/appStore';
+import { useSettingsStore } from '@/stores/settingsStore';
 import { useSensors } from '@/hooks/useSensors';
 import { api } from '@/lib/api';
+import { formatTemp, tempUnitSymbol } from '@/lib/tempUnit';
 import { Bell, Plus, Trash2, AlertTriangle, CheckCircle, X } from 'lucide-react';
 import type { AlertRule } from '@/lib/types';
 
 export function AlertsPage() {
-  const { alertEvents, activeAlerts, clearAlerts } = useAppStore();
+  const { alertEvents, activeAlerts, clearAlerts, addAlertEvents, setActiveAlerts } = useAppStore();
+  const tempUnit = useSettingsStore((s) => s.tempUnit);
   const { cpuTemps, gpuTemps, hddTemps, caseTemps } = useSensors();
   const [rules, setRules] = useState<AlertRule[]>([]);
   const [showAddForm, setShowAddForm] = useState(false);
@@ -21,14 +24,22 @@ export function AlertsPage() {
   useEffect(() => {
     const fetchRules = async () => {
       try {
-        const { rules: r } = await api.getAlerts();
-        setRules(r);
+        const data = await api.getAlerts();
+        setRules(data.rules);
+        // Seed the store with existing alert events so the event log
+        // is populated on initial page load (not only via WebSocket).
+        if (data.events && data.events.length > 0) {
+          addAlertEvents(data.events);
+        }
+        if (data.active) {
+          setActiveAlerts(data.active);
+        }
       } catch {
         // API not available
       }
     };
     fetchRules();
-  }, []);
+  }, [addAlertEvents, setActiveAlerts]);
 
   const handleAddRule = async () => {
     if (!newSensorId) return;
@@ -132,7 +143,7 @@ export function AlertsPage() {
                 </select>
               </div>
               <div>
-                <label className="text-xs font-medium mb-1 block" style={{ color: 'var(--text-secondary)' }}>Threshold (°C)</label>
+                <label className="text-xs font-medium mb-1 block" style={{ color: 'var(--text-secondary)' }}>Threshold ({tempUnitSymbol(tempUnit)})</label>
                 <input
                   type="number"
                   value={newThreshold}
@@ -180,7 +191,7 @@ export function AlertsPage() {
                     <div>
                       <p className="text-sm font-medium" style={{ color: 'var(--text)' }}>{rule.name}</p>
                       <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-                        {rule.sensor_id} &ge; {rule.threshold}°C
+                        {rule.sensor_id} &ge; {formatTemp(rule.threshold, tempUnit)}
                       </p>
                     </div>
                   </div>
@@ -222,7 +233,7 @@ export function AlertsPage() {
                       {new Date(event.timestamp).toLocaleString()}
                     </p>
                   </div>
-                  <span className="badge badge-danger">{event.actual_value}°C</span>
+                  <span className="badge badge-danger">{formatTemp(event.actual_value, tempUnit)}</span>
                 </div>
               ))}
             </div>

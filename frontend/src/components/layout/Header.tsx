@@ -2,9 +2,10 @@
 
 import { useState } from 'react';
 import { useAppStore } from '@/stores/appStore';
+import { useAuthStore } from '@/stores/authStore';
 import { ThemeToggle } from './ThemeToggle';
-import { Bell, ShieldOff, Play } from 'lucide-react';
-import { api } from '@/lib/api';
+import { Bell, ShieldOff, Play, LogOut } from 'lucide-react';
+import { api, authApi } from '@/lib/api';
 
 const PAGE_TITLES: Record<string, string> = {
   dashboard: 'Dashboard',
@@ -15,9 +16,19 @@ const PAGE_TITLES: Record<string, string> = {
 
 export function Header() {
   const { currentPage, backendName, activeAlerts, setPage, safeMode, setSafeMode } = useAppStore();
+  const { authRequired, authenticated, username, logout: authLogout } = useAuthStore();
   const [releasing, setReleasing] = useState(false);
   const [resuming, setResuming] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+
+  const handleLogout = async () => {
+    try {
+      await authApi.logout();
+    } catch {
+      // best-effort
+    }
+    authLogout();
+  };
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -109,6 +120,17 @@ export function Header() {
         </button>
 
         <ThemeToggle />
+
+        {authRequired && authenticated && (
+          <button
+            onClick={handleLogout}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs transition-colors hover:bg-surface-200"
+            style={{ color: 'var(--text-secondary)' }}
+            title={username ? `Logged in as ${username}` : 'Log out'}
+          >
+            <LogOut size={14} />
+          </button>
+        )}
       </div>
 
       {/* Toast notification */}

@@ -1,4 +1,59 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8085';
+const DEFAULT_API_BASE = 'http://localhost:8085';
+const DEFAULT_WS_URL = 'ws://localhost:8085/api/ws';
+
+function normalizeLoopbackHost(value: string): string {
+  // Guard against malformed loopback forms like 127.0.01 or 127.0.1.
+  // Use regex with word boundary / port-colon / slash / end-of-string to avoid
+  // mangling valid IPs like 127.0.1.1.
+  return value
+    .replace(/:\/\/127\.0\.01(?=[:/]|$)/, '://127.0.0.1')
+    .replace(/:\/\/127\.0\.1(?=[:/]|$)/, '://127.0.0.1');
+}
+
+function resolveApiBase(raw?: string): string {
+  const candidate = normalizeLoopbackHost((raw ?? '').trim());
+  if (!candidate) return DEFAULT_API_BASE;
+
+  try {
+    const url = new URL(candidate);
+    return `${url.protocol}//${url.host}`;
+  } catch {
+    return DEFAULT_API_BASE;
+  }
+}
+
+function resolveWsUrl(raw: string | undefined, apiBase: string): string {
+  const candidate = normalizeLoopbackHost((raw ?? '').trim());
+  if (candidate) {
+    try {
+      return new URL(candidate).toString();
+    } catch {
+      // Fall through to API-derived URL.
+    }
+  }
+
+  try {
+    const apiUrl = new URL(apiBase);
+    apiUrl.protocol = apiUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+    apiUrl.pathname = '/api/ws';
+    apiUrl.search = '';
+    apiUrl.hash = '';
+    return apiUrl.toString();
+  } catch {
+    return DEFAULT_WS_URL;
+  }
+}
+
+const API_BASE = resolveApiBase(process.env.NEXT_PUBLIC_API_URL);
+const WS_URL = resolveWsUrl(process.env.NEXT_PUBLIC_WS_URL, API_BASE);
+
+export function getApiBaseUrl(): string {
+  return API_BASE;
+}
+
+export function getWsUrl(): string {
+  return WS_URL;
+}
 
 export class APIError extends Error {
   status: number;
@@ -12,11 +67,44 @@ export class APIError extends Error {
   }
 }
 
+/**
+ * Read the CSRF cookie that the backend sets on login.
+ * Returns the token string, or null if the cookie is absent.
+ */
+function getCsrfToken(): string | null {
+  if (typeof document === 'undefined') return null;
+  const match = document.cookie.match(/(?:^|;\s*)drivechill_csrf=([^;]+)/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
 async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
+  const method = (options?.method ?? 'GET').toUpperCase();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(options?.headers as Record<string, string> | undefined),
+  };
+
+  // Inject CSRF token on state-changing requests
+  if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(method)) {
+    const csrf = getCsrfToken();
+    if (csrf) {
+      headers['X-CSRF-Token'] = csrf;
+    }
+  }
+
   const res = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
     ...options,
+    headers,
+    credentials: 'include',
   });
+
+  if (res.status === 401) {
+    // Notify the app that the session has expired
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('drivechill:auth-expired'));
+    }
+  }
+
   if (!res.ok) {
     let detail: unknown = null;
     try {
@@ -29,9 +117,39 @@ async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json();
 }
 
+/** Auth-specific API calls. */
+export const authApi = {
+  checkSession: () =>
+    fetchAPI<{ auth_required: boolean; authenticated: boolean; username?: string }>(
+      '/api/auth/session'
+    ),
+  login: (username: string, password: string) =>
+    fetchAPI<{ success: boolean; username: string }>('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    }),
+  logout: () =>
+    fetchAPI<{ success: boolean }>('/api/auth/logout', { method: 'POST' }),
+  setup: (username: string, password: string) =>
+    fetchAPI<{ success: boolean; username: string }>('/api/auth/setup', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    }),
+  status: () =>
+    fetchAPI<{ auth_enabled: boolean }>('/api/auth/status'),
+};
+
 export const api = {
   // Sensors
   getSensors: () => fetchAPI<{ readings: any[]; backend: string }>('/api/sensors'),
+  getSensorLabels: () => fetchAPI<{ labels: Record<string, string> }>('/api/sensors/labels'),
+  setSensorLabel: (sensorId: string, label: string) =>
+    fetchAPI(`/api/sensors/${encodeURIComponent(sensorId)}/label`, {
+      method: 'PUT',
+      body: JSON.stringify({ label }),
+    }),
+  deleteSensorLabel: (sensorId: string) =>
+    fetchAPI(`/api/sensors/${encodeURIComponent(sensorId)}/label`, { method: 'DELETE' }),
   getHistory: (sensorId?: string, hours = 1) =>
     fetchAPI<{ data: any[] }>(`/api/sensors/history?hours=${hours}${sensorId ? `&sensor_id=${sensorId}` : ''}`),
 
@@ -49,11 +167,29 @@ export const api = {
   deleteCurve: (id: string) =>
     fetchAPI(`/api/fans/curves/${id}`, { method: 'DELETE' }),
 
+  // Fan settings (min speed floor, zero-RPM)
+  getAllFanSettings: () =>
+    fetchAPI<{ fan_settings: Record<string, { min_speed_pct: number; zero_rpm_capable: boolean }> }>('/api/fans/settings'),
+  getFanSettings: (fanId: string) =>
+    fetchAPI<{ fan_id: string; min_speed_pct: number; zero_rpm_capable: boolean }>(`/api/fans/${fanId}/settings`),
+  updateFanSettings: (fanId: string, settings: { min_speed_pct: number; zero_rpm_capable: boolean }) =>
+    fetchAPI(`/api/fans/${fanId}/settings`, {
+      method: 'PUT',
+      body: JSON.stringify(settings),
+    }),
+
   // Profiles
   getProfiles: () => fetchAPI<{ profiles: any[] }>('/api/profiles'),
   activateProfile: (id: string) =>
     fetchAPI(`/api/profiles/${id}/activate`, { method: 'PUT' }),
   getPresetCurves: (id: string) => fetchAPI<{ points: any[] }>(`/api/profiles/${id}/preset-curves`),
+  exportProfile: (id: string) =>
+    fetchAPI<{ export_version: number; profile: any }>(`/api/profiles/${id}/export`),
+  importProfile: (profile: { name?: string; preset?: string; curves?: any[] }) =>
+    fetchAPI<{ success: boolean; profile: any }>('/api/profiles/import', {
+      method: 'POST',
+      body: JSON.stringify(profile),
+    }),
 
   // Alerts
   getAlerts: () => fetchAPI<{ rules: any[]; events: any[]; active: string[] }>('/api/alerts'),

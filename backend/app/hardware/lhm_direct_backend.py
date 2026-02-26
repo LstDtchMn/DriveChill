@@ -334,6 +334,14 @@ class LHMDirectBackend(HardwareBackend):
             except Exception as exc:
                 logger.warning("Failed to release fan %s to auto: %s", fan_id, exc)
 
+    def release_fan_control_sync(self) -> None:
+        """Synchronous best-effort fan release for atexit handler."""
+        for fan_id, control in list(self._controls.items()):
+            try:
+                _sync_set_fan_auto(control)
+            except Exception as exc:
+                logger.debug("Sync release failed for fan %s: %s", fan_id, exc)
+
     async def get_fan_ids(self) -> list[str]:
         return list(self._controls.keys())
 

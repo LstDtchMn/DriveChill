@@ -1,6 +1,8 @@
 'use client';
 
 import { useMemo } from 'react';
+import { useSettingsStore } from '@/stores/settingsStore';
+import { displayTemp, tempUnitSymbol } from '@/lib/tempUnit';
 
 interface TempGaugeProps {
   label: string;
@@ -18,13 +20,18 @@ function getColor(value: number, max: number): string {
   return 'var(--danger)';
 }
 
-export function TempGauge({ label, value, maxValue = 100, unit = '°C', icon, size = 'md' }: TempGaugeProps) {
+export function TempGauge({ label, value, maxValue = 100, unit: _unit, icon, size = 'md' }: TempGaugeProps) {
+  const tempUnit = useSettingsStore((s) => s.tempUnit);
+  const displayValue = displayTemp(value, tempUnit);
+  const displayMax = displayTemp(maxValue, tempUnit);
+  const unit = tempUnitSymbol(tempUnit);
   const dimensions = size === 'sm' ? 100 : size === 'md' ? 130 : 160;
   const strokeWidth = size === 'sm' ? 6 : 8;
   const radius = (dimensions - strokeWidth) / 2 - 4;
   const circumference = 2 * Math.PI * radius;
 
   const { offset, color } = useMemo(() => {
+    // Color thresholds always computed against raw Celsius values
     const clamped = Math.max(0, Math.min(value, maxValue));
     const ratio = clamped / maxValue;
     // Use 270 degrees of the circle (3/4)
@@ -82,7 +89,7 @@ export function TempGauge({ label, value, maxValue = 100, unit = '°C', icon, si
               color,
             }}
           >
-            {Math.round(value)}
+            {displayValue}
           </span>
           <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>{unit}</span>
         </div>

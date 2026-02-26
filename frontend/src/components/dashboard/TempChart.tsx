@@ -12,6 +12,8 @@ import {
   Legend,
 } from 'recharts';
 import { useAppStore } from '@/stores/appStore';
+import { useSettingsStore } from '@/stores/settingsStore';
+import { displayTemp, tempUnitSymbol } from '@/lib/tempUnit';
 
 const CHART_COLORS = [
   '#3b82f6', // blue
@@ -28,6 +30,8 @@ const TEMP_TYPES = new Set(['cpu_temp', 'gpu_temp', 'hdd_temp', 'case_temp']);
 
 export function TempChart() {
   const history = useAppStore((s) => s.history);
+  const tempUnit = useSettingsStore((s) => s.tempUnit);
+  const sensorLabels = useSettingsStore((s) => s.sensorLabels);
 
   const { chartData, sensorKeys } = useMemo(() => {
     // Get unique temp sensor IDs
@@ -36,7 +40,7 @@ export function TempChart() {
     for (const point of history) {
       for (const r of point.readings) {
         if (TEMP_TYPES.has(r.sensor_type) && !sensorMap.has(r.id)) {
-          sensorMap.set(r.id, r.name);
+          sensorMap.set(r.id, sensorLabels[r.id] || r.name);
         }
       }
     }
@@ -55,7 +59,7 @@ export function TempChart() {
 
       for (const r of point.readings) {
         if (TEMP_TYPES.has(r.sensor_type)) {
-          row[r.id] = r.value;
+          row[r.id] = displayTemp(r.value, tempUnit);
         }
       }
 
@@ -63,7 +67,7 @@ export function TempChart() {
     }
 
     return { chartData: data, sensorKeys: keys };
-  }, [history]);
+  }, [history, tempUnit, sensorLabels]);
 
   if (chartData.length < 2) {
     return (
@@ -91,7 +95,7 @@ export function TempChart() {
             stroke="var(--text-secondary)"
             tick={{ fontSize: 11 }}
             domain={['dataMin - 5', 'dataMax + 5']}
-            unit="°"
+            unit={tempUnitSymbol(tempUnit)}
           />
           <Tooltip
             contentStyle={{

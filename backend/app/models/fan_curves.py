@@ -9,7 +9,7 @@ class FanCurvePoint(BaseModel):
 class FanCurve(BaseModel):
     id: str
     name: str
-    sensor_id: str  # Which sensor drives this curve
+    sensor_id: str  # Which sensor drives this curve (primary / fallback)
     fan_id: str  # Which fan this curve controls
     points: list[FanCurvePoint] = Field(
         default_factory=lambda: [
@@ -20,3 +20,8 @@ class FanCurve(BaseModel):
         ]
     )
     enabled: bool = True
+    sensor_ids: list[str] = Field(
+        default_factory=list,
+        description="Composite mode: curve uses MAX of these sensor temperatures. "
+        "Empty = single-sensor mode using sensor_id.",
+    )

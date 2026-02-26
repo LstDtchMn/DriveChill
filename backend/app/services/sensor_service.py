@@ -33,6 +33,22 @@ class SensorService:
         self._consecutive_failures: int = 0
 
     @property
+    def poll_interval(self) -> float:
+        return self._poll_interval
+
+    @poll_interval.setter
+    def poll_interval(self, value: float) -> None:
+        self._poll_interval = max(0.5, value)
+
+    @property
+    def failure_limit(self) -> int:
+        return self._failure_limit
+
+    @failure_limit.setter
+    def failure_limit(self, value: int) -> None:
+        self._failure_limit = max(1, value)
+
+    @property
     def latest(self) -> list[SensorReading]:
         return list(self._latest)
 

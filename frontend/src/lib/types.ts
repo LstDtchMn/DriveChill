@@ -30,6 +30,13 @@ export interface FanCurve {
   fan_id: string;
   points: FanCurvePoint[];
   enabled: boolean;
+  sensor_ids: string[];
+}
+
+export interface FanSettings {
+  fan_id: string;
+  min_speed_pct: number;
+  zero_rpm_capable: boolean;
 }
 
 export interface Profile {

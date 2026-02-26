@@ -34,6 +34,14 @@ class HardwareBackend(ABC):
         Default: no-op (backends that cannot control fans are already in auto mode).
         """
 
+    def release_fan_control_sync(self) -> None:
+        """Synchronous best-effort fan release for atexit/signal handlers.
+
+        Called when no event loop is available (process teardown).
+        Subclasses that use async-only hardware APIs can override this
+        with a direct synchronous call.  Default: no-op.
+        """
+
     @abstractmethod
     def get_backend_name(self) -> str:
         """Return the name of this backend."""

@@ -3,7 +3,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import { useAppStore } from '@/stores/appStore';
 import { api } from '@/lib/api';
-import type { FanTestProgress, FanTestResult, FanTestStep } from '@/lib/types';
+import type { FanTestProgress, FanTestResult, FanTestStep, FanSettings } from '@/lib/types';
 import { Play, Square, RotateCcw, Wind } from 'lucide-react';
 
 interface Props {
@@ -85,6 +85,13 @@ export function FanTestPanel({ fanId, fanName }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [estimatedSec, setEstimatedSec] = useState<number | null>(null);
+  const [fanSettings, setFanSettings] = useState<FanSettings | null>(null);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+
+  // Load fan settings on mount
+  useEffect(() => {
+    api.getFanSettings(fanId).then(setFanSettings).catch(() => {});
+  }, [fanId]);
 
   // Live progress for this fan from the WebSocket store
   const liveProgress: FanTestProgress | undefined = fanTestProgress.find(
@@ -288,6 +295,58 @@ export function FanTestPanel({ fanId, fanName }: Props) {
               <StepTable steps={result.steps} />
             </div>
           </>
+        )}
+
+        {/* Fan Settings — min speed floor & zero-RPM */}
+        {fanSettings && (
+          <div className="mt-3 pt-3" style={{ borderTop: '1px solid var(--border)' }}>
+            <p className="text-xs font-medium mb-2" style={{ color: 'var(--text)' }}>
+              Fan Settings
+            </p>
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
+                Min Speed Floor:
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={fanSettings.min_speed_pct}
+                  onChange={(e) =>
+                    setFanSettings({ ...fanSettings, min_speed_pct: Number(e.target.value) })
+                  }
+                  className="flex-1"
+                />
+                <span className="w-8 text-right">{fanSettings.min_speed_pct}%</span>
+              </label>
+              <label className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
+                <input
+                  type="checkbox"
+                  checked={fanSettings.zero_rpm_capable}
+                  onChange={(e) =>
+                    setFanSettings({ ...fanSettings, zero_rpm_capable: e.target.checked })
+                  }
+                />
+                Zero-RPM capable (allow 0% speed)
+              </label>
+              <button
+                disabled={settingsSaving}
+                onClick={async () => {
+                  setSettingsSaving(true);
+                  try {
+                    await api.updateFanSettings(fanId, {
+                      min_speed_pct: fanSettings.min_speed_pct,
+                      zero_rpm_capable: fanSettings.zero_rpm_capable,
+                    });
+                  } catch { /* ignore */ }
+                  setSettingsSaving(false);
+                }}
+                className="btn-primary text-xs px-3 py-1"
+              >
+                {settingsSaving ? 'Saving...' : 'Save Settings'}
+              </button>
+            </div>
+          </div>
         )}
       </div>
     );

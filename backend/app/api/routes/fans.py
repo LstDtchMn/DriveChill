@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
+
+from app.api.dependencies.auth import require_csrf
 from pydantic import BaseModel, Field
 
 from app.models.fan_curves import FanCurve, FanCurvePoint
@@ -23,7 +25,7 @@ async def get_fans(request: Request):
     return {"fans": fan_ids}
 
 
-@router.post("/speed")
+@router.post("/speed", dependencies=[Depends(require_csrf)])
 async def set_fan_speed(body: SetSpeedRequest, request: Request):
     """Manually set a fan speed."""
     backend = request.app.state.backend
@@ -43,7 +45,7 @@ class UpdateCurveRequest(BaseModel):
     allow_dangerous: bool = False
 
 
-@router.put("/curves")
+@router.put("/curves", dependencies=[Depends(require_csrf)])
 async def update_curve(body: UpdateCurveRequest, request: Request):
     """Update or create a fan curve.
 
@@ -97,7 +99,7 @@ async def update_curve(body: UpdateCurveRequest, request: Request):
     return resp
 
 
-@router.delete("/curves/{curve_id}")
+@router.delete("/curves/{curve_id}", dependencies=[Depends(require_csrf)])
 async def delete_curve(curve_id: str, request: Request):
     """Delete a fan curve."""
     fan_service = request.app.state.fan_service
@@ -116,7 +118,7 @@ class ValidateCurveRequest(BaseModel):
     points: list[FanCurvePoint]
 
 
-@router.post("/curves/validate")
+@router.post("/curves/validate", dependencies=[Depends(require_csrf)])
 async def validate_curve(body: ValidateCurveRequest):
     """Pre-check curve points for dangerous configurations.
 
@@ -127,7 +129,47 @@ async def validate_curve(body: ValidateCurveRequest):
     return {"safe": len(warnings) == 0, "warnings": warnings}
 
 
-@router.post("/{fan_id}/test", status_code=202)
+class UpdateFanSettingsRequest(BaseModel):
+    min_speed_pct: float = Field(ge=0.0, le=100.0, default=0.0)
+    zero_rpm_capable: bool = False
+
+
+@router.get("/settings")
+async def get_all_fan_settings(request: Request):
+    """Get per-fan settings (min speed floor, zero-RPM capability) for all fans."""
+    fan_settings_repo = request.app.state.fan_settings_repo
+    all_settings = await fan_settings_repo.get_all()
+    return {"fan_settings": all_settings}
+
+
+@router.get("/{fan_id}/settings")
+async def get_fan_settings(fan_id: str, request: Request):
+    """Get per-fan settings (min speed floor, zero-RPM capability)."""
+    fan_settings_repo = request.app.state.fan_settings_repo
+    fs = await fan_settings_repo.get(fan_id)
+    if fs is None:
+        return {"fan_id": fan_id, "min_speed_pct": 0, "zero_rpm_capable": False}
+    return {"fan_id": fan_id, **fs}
+
+
+@router.put("/{fan_id}/settings", dependencies=[Depends(require_csrf)])
+async def update_fan_settings(fan_id: str, body: UpdateFanSettingsRequest,
+                              request: Request):
+    """Update per-fan settings (min speed floor, zero-RPM capability)."""
+    backend = request.app.state.backend
+    fan_ids = await backend.get_fan_ids()
+    if fan_id not in fan_ids:
+        raise HTTPException(status_code=404, detail=f"Fan '{fan_id}' not found")
+    fan_settings_repo = request.app.state.fan_settings_repo
+    await fan_settings_repo.set(fan_id, body.min_speed_pct, body.zero_rpm_capable)
+    fan_service = request.app.state.fan_service
+    fan_service.update_fan_settings(fan_id, body.min_speed_pct, body.zero_rpm_capable)
+    return {"success": True, "fan_id": fan_id,
+            "min_speed_pct": body.min_speed_pct,
+            "zero_rpm_capable": body.zero_rpm_capable}
+
+
+@router.post("/{fan_id}/test", status_code=202, dependencies=[Depends(require_csrf)])
 async def start_fan_test(fan_id: str, request: Request, body: FanTestOptions | None = None):
     """Start a benchmark sweep for one fan."""
     fan_test_service = request.app.state.fan_test_service
@@ -156,7 +198,7 @@ async def get_fan_test_result(fan_id: str, request: Request):
     return result.model_dump(mode="json")
 
 
-@router.delete("/{fan_id}/test")
+@router.delete("/{fan_id}/test", dependencies=[Depends(require_csrf)])
 async def cancel_fan_test(fan_id: str, request: Request):
     """Cancel a running fan benchmark."""
     fan_test_service = request.app.state.fan_test_service
@@ -176,7 +218,7 @@ async def get_fan_status(request: Request):
     }
 
 
-@router.post("/release")
+@router.post("/release", dependencies=[Depends(require_csrf)])
 async def release_fan_control(request: Request):
     """Release all fans to BIOS/firmware automatic control.
 
@@ -191,7 +233,7 @@ async def release_fan_control(request: Request):
     return {"success": True, "message": "Fan control released to BIOS/auto mode"}
 
 
-@router.post("/resume")
+@router.post("/resume", dependencies=[Depends(require_csrf)])
 async def resume_fan_control(request: Request):
     """Resume software fan control by reactivating the current active profile.
 

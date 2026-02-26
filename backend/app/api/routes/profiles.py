@@ -1,5 +1,7 @@
-from fastapi import APIRouter, Request, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, Request, HTTPException
+from pydantic import BaseModel, Field
+
+from app.api.dependencies.auth import require_csrf
 
 from app.models.profiles import ProfilePreset, PRESET_CURVES
 from app.models.fan_curves import FanCurve
@@ -26,12 +28,12 @@ async def get_profile(profile_id: str, request: Request):
 
 
 class CreateProfileRequest(BaseModel):
-    name: str
+    name: str = Field(min_length=1, max_length=200)
     preset: ProfilePreset = ProfilePreset.CUSTOM
-    curves: list[FanCurve] = []
+    curves: list[FanCurve] = Field(default=[], max_length=50)
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(require_csrf)])
 async def create_profile(body: CreateProfileRequest, request: Request):
     """Create a new profile."""
     repo = request.app.state.profile_repo
@@ -39,7 +41,7 @@ async def create_profile(body: CreateProfileRequest, request: Request):
     return {"success": True, "profile": profile.model_dump()}
 
 
-@router.put("/{profile_id}/activate")
+@router.put("/{profile_id}/activate", dependencies=[Depends(require_csrf)])
 async def activate_profile(profile_id: str, request: Request):
     """Activate a profile and apply its curves."""
     repo = request.app.state.profile_repo
@@ -62,7 +64,7 @@ async def activate_profile(profile_id: str, request: Request):
     return {"success": True, "active_profile": profile.model_dump()}
 
 
-@router.delete("/{profile_id}")
+@router.delete("/{profile_id}", dependencies=[Depends(require_csrf)])
 async def delete_profile(profile_id: str, request: Request):
     """Delete a profile.
 
@@ -91,3 +93,40 @@ async def get_preset_curves(profile_id: str, request: Request):
     if not profile or profile.preset not in PRESET_CURVES:
         return {"points": []}
     return {"points": [p.model_dump() for p in PRESET_CURVES[profile.preset]]}
+
+
+@router.get("/{profile_id}/export")
+async def export_profile(profile_id: str, request: Request):
+    """Export a profile (name, preset, curves) as a portable JSON object."""
+    repo = request.app.state.profile_repo
+    profile = await repo.get(profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    return {
+        "export_version": 1,
+        "profile": {
+            "name": profile.name,
+            "preset": profile.preset.value,
+            "curves": [c.model_dump() for c in profile.curves],
+        },
+    }
+
+
+class ImportProfileRequest(BaseModel):
+    name: str | None = Field(default=None, max_length=200)
+    preset: ProfilePreset = ProfilePreset.CUSTOM
+    curves: list[FanCurve] = Field(default=[], max_length=50)
+
+
+@router.post("/import", dependencies=[Depends(require_csrf)])
+async def import_profile(body: ImportProfileRequest, request: Request):
+    """Import a profile from JSON.  Accepts the 'profile' object from export."""
+    import secrets
+    repo = request.app.state.profile_repo
+    name = body.name or f"Imported {secrets.token_hex(3)}"
+    # Assign fresh IDs to curves so they don't collide with existing ones
+    fresh_curves: list[FanCurve] = []
+    for curve in body.curves:
+        fresh_curves.append(curve.model_copy(update={"id": f"curve_{secrets.token_hex(6)}"}))
+    profile = await repo.create(name=name, preset=body.preset, curves=fresh_curves)
+    return {"success": True, "profile": profile.model_dump()}

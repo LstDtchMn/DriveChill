@@ -5,13 +5,22 @@ import { TempGauge } from './TempGauge';
 import { FanSpeedCard } from './FanSpeedCard';
 import { TempChart } from './TempChart';
 import { useSensors } from '@/hooks/useSensors';
+import { useSettingsStore } from '@/stores/settingsStore';
 
 export function SystemOverview() {
   const {
     cpuTemp, gpuTemp, hddTemp, caseTemp,
     cpuLoad, gpuLoad,
     fanRpms, fanPcts,
+    cpuTemps, gpuTemps, hddTemps, caseTemps,
   } = useSensors();
+  const sensorLabels = useSettingsStore((s) => s.sensorLabels);
+
+  // Use custom labels for gauge labels when available
+  const cpuLabel = (cpuTemps[0] && sensorLabels[cpuTemps[0].id]) || 'CPU';
+  const gpuLabel = (gpuTemps[0] && sensorLabels[gpuTemps[0].id]) || 'GPU';
+  const hddLabel = (hddTemps[0] && sensorLabels[hddTemps[0].id]) || 'Storage';
+  const caseLabel = (caseTemps[0] && sensorLabels[caseTemps[0].id]) || 'Case';
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -20,25 +29,25 @@ export function SystemOverview() {
         <h3 className="section-title mb-3 px-1">Temperatures</h3>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <TempGauge
-            label="CPU"
+            label={cpuLabel}
             value={cpuTemp}
             maxValue={100}
             icon={<Cpu size={16} />}
           />
           <TempGauge
-            label="GPU"
+            label={gpuLabel}
             value={gpuTemp}
             maxValue={95}
             icon={<Monitor size={16} />}
           />
           <TempGauge
-            label="Storage"
+            label={hddLabel}
             value={hddTemp}
             maxValue={70}
             icon={<HardDrive size={16} />}
           />
           <TempGauge
-            label="Case"
+            label={caseLabel}
             value={caseTemp}
             maxValue={55}
             icon={<Thermometer size={16} />}
@@ -94,10 +103,11 @@ export function SystemOverview() {
           {fanRpms.map((fan, i) => {
             const fanBase = fan.id.replace(/_rpm$/, '');
             const pct = fanPcts.find((f) => f.id.replace(/_pct$/, '') === fanBase);
+            const fanLabel = sensorLabels[fan.id] || fan.name.replace(' RPM', '').replace(' Rpm', '');
             return (
               <FanSpeedCard
                 key={fan.id}
-                name={fan.name.replace(' RPM', '').replace(' Rpm', '')}
+                name={fanLabel}
                 rpm={fan.value}
                 percentage={pct?.value ?? 0}
                 maxRpm={fan.max_value ?? 2000}

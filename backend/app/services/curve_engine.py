@@ -1,3 +1,5 @@
+import math
+
 from app.models.fan_curves import FanCurve, FanCurvePoint
 
 
@@ -36,10 +38,41 @@ def interpolate_speed(points: list[FanCurvePoint], temperature: float) -> float:
 
 
 def evaluate_curve(curve: FanCurve, current_temp: float) -> float:
-    """Evaluate a fan curve and return the target fan speed (0-100%)."""
+    """Evaluate a fan curve and return the target fan speed (0-100%).
+
+    Returns -1 (skip) if the temperature is not a finite number.
+    """
     if not curve.enabled:
         return -1  # -1 means "don't control this fan"
+    if not math.isfinite(current_temp):
+        return -1  # NaN/Infinity from sensor — don't produce garbage speed
     return max(0, min(100, interpolate_speed(curve.points, current_temp)))
+
+
+def resolve_composite_temp(
+    curve: FanCurve,
+    sensor_values: dict[str, float],
+) -> float | None:
+    """Determine the effective temperature for a curve.
+
+    For composite curves (``sensor_ids`` non-empty), returns the MAX of all
+    available sensor temperatures.  Falls back to ``sensor_id`` if no
+    composite sensors are available.  Returns *None* when no temperature
+    can be determined.
+    """
+    if curve.sensor_ids:
+        temps = [
+            sensor_values[sid]
+            for sid in curve.sensor_ids
+            if sid in sensor_values and math.isfinite(sensor_values[sid])
+        ]
+        if temps:
+            return max(temps)
+    # Fallback to single primary sensor
+    val = sensor_values.get(curve.sensor_id)
+    if val is not None and not math.isfinite(val):
+        return None
+    return val
 
 
 # ── Dangerous curve detection ────────────────────────────────────────

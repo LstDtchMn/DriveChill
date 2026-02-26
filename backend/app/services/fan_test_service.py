@@ -59,10 +59,12 @@ class _TestRun:
 class FanTestService:
     """Runs per-fan benchmark sweeps and exposes progress/results for API + WS."""
 
-    def __init__(self, backend, sensor_service, fan_service) -> None:
+    def __init__(self, backend, sensor_service, fan_service,
+                 fan_settings_repo=None) -> None:
         self._backend = backend
         self._sensor_service = sensor_service
         self._fan_service = fan_service
+        self._fan_settings_repo = fan_settings_repo
         self._runs: dict[str, _TestRun] = {}
         self._lock = Lock()
 
@@ -156,6 +158,9 @@ class FanTestService:
                 run.result.status = "completed"
                 run.result.completed_at = datetime.now(timezone.utc)
 
+            # Auto-save fan settings from benchmark results
+            await self._auto_save_fan_settings(fan_id, run.result)
+
         except asyncio.CancelledError:
             with self._lock:
                 run.result.status = "cancelled"
@@ -169,6 +174,42 @@ class FanTestService:
                 run.result.completed_at = datetime.now(timezone.utc)
         finally:
             self._fan_service.unlock_from_test(fan_id)
+
+    async def _auto_save_fan_settings(self, fan_id: str, result: FanTestResult) -> None:
+        """Persist min speed floor and zero-RPM capability from benchmark results."""
+        if not self._fan_settings_repo:
+            return
+
+        # Guard: if no steps recorded spinning, tach data is unreliable —
+        # do NOT auto-classify as zero-RPM or change the speed floor.
+        any_spinning = any(s.spinning for s in result.steps)
+        if not any_spinning:
+            logger.warning(
+                "No spinning steps detected for %s — skipping auto-save "
+                "(tach may be absent or fan disconnected)",
+                fan_id,
+            )
+            return
+
+        min_pct = result.min_operational_pct or 0.0
+        # Zero-RPM capable: the 0% step explicitly showed the fan NOT spinning
+        # (rpm below threshold) AND the fan successfully spun at higher speeds.
+        # This distinguishes a true zero-RPM fan from a broken tach.
+        step_at_zero = next((s for s in result.steps if s.speed_pct == 0), None)
+        zero_rpm = (
+            step_at_zero is not None
+            and not step_at_zero.spinning
+            and min_pct > 0.0
+        )
+        try:
+            await self._fan_settings_repo.set(fan_id, min_pct, zero_rpm)
+            self._fan_service.update_fan_settings(fan_id, min_pct, zero_rpm)
+            logger.info(
+                "Auto-saved fan settings for %s: min_speed=%.0f%%, zero_rpm=%s",
+                fan_id, min_pct, zero_rpm,
+            )
+        except Exception:
+            logger.exception("Failed to auto-save fan settings for %s", fan_id)
 
     @staticmethod
     def _read_rpm(fan_id: str, readings: list[SensorReading]) -> float | None:

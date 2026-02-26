@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Depends, Request, HTTPException
+
+from app.api.dependencies.auth import require_csrf
 from pydantic import BaseModel, Field, field_validator
 
 router = APIRouter(prefix="/api/quiet-hours", tags=["quiet-hours"])
@@ -51,7 +53,7 @@ async def list_rules(request: Request):
     return {"rules": rules}
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(require_csrf)])
 async def create_rule(body: QuietHoursRule, request: Request):
     """Create a quiet hours rule."""
     await _check_profile_exists(request, body.profile_id)
@@ -66,7 +68,7 @@ async def create_rule(body: QuietHoursRule, request: Request):
     return {"success": True, "id": cursor.lastrowid}
 
 
-@router.put("/{rule_id}")
+@router.put("/{rule_id}", dependencies=[Depends(require_csrf)])
 async def update_rule(rule_id: int, body: QuietHoursRule, request: Request):
     """Update a quiet hours rule."""
     await _check_profile_exists(request, body.profile_id)
@@ -83,7 +85,7 @@ async def update_rule(rule_id: int, body: QuietHoursRule, request: Request):
     return {"success": True}
 
 
-@router.delete("/{rule_id}")
+@router.delete("/{rule_id}", dependencies=[Depends(require_csrf)])
 async def delete_rule(rule_id: int, request: Request):
     """Delete a quiet hours rule."""
     db = request.app.state.db

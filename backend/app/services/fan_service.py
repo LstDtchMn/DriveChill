@@ -94,6 +94,26 @@ class FanService:
         self._panic_hysteresis: float = panic_hysteresis
         self._test_locked_fans: set[str] = set()
 
+        # Per-fan settings (min speed floor, zero-RPM capability)
+        # Keyed by fan_id. Populated by load_fan_settings() on startup.
+        self._fan_settings: dict[str, dict] = {}
+
+    # ------------------------------------------------------------------
+    # Fan settings (min speed floor, zero-RPM)
+    # ------------------------------------------------------------------
+
+    async def load_fan_settings(self, fan_settings_repo) -> None:
+        """Load per-fan settings from the database on startup."""
+        self._fan_settings = await fan_settings_repo.get_all()
+
+    def update_fan_settings(self, fan_id: str, min_speed_pct: float,
+                            zero_rpm_capable: bool) -> None:
+        """Update cached fan settings (caller persists to DB)."""
+        self._fan_settings[fan_id] = {
+            "min_speed_pct": min_speed_pct,
+            "zero_rpm_capable": zero_rpm_capable,
+        }
+
     # ------------------------------------------------------------------
     # Configuration
     # ------------------------------------------------------------------
@@ -160,13 +180,18 @@ class FanService:
 
     @property
     def safe_mode_status(self) -> dict:
-        """Current safe-mode / panic state for WebSocket broadcasting."""
-        if self._released:
-            reason: str | None = "released"
-        elif self._temp_panic:
-            reason = "temp_panic"
+        """Current safe-mode / panic state for WebSocket broadcasting.
+
+        Priority: panic states (sensor_failure, temp_panic) always take
+        precedence over released state — thermal safety overrides user
+        preference.
+        """
+        if self._temp_panic:
+            reason: str | None = "temp_panic"
         elif self._sensor_panic:
             reason = "sensor_failure"
+        elif self._released:
+            reason = "released"
         else:
             reason = None
         return {
@@ -218,8 +243,14 @@ class FanService:
                         logger.error(
                             "Entering sensor-failure panic mode — all fans set to 100%%"
                         )
-                    if not self._released:
-                        await self._emergency_all_fans(100.0)
+                    # Panic ALWAYS overrides released state — hardware safety
+                    # takes absolute priority over user "release" preference.
+                    if self._released:
+                        self._released = False
+                        logger.warning(
+                            "Clearing released state — panic mode overrides release"
+                        )
+                    await self._emergency_all_fans(100.0)
                     continue
 
                 # Real snapshot received: clear sensor panic.
@@ -236,13 +267,20 @@ class FanService:
                         "Entering temperature panic mode — all fans set to 100%%"
                     )
 
+                # Panic mode ALWAYS forces 100% — checked before released
+                # state so thermal emergencies can never be bypassed.
+                if self._temp_panic:
+                    if self._released:
+                        self._released = False
+                        logger.warning(
+                            "Clearing released state — panic mode overrides release"
+                        )
+                    await self._emergency_all_fans(100.0)
+                    continue
+
                 # User released fan control — don't apply any curves.
                 if self._released:
                     self._last_applied = {}
-                    continue
-
-                if self._temp_panic:
-                    await self._emergency_all_fans(100.0)
                     continue
 
                 # Normal curve evaluation.
@@ -415,7 +453,7 @@ class FanService:
 
         Returns a dict of fan_id -> applied speed percent.
         """
-        from app.services.curve_engine import evaluate_curve
+        from app.services.curve_engine import evaluate_curve, resolve_composite_temp
 
         sensor_values: dict[str, float] = {}
         for r in readings:
@@ -427,7 +465,7 @@ class FanService:
         for curve in self._curves:
             if curve.fan_id in self._test_locked_fans:
                 continue
-            temp = sensor_values.get(curve.sensor_id)
+            temp = resolve_composite_temp(curve, sensor_values)
             if temp is None:
                 continue
 
@@ -441,6 +479,14 @@ class FanService:
                 applied[curve.fan_id] = max(applied[curve.fan_id], speed)
             else:
                 applied[curve.fan_id] = speed
+
+        # Enforce per-fan minimum speed floor (zero-RPM fans exempt)
+        for fan_id in applied:
+            fs = self._fan_settings.get(fan_id)
+            if fs and fs["min_speed_pct"] > 0:
+                if applied[fan_id] == 0 and fs["zero_rpm_capable"]:
+                    continue  # allow true 0% on zero-RPM fans
+                applied[fan_id] = max(applied[fan_id], fs["min_speed_pct"])
 
         for fan_id, speed in applied.items():
             await self._backend.set_fan_speed(fan_id, speed)
