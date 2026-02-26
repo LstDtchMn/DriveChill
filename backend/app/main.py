@@ -17,6 +17,7 @@ from app.db.repositories.settings_repo import SettingsRepo
 from app.hardware import get_backend
 from app.services.sensor_service import SensorService
 from app.services.fan_service import FanService
+from app.services.fan_test_service import FanTestService
 from app.services.alert_service import AlertService
 from app.services.logging_service import LoggingService
 from app.services.quiet_hours_service import QuietHoursService
@@ -80,6 +81,9 @@ async def lifespan(app: FastAPI):
 
     alert_service = AlertService()
     app.state.alert_service = alert_service
+
+    fan_test_service = FanTestService(backend, sensor_service, fan_service)
+    app.state.fan_test_service = fan_test_service
 
     # LoggingService shares the same DB file but keeps its own connection
     # (sensor writes are high-frequency; isolate from app queries).
@@ -192,6 +196,7 @@ async def lifespan(app: FastAPI):
         pass
 
     await fan_service.stop()
+    await fan_test_service.shutdown()
     await quiet_hours_service.stop()
     await sensor_service.stop()
     await logging_service.shutdown()

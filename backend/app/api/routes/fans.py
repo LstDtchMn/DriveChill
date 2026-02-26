@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 from app.models.fan_curves import FanCurve, FanCurvePoint
 from app.services.curve_engine import check_dangerous_curve
+from app.services.fan_test_service import FanTestOptions
 
 router = APIRouter(prefix="/api/fans", tags=["fans"])
 
@@ -124,6 +125,44 @@ async def validate_curve(body: ValidateCurveRequest):
     """
     warnings = check_dangerous_curve(body.points)
     return {"safe": len(warnings) == 0, "warnings": warnings}
+
+
+@router.post("/{fan_id}/test", status_code=202)
+async def start_fan_test(fan_id: str, request: Request, body: FanTestOptions | None = None):
+    """Start a benchmark sweep for one fan."""
+    fan_test_service = request.app.state.fan_test_service
+    options = body or FanTestOptions()
+    ok, error = await fan_test_service.try_start(fan_id, options)
+    if not ok:
+        if "not found" in error.lower():
+            raise HTTPException(status_code=404, detail=error)
+        raise HTTPException(status_code=409, detail=error)
+
+    estimated_seconds = (options.steps + 1) * (options.settle_ms / 1000.0)
+    return {
+        "ok": True,
+        "fan_id": fan_id,
+        "estimated_duration_s": estimated_seconds,
+    }
+
+
+@router.get("/{fan_id}/test")
+async def get_fan_test_result(fan_id: str, request: Request):
+    """Get current/last benchmark result for a fan."""
+    fan_test_service = request.app.state.fan_test_service
+    result = fan_test_service.get_result(fan_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"No test result for fan '{fan_id}'")
+    return result.model_dump(mode="json")
+
+
+@router.delete("/{fan_id}/test")
+async def cancel_fan_test(fan_id: str, request: Request):
+    """Cancel a running fan benchmark."""
+    fan_test_service = request.app.state.fan_test_service
+    if not fan_test_service.cancel(fan_id):
+        raise HTTPException(status_code=404, detail=f"No running test for fan '{fan_id}'")
+    return {"ok": True}
 
 
 @router.get("/status")

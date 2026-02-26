@@ -5,7 +5,7 @@ import { CurveEditor } from './CurveEditor';
 import { PresetSelector } from './PresetSelector';
 import { FanTestPanel } from '@/components/fans/FanTestPanel';
 import { useSensors } from '@/hooks/useSensors';
-import { api } from '@/lib/api';
+import { APIError, api } from '@/lib/api';
 import type { FanCurvePoint, FanCurve } from '@/lib/types';
 import { Plus, Save } from 'lucide-react';
 
@@ -15,6 +15,16 @@ const DEFAULT_POINTS: FanCurvePoint[] = [
   { temp: 70, speed: 70 },
   { temp: 85, speed: 100 },
 ];
+
+function formatDangerWarnings(detail: unknown): string[] {
+  if (!detail || typeof detail !== 'object') return [];
+  const d = detail as { detail?: { warnings?: Array<{ temp?: number; speed?: number; message?: string }> } };
+  const warnings = d.detail?.warnings ?? [];
+  return warnings.map((w) => {
+    if (w.message) return w.message;
+    return `Low speed ${w.speed ?? '?'}% at ${w.temp ?? '?'}°C`;
+  });
+}
 
 export function FanCurvesPage() {
   const { cpuTemps, gpuTemps, hddTemps, caseTemps, fanRpms } = useSensors();
@@ -58,8 +68,19 @@ export function FanCurvesPage() {
     try {
       await api.updateCurve(updated);
       setCurves(curves.map((c) => (c.id === selectedCurve ? updated : c)));
-    } catch {
-      // Handle error
+    } catch (err) {
+      if (err instanceof APIError && err.status === 409) {
+        const warnings = formatDangerWarnings(err.detail);
+        const warningText = warnings.length > 0 ? `\n\n${warnings.join('\n')}` : '';
+        const confirmOverride = window.confirm(
+          `This curve has dangerous speed settings at high temperatures. Apply anyway?${warningText}`
+        );
+        if (!confirmOverride) return;
+
+        await api.updateCurve(updated, true);
+        setCurves(curves.map((c) => (c.id === selectedCurve ? updated : c)));
+        return;
+      }
     }
   };
 

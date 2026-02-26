@@ -3,6 +3,7 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { useAppStore } from '@/stores/appStore';
 import type { WSMessage } from '@/lib/types';
+import { api } from '@/lib/api';
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8085/api/ws';
 const RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 15000];
@@ -21,6 +22,7 @@ export function useWebSocket() {
     setFanTestProgress,
     setSafeMode,
     setConnected,
+    setBackendName,
   } = useAppStore();
 
   const connect = useCallback(() => {
@@ -30,9 +32,15 @@ export function useWebSocket() {
       const ws = new WebSocket(WS_URL);
       wsRef.current = ws;
 
-      ws.onopen = () => {
+      ws.onopen = async () => {
         setConnected(true);
         reconnectAttempt.current = 0;
+        try {
+          const health = await api.health();
+          setBackendName(health?.backend || 'Connected');
+        } catch {
+          setBackendName('Connected');
+        }
       };
 
       ws.onmessage = (event) => {
@@ -72,6 +80,7 @@ export function useWebSocket() {
 
       ws.onclose = () => {
         setConnected(false);
+        setBackendName('Disconnected');
         scheduleReconnect();
       };
 
@@ -81,7 +90,7 @@ export function useWebSocket() {
     } catch {
       scheduleReconnect();
     }
-  }, [setReadings, addHistoryPoint, setAppliedSpeeds, addAlertEvents, setActiveAlerts, setFanTestProgress, setSafeMode, setConnected]);
+  }, [setReadings, addHistoryPoint, setAppliedSpeeds, addAlertEvents, setActiveAlerts, setFanTestProgress, setSafeMode, setConnected, setBackendName]);
 
   const scheduleReconnect = useCallback(() => {
     const delay = RECONNECT_DELAYS[Math.min(reconnectAttempt.current, RECONNECT_DELAYS.length - 1)];

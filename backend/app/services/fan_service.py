@@ -92,6 +92,7 @@ class FanService:
         self._panic_cpu_temp: float = panic_cpu_temp
         self._panic_gpu_temp: float = panic_gpu_temp
         self._panic_hysteresis: float = panic_hysteresis
+        self._test_locked_fans: set[str] = set()
 
     # ------------------------------------------------------------------
     # Configuration
@@ -173,6 +174,13 @@ class FanService:
             "released": self._released,
             "reason": reason,
         }
+
+    def lock_for_test(self, fan_id: str) -> None:
+        """Prevent curve engine from touching a fan during benchmark runs."""
+        self._test_locked_fans.add(fan_id)
+
+    def unlock_from_test(self, fan_id: str) -> None:
+        self._test_locked_fans.discard(fan_id)
 
     # ------------------------------------------------------------------
     # Independent control loop
@@ -417,6 +425,8 @@ class FanService:
         applied: dict[str, float] = {}
 
         for curve in self._curves:
+            if curve.fan_id in self._test_locked_fans:
+                continue
             temp = sensor_values.get(curve.sensor_id)
             if temp is None:
                 continue

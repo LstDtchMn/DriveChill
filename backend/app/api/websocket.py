@@ -27,6 +27,7 @@ async def websocket_endpoint(websocket: WebSocket):
     sensor_service = websocket.app.state.sensor_service
     alert_service = websocket.app.state.alert_service
     fan_service = websocket.app.state.fan_service
+    fan_test_service = getattr(websocket.app.state, "fan_test_service", None)
     queue = sensor_service.subscribe()
 
     try:
@@ -40,6 +41,7 @@ async def websocket_endpoint(websocket: WebSocket):
             # Read last applied speeds and safe-mode status from the control loop.
             applied_speeds = fan_service.last_applied_speeds
             safe_mode = fan_service.safe_mode_status
+            fan_test = fan_test_service.get_active_progress() if fan_test_service else []
 
             # None sentinel: sensor failures exceeded limit — send empty readings.
             if snapshot is None:
@@ -50,6 +52,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     "applied_speeds": applied_speeds,
                     "active_alerts": alert_service.active_alerts,
                     "safe_mode": safe_mode,
+                    "fan_test": [p.model_dump(mode="json") for p in fan_test],
                 }
                 await websocket.send_text(json.dumps(failure_msg, default=str))
                 continue
@@ -63,6 +66,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 "applied_speeds": applied_speeds,
                 "active_alerts": alert_service.active_alerts,
                 "safe_mode": safe_mode,
+                "fan_test": [p.model_dump(mode="json") for p in fan_test],
             }
 
             await websocket.send_text(json.dumps(message, default=str))
