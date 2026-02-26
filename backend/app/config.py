@@ -17,7 +17,7 @@ _INTERNAL_TOKEN: str = secrets.token_hex(32)
 
 class Settings(BaseSettings):
     app_name: str = "DriveChill"
-    app_version: str = "1.0.0"
+    app_version: str = "1.5.0"
     host: str = "127.0.0.1"
     port: int = 8085
     cors_origins: list[str] = ["http://localhost:3000", "http://localhost:8085"]

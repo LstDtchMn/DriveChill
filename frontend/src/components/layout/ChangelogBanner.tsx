@@ -3,22 +3,19 @@
 import { useState, useEffect } from 'react';
 import { X, Sparkles } from 'lucide-react';
 
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.5.0';
 const STORAGE_KEY = 'drivechill_changelog_dismissed';
 
 const CHANGELOG: Record<string, string[]> = {
-  '1.0.0': [
-    'New presets: Gaming, Rendering, Sleep profiles',
-    'Curve editor: live "you are here" operating-point indicator',
-    'Keyboard shortcuts in curve editor (arrow keys, Delete)',
-    'Profile import/export as JSON',
-    'Custom sensor labels',
-    'Temperature unit conversion (°C / °F) across all views',
-    'Session authentication for remote access',
-    'Auto-start on boot (Windows & Linux)',
-    'Quiet hours: scheduled profile switching',
-    'Browser notifications for alerts & safe-mode events',
-    'Profile quick-switch from system tray',
+  '1.5.0': [
+    'Safety hardening: panic mode now overrides released fan control',
+    'Authentication: session auth + CSRF protection across all write APIs',
+    'WebSocket improvements: reconnect guards and periodic session revalidation',
+    'Backup/restore: FK validation and full settings replacement on import',
+    'Fan curves: composite sensors (MAX of multiple temperature sources)',
+    'Per-fan settings: min speed floor and zero-RPM support',
+    'Fan benchmark workflow with persisted fan tuning',
+    'Auto-start support for Windows Task Scheduler and Linux systemd user service',
   ],
 };
 
@@ -59,8 +56,8 @@ export function ChangelogBanner() {
       <div className="flex-1 min-w-0">
         <span className="font-semibold">What&apos;s new in v{APP_VERSION}</span>
         <span className="ml-2 text-xs opacity-75">
-          {entries.slice(0, 3).join(' · ')}
-          {entries.length > 3 && ` · +${entries.length - 3} more`}
+          {entries.slice(0, 3).join(' | ')}
+          {entries.length > 3 && ` | +${entries.length - 3} more`}
         </span>
       </div>
       <button

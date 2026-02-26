@@ -365,7 +365,7 @@ export function SettingsPage() {
           </div>
           <div className="flex justify-between">
             <span style={{ color: 'var(--text-secondary)' }}>Version</span>
-            <span className="font-mono text-xs" style={{ color: 'var(--text)' }}>1.0.0</span>
+            <span className="font-mono text-xs" style={{ color: 'var(--text)' }}>1.5.0</span>
           </div>
         </div>
       </div>
