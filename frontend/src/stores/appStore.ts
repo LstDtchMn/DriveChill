@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { SensorReading, AlertEvent, Page, Profile, FanCurve, FanTestProgress } from '@/lib/types';
+import type { SensorReading, AlertEvent, Page, Profile, FanCurve, FanTestProgress, SafeModeStatus } from '@/lib/types';
 
 interface HistoryPoint {
   timestamp: string;
@@ -41,6 +41,10 @@ interface AppState {
   // Fan benchmark progress (live, from WebSocket)
   fanTestProgress: FanTestProgress[];
   setFanTestProgress: (progress: FanTestProgress[]) => void;
+
+  // Safe-mode / panic state
+  safeMode: SafeModeStatus;
+  setSafeMode: (status: SafeModeStatus) => void;
 
   // Connection
   connected: boolean;
@@ -102,6 +106,10 @@ export const useAppStore = create<AppState>((set) => ({
   // Fan benchmark progress
   fanTestProgress: [],
   setFanTestProgress: (progress) => set({ fanTestProgress: progress }),
+
+  // Safe-mode / panic state
+  safeMode: { active: false, released: false, reason: null },
+  setSafeMode: (status) => set({ safeMode: status }),
 
   // Connection
   connected: false,

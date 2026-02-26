@@ -93,6 +93,12 @@ export interface FanTestProgress {
   min_operational_pct: number | null;
 }
 
+export interface SafeModeStatus {
+  active: boolean;
+  released: boolean;
+  reason: 'sensor_failure' | 'temp_panic' | 'released' | null;
+}
+
 export interface WSMessage {
   type: 'sensor_update' | 'heartbeat';
   timestamp?: string;
@@ -101,6 +107,7 @@ export interface WSMessage {
   alerts?: AlertEvent[];
   active_alerts?: string[];
   fan_test?: FanTestProgress[];
+  safe_mode?: SafeModeStatus;
 }
 
 export type Page = 'dashboard' | 'curves' | 'alerts' | 'settings';

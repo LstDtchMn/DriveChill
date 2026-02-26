@@ -124,3 +124,47 @@ async def validate_curve(body: ValidateCurveRequest):
     """
     warnings = check_dangerous_curve(body.points)
     return {"safe": len(warnings) == 0, "warnings": warnings}
+
+
+@router.get("/status")
+async def get_fan_status(request: Request):
+    """Get current fan control status including safe-mode state."""
+    fan_service = request.app.state.fan_service
+    return {
+        "safe_mode": fan_service.safe_mode_status,
+        "curves_active": len(fan_service.curves),
+        "applied_speeds": fan_service.last_applied_speeds,
+    }
+
+
+@router.post("/release")
+async def release_fan_control(request: Request):
+    """Release all fans to BIOS/firmware automatic control.
+
+    Sets all fans to auto mode and suspends software curve control until
+    the user explicitly activates a profile.  One click, no confirmation.
+    """
+    fan_service = request.app.state.fan_service
+    await fan_service.release_fan_control()
+    # Notify quiet hours service that the user made a manual override.
+    if hasattr(request.app.state, "quiet_hours_service"):
+        request.app.state.quiet_hours_service.notify_manual_override()
+    return {"success": True, "message": "Fan control released to BIOS/auto mode"}
+
+
+@router.post("/resume")
+async def resume_fan_control(request: Request):
+    """Resume software fan control by reactivating the current active profile.
+
+    If no profile is active, returns a 409 telling the user to activate one.
+    """
+    profile_repo = request.app.state.profile_repo
+    active_profile = await profile_repo.get_active()
+    if not active_profile:
+        raise HTTPException(
+            status_code=409,
+            detail="No active profile to resume. Activate a profile first.",
+        )
+    fan_service = request.app.state.fan_service
+    await fan_service.apply_profile(active_profile)
+    return {"success": True, "active_profile": active_profile.model_dump()}

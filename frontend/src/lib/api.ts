@@ -1,12 +1,30 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8085';
 
+export class APIError extends Error {
+  status: number;
+  detail: unknown;
+
+  constructor(status: number, message: string, detail: unknown) {
+    super(message);
+    this.name = 'APIError';
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
 async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     headers: { 'Content-Type': 'application/json' },
     ...options,
   });
   if (!res.ok) {
-    throw new Error(`API error: ${res.status} ${res.statusText}`);
+    let detail: unknown = null;
+    try {
+      detail = await res.json();
+    } catch {
+      detail = null;
+    }
+    throw new APIError(res.status, `API error: ${res.status} ${res.statusText}`, detail);
   }
   return res.json();
 }
@@ -19,9 +37,15 @@ export const api = {
 
   // Fans
   getFans: () => fetchAPI<{ fans: string[] }>('/api/fans'),
+  getFanStatus: () => fetchAPI<{ safe_mode: any; curves_active: number; applied_speeds: Record<string, number> }>('/api/fans/status'),
+  releaseFanControl: () => fetchAPI<{ success: boolean; message: string }>('/api/fans/release', { method: 'POST' }),
+  resumeFanControl: () => fetchAPI<{ success: boolean; active_profile: any }>('/api/fans/resume', { method: 'POST' }),
   getCurves: () => fetchAPI<{ curves: any[] }>('/api/fans/curves'),
-  updateCurve: (curve: any) =>
-    fetchAPI('/api/fans/curves', { method: 'PUT', body: JSON.stringify(curve) }),
+  updateCurve: (curve: any, allowDangerous = false) =>
+    fetchAPI('/api/fans/curves', {
+      method: 'PUT',
+      body: JSON.stringify({ curve, allow_dangerous: allowDangerous }),
+    }),
   deleteCurve: (id: string) =>
     fetchAPI(`/api/fans/curves/${id}`, { method: 'DELETE' }),
 

@@ -323,6 +323,17 @@ class LHMDirectBackend(HardwareBackend):
             self._executor, _sync_set_fan_auto, control
         )
 
+    async def release_fan_control(self) -> None:
+        """Return all controlled fans to BIOS/firmware automatic mode."""
+        loop = asyncio.get_event_loop()
+        for fan_id, control in list(self._controls.items()):
+            try:
+                await loop.run_in_executor(
+                    self._executor, _sync_set_fan_auto, control
+                )
+            except Exception as exc:
+                logger.warning("Failed to release fan %s to auto: %s", fan_id, exc)
+
     async def get_fan_ids(self) -> list[str]:
         return list(self._controls.keys())
 

@@ -26,6 +26,14 @@ class HardwareBackend(ABC):
     async def get_fan_ids(self) -> list[str]:
         """Get list of controllable fan IDs."""
 
+    async def release_fan_control(self) -> None:
+        """Restore all fans to BIOS/firmware automatic control.
+
+        Implementations should call the hardware-specific method to release
+        software PWM override so the motherboard firmware takes over.
+        Default: no-op (backends that cannot control fans are already in auto mode).
+        """
+
     @abstractmethod
     def get_backend_name(self) -> str:
         """Return the name of this backend."""

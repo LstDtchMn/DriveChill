@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING
 from app.hardware.base import HardwareBackend
 from app.models.fan_curves import FanCurve
 from app.models.sensors import SensorReading, SensorType
-from app.services.curve_engine import evaluate_curve
 
 if TYPE_CHECKING:
     from app.services.sensor_service import SensorService
@@ -47,9 +46,29 @@ class FanService:
 
     Supports hysteresis (deadband) to prevent fan oscillation when
     temperatures hover near curve thresholds.
+
+    Safe-mode states
+    ----------------
+    ``_sensor_panic``
+        SensorService reported >N consecutive failures; all fans forced to
+        100% until a good reading arrives.
+    ``_temp_panic``
+        A temperature reading exceeded the panic threshold; all fans forced
+        to 100% until temps drop below ``threshold - hysteresis``.
+    ``_released``
+        User clicked "Release Fan Control"; all fans handed back to
+        BIOS/firmware auto mode.  Cleared only when a profile is
+        explicitly applied via ``apply_profile()``.
     """
 
-    def __init__(self, backend: HardwareBackend, deadband: float = 3.0) -> None:
+    def __init__(
+        self,
+        backend: HardwareBackend,
+        deadband: float = 3.0,
+        panic_cpu_temp: float = 95.0,
+        panic_gpu_temp: float = 90.0,
+        panic_hysteresis: float = 5.0,
+    ) -> None:
         self._backend = backend
         self._curves: list[FanCurve] = []
         self._task: asyncio.Task | None = None
@@ -65,6 +84,33 @@ class FanService:
         self._sensor_service: SensorService | None = None
         self._alert_service: AlertService | None = None
         self._queue: asyncio.Queue | None = None
+
+        # Safe-mode state
+        self._released: bool = False
+        self._sensor_panic: bool = False
+        self._temp_panic: bool = False
+        self._panic_cpu_temp: float = panic_cpu_temp
+        self._panic_gpu_temp: float = panic_gpu_temp
+        self._panic_hysteresis: float = panic_hysteresis
+
+    # ------------------------------------------------------------------
+    # Configuration
+    # ------------------------------------------------------------------
+
+    def configure_panic_thresholds(
+        self,
+        cpu_temp: float,
+        gpu_temp: float,
+        hysteresis: float,
+    ) -> None:
+        """Update panic threshold configuration (hot-reloadable)."""
+        self._panic_cpu_temp = cpu_temp
+        self._panic_gpu_temp = gpu_temp
+        self._panic_hysteresis = hysteresis
+
+    # ------------------------------------------------------------------
+    # Curve management
+    # ------------------------------------------------------------------
 
     @property
     def curves(self) -> list[FanCurve]:
@@ -108,6 +154,27 @@ class FanService:
         self._curves = [c for c in self._curves if c.id != curve_id]
 
     # ------------------------------------------------------------------
+    # Safe-mode status
+    # ------------------------------------------------------------------
+
+    @property
+    def safe_mode_status(self) -> dict:
+        """Current safe-mode / panic state for WebSocket broadcasting."""
+        if self._released:
+            reason: str | None = "released"
+        elif self._temp_panic:
+            reason = "temp_panic"
+        elif self._sensor_panic:
+            reason = "sensor_failure"
+        else:
+            reason = None
+        return {
+            "active": self._sensor_panic or self._temp_panic,
+            "released": self._released,
+            "reason": reason,
+        }
+
+    # ------------------------------------------------------------------
     # Independent control loop
     # ------------------------------------------------------------------
 
@@ -135,10 +202,46 @@ class FanService:
         while True:
             try:
                 snapshot = await self._queue.get()
+
+                # None sentinel: SensorService consecutive failure escalation.
+                if snapshot is None:
+                    if not self._sensor_panic:
+                        self._sensor_panic = True
+                        logger.error(
+                            "Entering sensor-failure panic mode — all fans set to 100%%"
+                        )
+                    if not self._released:
+                        await self._emergency_all_fans(100.0)
+                    continue
+
+                # Real snapshot received: clear sensor panic.
+                if self._sensor_panic:
+                    self._sensor_panic = False
+                    logger.info(
+                        "Sensor readings restored — exiting sensor-failure panic mode"
+                    )
+
+                # Check temperature panic thresholds.
+                entered_temp_panic = self._update_temp_panic(snapshot.readings)
+                if entered_temp_panic:
+                    logger.error(
+                        "Entering temperature panic mode — all fans set to 100%%"
+                    )
+
+                # User released fan control — don't apply any curves.
+                if self._released:
+                    self._last_applied = {}
+                    continue
+
+                if self._temp_panic:
+                    await self._emergency_all_fans(100.0)
+                    continue
+
+                # Normal curve evaluation.
                 applied = await self.apply_curves(snapshot.readings)
                 self._last_applied = applied
 
-                # Check alerts in the same loop
+                # Check alerts in the same loop.
                 if self._alert_service:
                     self._alert_service.check(snapshot.readings)
 
@@ -146,6 +249,83 @@ class FanService:
                 raise
             except Exception:
                 logger.exception("Fan control loop error")
+
+    async def _emergency_all_fans(self, speed: float) -> None:
+        """Set ALL known fans to the given speed (used for panic mode)."""
+        fan_ids = await self._backend.get_fan_ids()
+        for fan_id in fan_ids:
+            try:
+                await self._backend.set_fan_speed(fan_id, speed)
+            except Exception:
+                logger.exception("Failed to set emergency speed on fan %s", fan_id)
+        self._last_applied = {fan_id: speed for fan_id in fan_ids}
+
+    # ------------------------------------------------------------------
+    # Temperature panic logic
+    # ------------------------------------------------------------------
+
+    def _update_temp_panic(self, readings: list[SensorReading]) -> bool:
+        """Check if we should enter or exit temperature panic mode.
+
+        Returns True if we just *entered* panic (for log message de-dup).
+        """
+        was_panic = self._temp_panic
+
+        if self._temp_panic:
+            # Currently in panic — exit only when ALL panic-triggering sensors
+            # are below threshold minus hysteresis.
+            cpu_clear = True
+            gpu_clear = True
+            for r in readings:
+                if r.sensor_type == SensorType.CPU_TEMP:
+                    if r.value >= self._panic_cpu_temp - self._panic_hysteresis:
+                        cpu_clear = False
+                elif r.sensor_type == SensorType.GPU_TEMP:
+                    if r.value >= self._panic_gpu_temp - self._panic_hysteresis:
+                        gpu_clear = False
+            if cpu_clear and gpu_clear:
+                self._temp_panic = False
+                logger.info(
+                    "Temperature panic cleared — resuming normal fan control"
+                )
+        else:
+            # Not in panic — enter if any sensor exceeds its threshold.
+            for r in readings:
+                if r.sensor_type == SensorType.CPU_TEMP and r.value >= self._panic_cpu_temp:
+                    self._temp_panic = True
+                    logger.error(
+                        "CPU temp %.1f°C >= panic threshold %.1f°C",
+                        r.value, self._panic_cpu_temp,
+                    )
+                    break
+                if r.sensor_type == SensorType.GPU_TEMP and r.value >= self._panic_gpu_temp:
+                    self._temp_panic = True
+                    logger.error(
+                        "GPU temp %.1f°C >= panic threshold %.1f°C",
+                        r.value, self._panic_gpu_temp,
+                    )
+                    break
+
+        return self._temp_panic and not was_panic
+
+    # ------------------------------------------------------------------
+    # Release / resume fan control
+    # ------------------------------------------------------------------
+
+    async def release_fan_control(self) -> None:
+        """Hand all fans back to BIOS/firmware automatic control.
+
+        Sets ``_released=True`` so the control loop won't apply any curves.
+        Calls ``backend.release_fan_control()`` so hardware exits software
+        PWM mode immediately.
+        """
+        self._released = True
+        self._last_applied = {}
+        try:
+            await self._backend.release_fan_control()
+            logger.info("Fan control released to BIOS/firmware auto mode")
+        except Exception:
+            logger.exception("Backend release_fan_control() failed")
 
     # ------------------------------------------------------------------
     # Hysteresis
@@ -194,8 +374,12 @@ class FanService:
 
         Handles both preset and custom profiles.  Call this instead of
         duplicating the preset-expansion logic in routes and main.py.
+        Clears the released flag so the control loop resumes curve-based control.
         """
         from app.models.profiles import ProfilePreset, PRESET_CURVES
+
+        # Applying a profile always re-enables software fan control.
+        self._released = False
 
         if profile.preset != ProfilePreset.CUSTOM and profile.preset in PRESET_CURVES:
             fan_ids = await self._backend.get_fan_ids()
@@ -223,6 +407,8 @@ class FanService:
 
         Returns a dict of fan_id -> applied speed percent.
         """
+        from app.services.curve_engine import evaluate_curve
+
         sensor_values: dict[str, float] = {}
         for r in readings:
             if r.sensor_type in TEMP_SENSOR_TYPES:

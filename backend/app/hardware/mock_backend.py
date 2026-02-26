@@ -154,6 +154,10 @@ class MockBackend(HardwareBackend):
             return True
         return False
 
+    async def release_fan_control(self) -> None:
+        """Simulate returning fans to BIOS auto mode by resetting to defaults."""
+        self._fan_speeds = {fan_id: 0.0 for fan_id in self._fan_speeds}
+
     async def get_fan_ids(self) -> list[str]:
         return list(self._fan_speeds.keys())
 

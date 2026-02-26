@@ -1,8 +1,10 @@
 'use client';
 
+import { useState } from 'react';
 import { useAppStore } from '@/stores/appStore';
 import { ThemeToggle } from './ThemeToggle';
-import { Bell } from 'lucide-react';
+import { Bell, ShieldOff, Play } from 'lucide-react';
+import { api } from '@/lib/api';
 
 const PAGE_TITLES: Record<string, string> = {
   dashboard: 'Dashboard',
@@ -12,11 +14,47 @@ const PAGE_TITLES: Record<string, string> = {
 };
 
 export function Header() {
-  const { currentPage, backendName, activeAlerts, setPage } = useAppStore();
+  const { currentPage, backendName, activeAlerts, setPage, safeMode, setSafeMode } = useAppStore();
+  const [releasing, setReleasing] = useState(false);
+  const [resuming, setResuming] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+
+  const showToast = (msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(null), 3000);
+  };
+
+  const handleRelease = async () => {
+    if (releasing) return;
+    setReleasing(true);
+    try {
+      await api.releaseFanControl();
+      setSafeMode({ active: false, released: true, reason: 'released' });
+      showToast('Fan control released — BIOS/auto mode active');
+    } catch {
+      showToast('Failed to release fan control');
+    } finally {
+      setReleasing(false);
+    }
+  };
+
+  const handleResume = async () => {
+    if (resuming) return;
+    setResuming(true);
+    try {
+      await api.resumeFanControl();
+      setSafeMode({ active: false, released: false, reason: null });
+      showToast('Fan control resumed');
+    } catch {
+      showToast('No active profile — activate one first');
+    } finally {
+      setResuming(false);
+    }
+  };
 
   return (
     <header
-      className="h-14 flex items-center justify-between px-6 border-b shrink-0"
+      className="h-14 flex items-center justify-between px-6 border-b shrink-0 relative"
       style={{ borderColor: 'var(--border)', background: 'var(--bg)' }}
     >
       <div>
@@ -30,6 +68,31 @@ export function Header() {
           <span className="text-xs px-2.5 py-1 rounded-full" style={{ background: 'var(--accent-muted)', color: 'var(--accent)' }}>
             {backendName}
           </span>
+        )}
+
+        {/* Release / Resume Fan Control */}
+        {safeMode.released ? (
+          <button
+            onClick={handleResume}
+            disabled={resuming}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors"
+            style={{ background: 'var(--success)', color: '#fff', opacity: resuming ? 0.6 : 1 }}
+            title="Resume software fan control"
+          >
+            <Play size={13} />
+            {resuming ? 'Resuming…' : 'Resume Profile'}
+          </button>
+        ) : (
+          <button
+            onClick={handleRelease}
+            disabled={releasing}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors"
+            style={{ background: 'var(--danger)', color: '#fff', opacity: releasing ? 0.6 : 1 }}
+            title="Release all fans to BIOS/auto mode immediately"
+          >
+            <ShieldOff size={13} />
+            {releasing ? 'Releasing…' : 'Release Fans'}
+          </button>
         )}
 
         {/* Alert bell */}
@@ -47,6 +110,16 @@ export function Header() {
 
         <ThemeToggle />
       </div>
+
+      {/* Toast notification */}
+      {toast && (
+        <div
+          className="absolute bottom-[-2.5rem] right-6 px-4 py-2 rounded-lg text-xs font-medium shadow-lg z-50"
+          style={{ background: 'var(--surface-200)', color: 'var(--text)', border: '1px solid var(--border)' }}
+        >
+          {toast}
+        </div>
+      )}
     </header>
   );
 }
