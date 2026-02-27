@@ -1,8 +1,10 @@
-"""Authentication service: login, logout, session management, brute-force protection, rate limiting."""
+"""Authentication service: login, API keys, session management, and audit logging."""
 
 from __future__ import annotations
 
+import json
 import logging
+import hashlib
 import secrets
 import time
 from collections import defaultdict
@@ -21,6 +23,58 @@ _RATE_WINDOW = 60.0  # seconds
 # Brute-force constants
 _MAX_FAILED_ATTEMPTS = 5
 _LOCKOUT_DURATION = timedelta(minutes=15)
+
+_API_KEY_SCOPE_DOMAINS = (
+    "alerts",
+    "auth",
+    "fans",
+    "machines",
+    "profiles",
+    "quiet_hours",
+    "sensors",
+    "settings",
+    "webhooks",
+)
+_DEFAULT_API_KEY_SCOPES = ("read:sensors",)
+_ALLOWED_API_KEY_SCOPES = frozenset(
+    {"*", "read:*", "write:*"} |
+    {f"read:{d}" for d in _API_KEY_SCOPE_DOMAINS} |
+    {f"write:{d}" for d in _API_KEY_SCOPE_DOMAINS}
+)
+
+
+def _normalize_api_key_scopes(scopes: list[str] | None) -> list[str]:
+    raw = scopes if scopes is not None else list(_DEFAULT_API_KEY_SCOPES)
+    if not raw:
+        raise ValueError("At least one scope is required")
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        scope = str(item).strip().lower()
+        if not scope:
+            raise ValueError("Scopes cannot contain empty values")
+        if scope not in _ALLOWED_API_KEY_SCOPES:
+            raise ValueError(f"Unsupported API key scope: {scope}")
+        if scope in seen:
+            continue
+        seen.add(scope)
+        out.append(scope)
+    return out
+
+
+def _parse_scopes_json(raw: str | None) -> list[str]:
+    if not raw:
+        return list(_DEFAULT_API_KEY_SCOPES)
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return list(_DEFAULT_API_KEY_SCOPES)
+    if not isinstance(parsed, list):
+        return list(_DEFAULT_API_KEY_SCOPES)
+    try:
+        return _normalize_api_key_scopes([str(x) for x in parsed])
+    except ValueError:
+        return list(_DEFAULT_API_KEY_SCOPES)
 
 
 class AuthService:
@@ -95,6 +149,100 @@ class AuthService:
         )
         await self._db.commit()
         return cursor.lastrowid
+
+    # --- API keys ---
+
+    async def create_api_key(
+        self,
+        name: str,
+        scopes: list[str] | None = None,
+    ) -> tuple[dict, str]:
+        """Create an API key and return (metadata, plaintext_key_once)."""
+        key_id = secrets.token_hex(8)
+        plaintext_key = f"dc_live_{secrets.token_urlsafe(32)}"
+        key_hash = hashlib.sha256(plaintext_key.encode("utf-8")).hexdigest()
+        key_prefix = plaintext_key[:8]
+        now = datetime.now(timezone.utc).isoformat()
+        normalized_scopes = _normalize_api_key_scopes(scopes)
+        scopes_json = json.dumps(normalized_scopes, separators=(",", ":"), ensure_ascii=True)
+
+        await self._db.execute(
+            "INSERT INTO api_keys (id, name, key_prefix, key_hash, scopes_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (key_id, name.strip(), key_prefix, key_hash, scopes_json, now),
+        )
+        await self._db.commit()
+
+        return {
+            "id": key_id,
+            "name": name.strip(),
+            "key_prefix": key_prefix,
+            "scopes": normalized_scopes,
+            "created_at": now,
+            "revoked_at": None,
+            "last_used_at": None,
+        }, plaintext_key
+
+    async def list_api_keys(self) -> list[dict]:
+        cursor = await self._db.execute(
+            "SELECT id, name, key_prefix, scopes_json, created_at, revoked_at, last_used_at "
+            "FROM api_keys ORDER BY created_at DESC"
+        )
+        rows = await cursor.fetchall()
+        out: list[dict] = []
+        for row in rows:
+            scopes = _parse_scopes_json(row[3])
+            out.append({
+                "id": row[0],
+                "name": row[1],
+                "key_prefix": row[2],
+                "scopes": scopes,
+                "created_at": row[4],
+                "revoked_at": row[5],
+                "last_used_at": row[6],
+            })
+        return out
+
+    async def revoke_api_key(self, key_id: str) -> bool:
+        now = datetime.now(timezone.utc).isoformat()
+        cursor = await self._db.execute(
+            "UPDATE api_keys SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
+            (now, key_id),
+        )
+        await self._db.commit()
+        return cursor.rowcount > 0
+
+    async def validate_api_key(self, plaintext_key: str) -> dict | None:
+        """Validate a plaintext API key and return metadata when valid."""
+        if not plaintext_key:
+            return None
+        key_hash = hashlib.sha256(plaintext_key.encode("utf-8")).hexdigest()
+        cursor = await self._db.execute(
+            "SELECT id, name, key_prefix, scopes_json, created_at, revoked_at "
+            "FROM api_keys WHERE key_hash = ? AND revoked_at IS NULL",
+            (key_hash,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        scopes = _parse_scopes_json(row[3])
+
+        now = datetime.now(timezone.utc).isoformat()
+        await self._db.execute(
+            "UPDATE api_keys SET last_used_at = ? WHERE id = ?",
+            (now, row[0]),
+        )
+        await self._db.commit()
+
+        return {
+            "id": row[0],
+            "name": row[1],
+            "key_prefix": row[2],
+            "scopes": scopes,
+            "created_at": row[4],
+            "revoked_at": row[5],
+            "last_used_at": now,
+        }
 
     # --- Brute-force protection ---
 

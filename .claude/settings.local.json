@@ -14,7 +14,29 @@
       "Bash(python3:*)",
       "Bash(ls:*)",
       "Bash(powershell.exe -Command \"Stop-Process -Name DriveChill -Force -ErrorAction SilentlyContinue\")",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(DRIVECHILL_HARDWARE_BACKEND=mock python:*)",
+      "Bash(python:*)",
+      "Bash(DRIVECHILL_HARDWARE_BACKEND=mock timeout 8 python:*)",
+      "Bash(pkill:*)",
+      "Bash(netstat -ano)",
+      "Bash(git push)",
+      "Bash(grep -l \"hysteresis\\\\|deadband\" c:/Users/jte2/Downloads/DriveChill/DriveChill-1/backend/app/services/*.py)",
+      "Bash(grep -l \"sensor_failure\\\\|panic\\\\|safe_mode\" c:/Users/jte2/Downloads/DriveChill/DriveChill-1/backend/app/services/*.py)",
+      "Bash(grep -l \"release_fan\\\\|bios_mode\\\\|auto_mode\" c:/Users/jte2/Downloads/DriveChill/DriveChill-1/backend/app/services/*.py c:/Users/jte2/Downloads/DriveChill/DriveChill-1/backend/app/api/routes/*.py)",
+      "Bash(cmd //c \"tasklist /FI \"\"PID eq 29360\"\"\")",
+      "Bash(cmd //c \"tasklist /FI \"\"PID eq 245808\"\"\")",
+      "Bash(cmd //c \"tasklist\")",
+      "Bash(cmd //c \"taskkill /PID 154508 /F\")",
+      "Bash(powershell -Command \"Get-NetTCPConnection -LocalPort 8085 -State Listen | Select-Object LocalAddress,LocalPort,OwningProcess\")",
+      "Bash(powershell -Command \"Get-Process -Id 245808 -ErrorAction SilentlyContinue | Select-Object Name,Id,Path\")",
+      "Bash(powershell -Command \"Get-NetTCPConnection -LocalPort 8085 | Select-Object LocalAddress,LocalPort,State,OwningProcess | Format-Table\")",
+      "Bash(cmd //c \"wmic process where processid=245808 get processid,name,commandline 2>NUL\")",
+      "Bash(powershell -Command \"Get-Process -Id 29360 | Select-Object Name,Id,Path,MainWindowTitle\")",
+      "Bash(powershell -Command \"Get-Process python* | Select-Object Name,Id,CPU,Path | Format-Table -AutoSize\")",
+      "Bash(powershell -Command \":*)",
+      "Bash(powershell -Command \"Stop-Process -Id 29360 -Force -ErrorAction SilentlyContinue; Stop-Process -Id 245808 -Force -ErrorAction SilentlyContinue; Write-Host ''Done''\")"
     ]
   }
 }

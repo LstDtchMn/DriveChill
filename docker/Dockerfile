@@ -19,20 +19,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy backend code
-COPY backend/ ./backend/
+# Create non-root user before COPY so --chown works
+RUN useradd --system --create-home --home-dir /home/drivechill drivechill \
+    && mkdir -p /app/data \
+    && chown drivechill:drivechill /app/data /home/drivechill
+
+# Copy backend code (owned by drivechill, avoids extra chown layer)
+COPY --chown=drivechill:drivechill backend/ ./backend/
 
 # Copy built frontend
-COPY --from=frontend-build /app/frontend/out ./frontend/out
-
-# Create data directory
-RUN mkdir -p /app/data
+COPY --chown=drivechill:drivechill --from=frontend-build /app/frontend/out ./frontend/out
 
 ENV DRIVECHILL_HARDWARE_BACKEND=auto
 ENV DRIVECHILL_HOST=0.0.0.0
 ENV DRIVECHILL_PORT=8085
 
 EXPOSE 8085
+
+USER drivechill
 
 WORKDIR /app/backend
 CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8085"]

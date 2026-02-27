@@ -7,6 +7,7 @@ import { useSettingsStore } from '@/stores/settingsStore';
 import { useSensors } from '@/hooks/useSensors';
 import type { TempUnit } from '@/lib/tempUnit';
 import { requestNotificationPermission } from '@/hooks/useNotifications';
+import type { ApiKeyInfo, MachineInfo, WebhookConfig, WebhookDelivery } from '@/lib/types';
 import { Save, RefreshCw, Download, Info, Pencil, X, Check, Bell, BellOff } from 'lucide-react';
 
 interface AppSettings {
@@ -17,7 +18,17 @@ interface AppSettings {
   backend_name: string;
 }
 
+function isValidHttpUrl(value: string): boolean {
+  try {
+    const u = new URL(value);
+    return u.protocol === 'http:' || u.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 export function SettingsPage() {
+  const webhookPageSize = 10;
   const { backendName } = useAppStore();
   const { setTempUnit, sensorLabels, setSensorLabels, setSensorLabel, removeSensorLabel, notificationsEnabled, setNotificationsEnabled } = useSettingsStore();
   const { all: allReadings } = useSensors();
@@ -27,6 +38,21 @@ export function SettingsPage() {
   const [editingSensor, setEditingSensor] = useState<string | null>(null);
   const [editLabel, setEditLabel] = useState('');
   const [notifPermission, setNotifPermission] = useState<NotificationPermission | 'unsupported'>('default');
+  const [machines, setMachines] = useState<MachineInfo[]>([]);
+  const [machineName, setMachineName] = useState('');
+  const [machineUrl, setMachineUrl] = useState('');
+  const [machineApiKey, setMachineApiKey] = useState('');
+  const [machineAddBusy, setMachineAddBusy] = useState(false);
+  const [busyMachineIds, setBusyMachineIds] = useState<Set<string>>(new Set());
+  const [apiKeys, setApiKeys] = useState<ApiKeyInfo[]>([]);
+  const [newApiKeyName, setNewApiKeyName] = useState('');
+  const [issuedApiKey, setIssuedApiKey] = useState<string | null>(null);
+  const [webhook, setWebhook] = useState<WebhookConfig | null>(null);
+  const [webhookSaving, setWebhookSaving] = useState(false);
+  const [webhookSecretInput, setWebhookSecretInput] = useState('');
+  const [webhookDeliveries, setWebhookDeliveries] = useState<WebhookDelivery[]>([]);
+  const [webhookDeliveriesOffset, setWebhookDeliveriesOffset] = useState(0);
+  const [webhookDeliveriesLoading, setWebhookDeliveriesLoading] = useState(false);
 
   useEffect(() => {
     if (typeof window !== 'undefined' && 'Notification' in window) {
@@ -76,6 +102,54 @@ export function SettingsPage() {
     fetchLabels();
   }, [setSensorLabels]);
 
+  const fetchMachines = async () => {
+    try {
+      const data = await api.getMachines();
+      setMachines(data.machines);
+    } catch {
+      setMachines([]);
+    }
+  };
+
+  const fetchApiKeys = async () => {
+    try {
+      const data = await api.listApiKeys();
+      setApiKeys(data.api_keys);
+    } catch {
+      setApiKeys([]);
+    }
+  };
+
+  const fetchWebhook = async () => {
+    try {
+      const data = await api.getWebhookConfig();
+      setWebhook(data.config);
+      setWebhookSecretInput('');
+    } catch {
+      setWebhook(null);
+    }
+  };
+
+  const fetchWebhookDeliveries = async (offset = webhookDeliveriesOffset) => {
+    setWebhookDeliveriesLoading(true);
+    try {
+      const data = await api.getWebhookDeliveries(webhookPageSize, offset);
+      setWebhookDeliveries(data.deliveries);
+      setWebhookDeliveriesOffset(offset);
+    } catch {
+      setWebhookDeliveries([]);
+    } finally {
+      setWebhookDeliveriesLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchMachines();
+    fetchApiKeys();
+    fetchWebhook();
+    fetchWebhookDeliveries(0);
+  }, []);
+
   const handleSave = async () => {
     if (!settings) return;
     setSaving(true);
@@ -89,7 +163,7 @@ export function SettingsPage() {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch {
-      // Handle error
+      alert('Failed to save settings.');
     } finally {
       setSaving(false);
     }
@@ -121,16 +195,133 @@ export function SettingsPage() {
     try {
       await api.setSensorLabel(sensorId, trimmed);
       setSensorLabel(sensorId, trimmed);
-    } catch { /* handle error */ }
-    setEditingSensor(null);
+      setEditingSensor(null);
+    } catch {
+      alert('Failed to save sensor label.');
+    }
   };
 
   const handleDeleteLabel = async (sensorId: string) => {
     try {
       await api.deleteSensorLabel(sensorId);
       removeSensorLabel(sensorId);
-    } catch { /* may not exist — fine */ }
-    setEditingSensor(null);
+      setEditingSensor(null);
+    } catch {
+      alert('Failed to reset sensor label.');
+    }
+  };
+
+  const handleAddMachine = async () => {
+    const name = machineName.trim();
+    const baseUrl = machineUrl.trim();
+    if (!name || !baseUrl) return;
+    if (!isValidHttpUrl(baseUrl)) {
+      alert('Machine URL must be a valid http(s) URL.');
+      return;
+    }
+    setMachineAddBusy(true);
+    try {
+      await api.createMachine({
+        name,
+        base_url: baseUrl,
+        api_key: machineApiKey.trim() || undefined,
+      });
+      setMachineName('');
+      setMachineUrl('');
+      setMachineApiKey('');
+      await fetchMachines();
+    } catch {
+      alert('Failed to add machine. Check URL and connectivity.');
+    } finally {
+      setMachineAddBusy(false);
+    }
+  };
+
+  const handleDeleteMachine = async (machineId: string) => {
+    if (!window.confirm('Remove this machine from registry?')) return;
+    setBusyMachineIds((prev) => new Set(prev).add(machineId));
+    try {
+      await api.deleteMachine(machineId);
+      await fetchMachines();
+    } catch {
+      alert('Failed to remove machine.');
+    } finally {
+      setBusyMachineIds((prev) => {
+        const next = new Set(prev);
+        next.delete(machineId);
+        return next;
+      });
+    }
+  };
+
+  const handleVerifyMachine = async (machineId: string) => {
+    setBusyMachineIds((prev) => new Set(prev).add(machineId));
+    try {
+      await api.verifyMachine(machineId);
+      await fetchMachines();
+    } catch {
+      alert('Machine verification failed.');
+    } finally {
+      setBusyMachineIds((prev) => {
+        const next = new Set(prev);
+        next.delete(machineId);
+        return next;
+      });
+    }
+  };
+
+  const handleCreateApiKey = async () => {
+    const name = newApiKeyName.trim();
+    if (!name) return;
+    try {
+      const data = await api.createApiKey(name);
+      setIssuedApiKey(data.plaintext_key);
+      setNewApiKeyName('');
+      await fetchApiKeys();
+    } catch {
+      alert('Failed to create API key.');
+    }
+  };
+
+  const handleRevokeApiKey = async (keyId: string) => {
+    if (!window.confirm('Revoke this API key? This cannot be undone.')) return;
+    try {
+      await api.revokeApiKey(keyId);
+      await fetchApiKeys();
+    } catch {
+      alert('Failed to revoke API key.');
+    }
+  };
+
+  const handleSaveWebhook = async () => {
+    if (!webhook) return;
+    if (webhook.target_url && !isValidHttpUrl(webhook.target_url)) {
+      alert('Webhook target URL must be a valid http(s) URL.');
+      return;
+    }
+    setWebhookSaving(true);
+    try {
+      const payload = {
+        ...webhook,
+        signing_secret: webhookSecretInput || undefined,
+      };
+      const data = await api.updateWebhookConfig(payload);
+      setWebhook(data.config);
+      setWebhookSecretInput('');
+    } catch {
+      alert('Failed to save webhook settings.');
+    } finally {
+      setWebhookSaving(false);
+    }
+  };
+
+  const handleCopyIssuedKey = async () => {
+    if (!issuedApiKey) return;
+    try {
+      await navigator.clipboard.writeText(issuedApiKey);
+    } catch {
+      // no-op
+    }
   };
 
   if (!settings) {
@@ -151,7 +342,7 @@ export function SettingsPage() {
   }
 
   return (
-    <div className="space-y-6 animate-fade-in max-w-2xl">
+    <div className="space-y-6 animate-fade-in max-w-none md:max-w-2xl">
       {/* General settings */}
       <div className="card p-6 animate-card-enter">
         <h3 className="text-base font-semibold mb-4" style={{ color: 'var(--text)' }}>General</h3>
@@ -285,10 +476,10 @@ export function SettingsPage() {
               return (
                 <div
                   key={sensor.id}
-                  className="flex items-center gap-3 px-3 py-2 rounded-lg"
+                  className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 px-3 py-2 rounded-lg"
                   style={{ background: 'var(--bg)' }}
                 >
-                  <span className="text-xs font-mono flex-shrink-0 w-32 truncate" style={{ color: 'var(--text-secondary)' }}>
+                  <span className="text-xs font-mono flex-shrink-0 sm:w-32 truncate" style={{ color: 'var(--text-secondary)' }}>
                     {sensor.id}
                   </span>
                   {isEditing ? (
@@ -327,6 +518,7 @@ export function SettingsPage() {
                       <button
                         onClick={() => { setEditingSensor(sensor.id); setEditLabel(label || sensor.name); }}
                         className="p-1 rounded hover:bg-surface-200 transition-colors"
+                        aria-label={`Edit label for ${sensor.id}`}
                       >
                         <Pencil size={14} style={{ color: 'var(--text-secondary)' }} />
                       </button>
@@ -338,6 +530,243 @@ export function SettingsPage() {
           </div>
         </div>
       )}
+
+      {/* Multi-machine hub registry */}
+      <div className="card p-6 animate-card-enter">
+        <h3 className="text-base font-semibold mb-2" style={{ color: 'var(--text)' }}>Remote Machines</h3>
+        <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
+          Configure remote DriveChill agents for hub monitoring.
+        </p>
+
+        <div className="grid grid-cols-1 gap-3 mb-4">
+          <input
+            type="text"
+            value={machineName}
+            onChange={(e) => setMachineName(e.target.value)}
+            placeholder="Display name (e.g. Server-01)"
+            className="w-full px-3 py-2 rounded-lg text-sm border outline-none"
+            style={{ background: 'var(--bg)', borderColor: 'var(--border)', color: 'var(--text)' }}
+          />
+          <input
+            type="text"
+            value={machineUrl}
+            onChange={(e) => setMachineUrl(e.target.value)}
+            placeholder="Base URL (e.g. http://192.168.1.22:8085)"
+            className="w-full px-3 py-2 rounded-lg text-sm border outline-none"
+            style={{ background: 'var(--bg)', borderColor: 'var(--border)', color: 'var(--text)' }}
+          />
+          <input
+            type="password"
+            value={machineApiKey}
+            onChange={(e) => setMachineApiKey(e.target.value)}
+            placeholder="API key (optional)"
+            className="w-full px-3 py-2 rounded-lg text-sm border outline-none"
+            style={{ background: 'var(--bg)', borderColor: 'var(--border)', color: 'var(--text)' }}
+          />
+          <div className="flex justify-end">
+            <button
+              onClick={handleAddMachine}
+              disabled={machineAddBusy || !machineName.trim() || !machineUrl.trim()}
+              className="btn-primary text-sm px-4"
+            >
+              {machineAddBusy ? 'Saving...' : 'Add Machine'}
+            </button>
+          </div>
+        </div>
+
+        {machines.length === 0 ? (
+          <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+            No remote machines configured yet.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {machines.map((machine) => (
+              <div
+                key={machine.id}
+                className="flex items-center justify-between gap-3 rounded-lg px-3 py-2"
+                style={{ background: 'var(--bg)', border: '1px solid var(--border)' }}
+              >
+                <div className="min-w-0">
+                  <p className="text-sm font-medium truncate" style={{ color: 'var(--text)' }}>
+                    {machine.name}
+                  </p>
+                  <p className="text-xs truncate" style={{ color: 'var(--text-secondary)' }}>
+                    {machine.base_url}
+                  </p>
+                  <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                    Status: {machine.status}
+                    {machine.freshness_seconds != null ? ` - ${machine.freshness_seconds.toFixed(1)}s` : ''}
+                  </p>
+                </div>
+                <button
+                  onClick={() => handleVerifyMachine(machine.id)}
+                  disabled={busyMachineIds.has(machine.id)}
+                  className="btn-secondary text-xs px-3"
+                >
+                  Verify
+                </button>
+                <button
+                  onClick={() => handleDeleteMachine(machine.id)}
+                  disabled={busyMachineIds.has(machine.id)}
+                  className="btn-secondary text-xs px-3"
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* API keys */}
+      <div className="card p-6 animate-card-enter">
+        <h3 className="text-base font-semibold mb-2" style={{ color: 'var(--text)' }}>API Keys</h3>
+        <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
+          Generate keys for hub-to-agent machine authentication. New keys default to
+          read-only sensor scope (`read:sensors`).
+        </p>
+        <div className="flex flex-col sm:flex-row gap-2 mb-3">
+          <input
+            type="text"
+            value={newApiKeyName}
+            onChange={(e) => setNewApiKeyName(e.target.value)}
+            placeholder="Key name (e.g. Hub Main)"
+            className="flex-1 px-3 py-2 rounded-lg text-sm border outline-none"
+            style={{ background: 'var(--bg)', borderColor: 'var(--border)', color: 'var(--text)' }}
+          />
+          <button onClick={handleCreateApiKey} className="btn-primary text-sm px-4">
+            Create Key
+          </button>
+        </div>
+        {issuedApiKey && (
+          <div className="mb-3 p-2 rounded text-xs font-mono" style={{ background: 'var(--accent-muted)', color: 'var(--accent)' }}>
+            Copy now (shown once): {issuedApiKey}
+            <div className="mt-2 flex gap-2">
+              <button onClick={handleCopyIssuedKey} className="btn-secondary text-xs px-2 py-1">Copy</button>
+              <button onClick={() => setIssuedApiKey(null)} className="btn-secondary text-xs px-2 py-1">Dismiss</button>
+            </div>
+          </div>
+        )}
+        <div className="space-y-2">
+          {apiKeys.length === 0 ? (
+            <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>No API keys yet.</p>
+          ) : apiKeys.map((k) => (
+            <div key={k.id} className="flex items-center justify-between rounded-lg px-3 py-2" style={{ background: 'var(--bg)', border: '1px solid var(--border)' }}>
+              <div className="min-w-0">
+                <p className="text-sm truncate" style={{ color: 'var(--text)' }}>{k.name}</p>
+                <p className="text-xs truncate" style={{ color: 'var(--text-secondary)' }}>{k.key_prefix}...</p>
+              </div>
+              <button onClick={() => handleRevokeApiKey(k.id)} className="btn-secondary text-xs px-3">
+                Revoke
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Webhooks */}
+      <div className="card p-6 animate-card-enter">
+        <h3 className="text-base font-semibold mb-2" style={{ color: 'var(--text)' }}>Webhooks</h3>
+        <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
+          Send alert events to external systems (Slack/Discord/Home Assistant relay).
+        </p>
+        {webhook && (
+          <div className="space-y-3">
+            <label className="flex items-center gap-2 text-sm" style={{ color: 'var(--text)' }}>
+              <input
+                type="checkbox"
+                checked={webhook.enabled}
+                onChange={(e) => setWebhook({ ...webhook, enabled: e.target.checked })}
+              />
+              Enabled
+            </label>
+            <input
+              type="text"
+              value={webhook.target_url}
+              onChange={(e) => setWebhook({ ...webhook, target_url: e.target.value })}
+              placeholder="Target URL (https://...)"
+              className="w-full px-3 py-2 rounded-lg text-sm border outline-none"
+              style={{ background: 'var(--bg)', borderColor: 'var(--border)', color: 'var(--text)' }}
+            />
+            <input
+              type="password"
+              value={webhookSecretInput}
+              onChange={(e) => setWebhookSecretInput(e.target.value)}
+              placeholder="Signing secret (optional)"
+              className="w-full px-3 py-2 rounded-lg text-sm border outline-none"
+              style={{ background: 'var(--bg)', borderColor: 'var(--border)', color: 'var(--text)' }}
+            />
+            <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+              {webhook.has_signing_secret ? 'A signing secret is already set.' : 'No signing secret set yet.'}
+            </p>
+            <button onClick={handleSaveWebhook} disabled={webhookSaving} className="btn-primary text-sm px-4">
+              {webhookSaving ? 'Saving...' : 'Save Webhook'}
+            </button>
+
+            <div className="pt-2">
+              <div className="mb-2 flex items-center justify-between">
+                <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>Recent delivery attempts</p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => fetchWebhookDeliveries(Math.max(0, webhookDeliveriesOffset - webhookPageSize))}
+                    disabled={webhookDeliveriesLoading || webhookDeliveriesOffset === 0}
+                    className="btn-secondary text-xs px-2 py-1"
+                  >
+                    Previous
+                  </button>
+                  <button
+                    onClick={() => fetchWebhookDeliveries(webhookDeliveriesOffset + webhookPageSize)}
+                    disabled={webhookDeliveriesLoading || webhookDeliveries.length < webhookPageSize}
+                    className="btn-secondary text-xs px-2 py-1"
+                  >
+                    Next
+                  </button>
+                  <button
+                    onClick={() => fetchWebhookDeliveries(webhookDeliveriesOffset)}
+                    disabled={webhookDeliveriesLoading}
+                    className="btn-secondary text-xs px-2 py-1"
+                  >
+                    Refresh
+                  </button>
+                </div>
+              </div>
+              {webhookDeliveries.length === 0 ? (
+                <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                  {webhookDeliveriesLoading ? 'Loading...' : 'No deliveries recorded yet.'}
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {webhookDeliveries.map((d, idx) => (
+                    <div
+                      key={`${d.timestamp}-${idx}`}
+                      className="rounded-lg px-3 py-2 text-xs"
+                      style={{ background: 'var(--bg)', border: '1px solid var(--border)' }}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span style={{ color: 'var(--text)' }}>{d.event_type}</span>
+                        <span style={{ color: d.success ? 'var(--success)' : 'var(--danger)' }}>
+                          {d.success ? 'success' : 'failed'}
+                        </span>
+                      </div>
+                      <p className="truncate" style={{ color: 'var(--text-secondary)' }}>
+                        {d.target_url}
+                      </p>
+                      <p style={{ color: 'var(--text-secondary)' }}>
+                        Attempt {d.attempt} | HTTP {d.http_status ?? '-'} | {d.latency_ms ?? '-'} ms
+                      </p>
+                      {d.error && (
+                        <p className="truncate" style={{ color: 'var(--danger)' }}>
+                          {d.error}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Data export */}
       <div className="card p-6 animate-card-enter">

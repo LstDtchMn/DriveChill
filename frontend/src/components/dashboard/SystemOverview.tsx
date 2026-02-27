@@ -1,11 +1,15 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import { Cpu, Monitor, HardDrive, Thermometer } from 'lucide-react';
 import { TempGauge } from './TempGauge';
 import { FanSpeedCard } from './FanSpeedCard';
 import { TempChart } from './TempChart';
 import { useSensors } from '@/hooks/useSensors';
 import { useSettingsStore } from '@/stores/settingsStore';
+import { api } from '@/lib/api';
+import { formatTemp } from '@/lib/tempUnit';
+import type { MachineInfo } from '@/lib/types';
 
 export function SystemOverview() {
   const {
@@ -15,6 +19,34 @@ export function SystemOverview() {
     cpuTemps, gpuTemps, hddTemps, caseTemps,
   } = useSensors();
   const sensorLabels = useSettingsStore((s) => s.sensorLabels);
+  const tempUnit = useSettingsStore((s) => s.tempUnit);
+  const [machines, setMachines] = useState<MachineInfo[]>([]);
+
+  useEffect(() => {
+    let mounted = true;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const fetchMachines = async () => {
+      try {
+        const data = await api.getMachines();
+        if (mounted) {
+          setMachines(data.machines);
+          const nextDelay = data.machines.length > 0 ? 2000 : 30000;
+          timer = setTimeout(fetchMachines, nextDelay);
+        }
+      } catch {
+        // non-critical: machine monitoring may be unused
+        if (mounted) {
+          timer = setTimeout(fetchMachines, 30000);
+        }
+      }
+    };
+
+    fetchMachines();
+    return () => {
+      mounted = false;
+      if (timer) clearTimeout(timer);
+    };
+  }, []);
 
   // Use custom labels for gauge labels when available
   const cpuLabel = (cpuTemps[0] && sensorLabels[cpuTemps[0].id]) || 'CPU';
@@ -22,8 +54,68 @@ export function SystemOverview() {
   const hddLabel = (hddTemps[0] && sensorLabels[hddTemps[0].id]) || 'Storage';
   const caseLabel = (caseTemps[0] && sensorLabels[caseTemps[0].id]) || 'Case';
 
+  const statusBadgeClass: Record<string, string> = {
+    online: 'badge-success',
+    degraded: 'badge-warning',
+    offline: 'badge-danger',
+    auth_error: 'badge-danger',
+    version_mismatch: 'badge-warning',
+    unknown: 'badge-warning',
+  };
+
   return (
     <div className="space-y-6 animate-fade-in">
+      {machines.length > 0 && (
+        <div>
+          <h3 className="section-title mb-3 px-1">Machines</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            {machines.map((machine) => {
+              const summary = machine.snapshot?.summary;
+              return (
+                <div key={machine.id} className="card p-4 animate-card-enter">
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <p className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
+                      {machine.name}
+                    </p>
+                    <span className={`badge ${statusBadgeClass[machine.status] || 'badge-warning'}`}>
+                      {machine.status}
+                    </span>
+                  </div>
+                  <p className="text-xs mb-3 truncate" style={{ color: 'var(--text-secondary)' }}>
+                    {machine.base_url}
+                  </p>
+                  <div className="grid grid-cols-3 gap-2 text-xs">
+                    <div>
+                      <p style={{ color: 'var(--text-secondary)' }}>CPU</p>
+                      <p style={{ color: 'var(--text)' }}>
+                        {summary?.cpu_temp != null ? formatTemp(summary.cpu_temp, tempUnit) : '--'}
+                      </p>
+                    </div>
+                    <div>
+                      <p style={{ color: 'var(--text-secondary)' }}>GPU</p>
+                      <p style={{ color: 'var(--text)' }}>
+                        {summary?.gpu_temp != null ? formatTemp(summary.gpu_temp, tempUnit) : '--'}
+                      </p>
+                    </div>
+                    <div>
+                      <p style={{ color: 'var(--text-secondary)' }}>Fresh</p>
+                      <p style={{ color: 'var(--text)' }}>
+                        {machine.freshness_seconds != null ? `${machine.freshness_seconds.toFixed(1)}s` : '--'}
+                      </p>
+                    </div>
+                  </div>
+                  {machine.last_error && (
+                    <p className="text-xs mt-2 truncate" style={{ color: 'var(--danger)' }}>
+                      {machine.last_error}
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Temperature Gauges */}
       <div>
         <h3 className="section-title mb-3 px-1">Temperatures</h3>

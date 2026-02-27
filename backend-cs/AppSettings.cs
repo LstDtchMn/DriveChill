@@ -17,4 +17,11 @@ public sealed class AppSettings
             "DriveChill");
 
     public string DbPath => Path.Combine(DataDir, "drivechill.db");
+
+    public bool AllowPrivateOutboundTargets =>
+        string.Equals(
+            Environment.GetEnvironmentVariable("DRIVECHILL_ALLOW_PRIVATE_OUTBOUND_TARGETS"),
+            "true",
+            StringComparison.OrdinalIgnoreCase
+        );
 }

@@ -2,7 +2,7 @@
 
 **Version:** 1.0
 **Date:** 2026-02-25
-**Status:** Draft â€” approved scope, release gates defined, pending final review
+**Status:** In Progress â€” approved scope, v1.5 implementation underway, prerequisites complete
 
 ---
 
@@ -363,15 +363,15 @@ Each milestone has explicit go/no-go criteria. All tests must pass before the mi
 
 | ID | Prerequisite | Done When |
 |---|---|---|
-| pre-1.5-A | Multi-machine architecture design doc written and approved | `docs/plans/YYYY-MM-DD-multi-machine-design.md` exists, reviewed, and status is "Approved" |
+| pre-1.5-A | Multi-machine architecture design doc written and approved | [Done 2026-02-26] `docs/plans/2026-02-26-multi-machine-design.md` exists and status is "Approved" |
 | pre-1.5-B | Auth security baseline from v1.0 is shipped and passing | v1.0 release gates v1.0-8 and auth unit tests all green |
-| pre-1.5-C | API compatibility matrix initialized | `docs/api-compatibility.md` exists with v1.0 client entries |
+| pre-1.5-C | API compatibility matrix initialized | [Done 2026-02-26] `docs/api-compatibility.md` exists with v1.0 client entries |
 
 ### v1.5 Release Gates
 
 | ID | Test | Procedure | Pass Criteria |
 |---|---|---|---|
-| v1.5-1 | Mobile layout | Open dashboard in Chrome DevTools at 375x667 (iPhone SE). Navigate all pages. | All pages render without horizontal scroll. All controls are tappable (min 44x44px touch targets). Curve editor responds to touch drag. |
+| v1.5-1 | Mobile layout | Open dashboard in Chrome DevTools at 375x667 (iPhone SE). Navigate all pages. | [Done 2026-02-26] Automated mobile gate passed: no horizontal scroll, all controls >=44x44, curve editor touch drag verified. |
 | v1.5-2 | Multi-machine data flow | Run 3 DriveChill agents (mock backend) on different ports. Configure hub to monitor all 3. | Hub displays all 3 machines with <3s data freshness. If one agent stops, hub shows "offline" within 10 seconds. Other machines unaffected. |
 | v1.5-3 | Authentication | Enable auth via config. Attempt unauthenticated API call. | Returns 401. After login, session persists across page reloads. API key auth works for agent-to-hub. |
 | v1.5-4 | Webhook latency | Configure webhook to POST to a local HTTP listener. Trigger temperature alert. | Webhook fires within 3 seconds of threshold crossing. Payload contains sensor_id, value, threshold, timestamp. |

@@ -1,0 +1,167 @@
+using System.Diagnostics;
+using System.Net.Http.Headers;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using DriveChill.Models;
+using DriveChill.Utils;
+
+namespace DriveChill.Services;
+
+public sealed class WebhookService
+{
+    private readonly SettingsStore _store;
+    private readonly IHttpClientFactory _httpClientFactory;
+    private readonly AppSettings _appSettings;
+    private readonly object _lock = new();
+
+    public WebhookService(SettingsStore store, IHttpClientFactory httpClientFactory, AppSettings appSettings)
+    {
+        _store = store;
+        _httpClientFactory = httpClientFactory;
+        _appSettings = appSettings;
+    }
+
+    public WebhookConfig GetConfigRaw()
+    {
+        lock (_lock) return _store.GetAll().Webhook;
+    }
+
+    public WebhookConfigView GetConfig()
+    {
+        lock (_lock) return WebhookConfigView.FromConfig(_store.GetAll().Webhook);
+    }
+
+    public WebhookConfig UpdateConfig(WebhookConfig cfg)
+    {
+        cfg.TargetUrl = cfg.TargetUrl?.Trim() ?? "";
+        if (!string.IsNullOrWhiteSpace(cfg.TargetUrl) &&
+            !UrlSecurity.TryValidateOutboundHttpUrl(
+                cfg.TargetUrl,
+                _appSettings.AllowPrivateOutboundTargets,
+                out var reason))
+        {
+            throw new ArgumentException(reason ?? "target_url is not allowed");
+        }
+
+        cfg.UpdatedAt = DateTimeOffset.UtcNow.ToString("o");
+        cfg.TimeoutSeconds = Math.Clamp(cfg.TimeoutSeconds, 0.5, 30.0);
+        cfg.MaxRetries = Math.Clamp(cfg.MaxRetries, 0, 10);
+        cfg.RetryBackoffSeconds = Math.Clamp(cfg.RetryBackoffSeconds, 0.1, 30.0);
+
+        lock (_lock)
+        {
+            var data = _store.GetAll();
+            data.Webhook = cfg;
+            _store.SetAll(data);
+            return data.Webhook;
+        }
+    }
+
+    public IReadOnlyList<WebhookDelivery> GetDeliveries(int limit = 100)
+    {
+        var safeLimit = Math.Clamp(limit, 1, 500);
+        lock (_lock)
+        {
+            return _store.GetAll().WebhookDeliveries
+                .OrderByDescending(d => d.Timestamp)
+                .Take(safeLimit)
+                .ToList();
+        }
+    }
+
+    public async Task DispatchAlertEventsAsync(IEnumerable<AlertEvent> events, CancellationToken ct = default)
+    {
+        var eventList = events.ToList();
+        if (eventList.Count == 0) return;
+
+        var cfg = GetConfigRaw();
+        if (!cfg.Enabled || string.IsNullOrWhiteSpace(cfg.TargetUrl)) return;
+
+        var payload = new
+        {
+            event_type = "alert_triggered",
+            timestamp = DateTimeOffset.UtcNow.ToString("o"),
+            events = eventList.Select(e => new
+            {
+                rule_id = e.RuleId,
+                sensor_id = e.SensorId,
+                sensor_name = e.SensorName,
+                threshold = e.Threshold,
+                actual_value = e.ActualValue,
+                timestamp = e.FiredAt,
+                message = e.Message,
+            }).ToList(),
+        };
+
+        var json = JsonSerializer.Serialize(payload);
+        var body = Encoding.UTF8.GetBytes(json);
+
+        string? signature = null;
+        if (!string.IsNullOrWhiteSpace(cfg.SigningSecret))
+        {
+            signature = "sha256=" + Convert.ToHexString(
+                HMACSHA256.HashData(Encoding.UTF8.GetBytes(cfg.SigningSecret), body)
+            ).ToLowerInvariant();
+        }
+
+        var client = _httpClientFactory.CreateClient("webhooks");
+        client.Timeout = TimeSpan.FromSeconds(cfg.TimeoutSeconds);
+
+        for (var attempt = 1; attempt <= cfg.MaxRetries + 1; attempt++)
+        {
+            var sw = Stopwatch.StartNew();
+            int? statusCode = null;
+            string? error = null;
+            var success = false;
+
+            try
+            {
+                using var req = new HttpRequestMessage(HttpMethod.Post, cfg.TargetUrl);
+                req.Content = new ByteArrayContent(body);
+                req.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+                if (!string.IsNullOrWhiteSpace(signature))
+                    req.Headers.Add("X-DriveChill-Signature", signature);
+                using var resp = await client.SendAsync(req, ct);
+                statusCode = (int)resp.StatusCode;
+                success = resp.IsSuccessStatusCode;
+                if (!success) error = $"HTTP {(int)resp.StatusCode}";
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+            }
+
+            sw.Stop();
+            AddDelivery(new WebhookDelivery
+            {
+                Timestamp = DateTimeOffset.UtcNow.ToString("o"),
+                EventType = "alert_triggered",
+                TargetUrl = UrlSecurity.RedactUrlForLog(cfg.TargetUrl),
+                Attempt = attempt,
+                Success = success,
+                HttpStatus = statusCode,
+                LatencyMs = (int)sw.ElapsedMilliseconds,
+                Error = error,
+            });
+
+            if (success) return;
+            if (attempt <= cfg.MaxRetries)
+                await Task.Delay(
+                    TimeSpan.FromSeconds(Math.Min(cfg.RetryBackoffSeconds * Math.Pow(2, attempt - 1), 60.0)),
+                    ct
+                );
+        }
+    }
+
+    private void AddDelivery(WebhookDelivery delivery)
+    {
+        lock (_lock)
+        {
+            var data = _store.GetAll();
+            data.WebhookDeliveries.Add(delivery);
+            while (data.WebhookDeliveries.Count > 1000) data.WebhookDeliveries.RemoveAt(0);
+            _store.SetAll(data);
+        }
+    }
+}

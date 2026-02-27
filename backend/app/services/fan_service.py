@@ -12,6 +12,7 @@ from app.models.sensors import SensorReading, SensorType
 if TYPE_CHECKING:
     from app.services.sensor_service import SensorService
     from app.services.alert_service import AlertService
+    from app.services.webhook_service import WebhookService
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,7 @@ class FanService:
         # Set by start() so the control loop can read sensor data
         self._sensor_service: SensorService | None = None
         self._alert_service: AlertService | None = None
+        self._webhook_service: WebhookService | None = None
         self._queue: asyncio.Queue | None = None
 
         # Safe-mode state
@@ -211,10 +213,11 @@ class FanService:
     # Independent control loop
     # ------------------------------------------------------------------
 
-    async def start(self, sensor_service, alert_service=None) -> None:
+    async def start(self, sensor_service, alert_service=None, webhook_service=None) -> None:
         """Start the fan control loop, subscribing to sensor updates."""
         self._sensor_service = sensor_service
         self._alert_service = alert_service
+        self._webhook_service = webhook_service
         self._queue = sensor_service.subscribe()
         self._task = asyncio.create_task(self._control_loop())
 
@@ -289,7 +292,13 @@ class FanService:
 
                 # Check alerts in the same loop.
                 if self._alert_service:
-                    self._alert_service.check(snapshot.readings)
+                    new_events = self._alert_service.check(snapshot.readings)
+                    if new_events and self._webhook_service:
+                        # Non-blocking dispatch keeps fan loop responsive.
+                        payload = [e.model_dump(mode="json") for e in new_events]
+                        asyncio.create_task(
+                            self._webhook_service.dispatch_alert_events(payload)
+                        )
 
             except asyncio.CancelledError:
                 raise

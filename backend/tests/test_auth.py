@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 import aiosqlite
 import pytest
 
+from app.db.migration_runner import run_migrations
 from app.services.auth_service import (
     AuthService,
     _MAX_FAILED_ATTEMPTS,
@@ -24,40 +25,10 @@ from app.services.auth_service import (
 # ---------------------------------------------------------------------------
 
 async def _init_db(db_path) -> aiosqlite.Connection:
-    """Open DB, create required tables (auth_log, users, sessions)."""
+    """Open DB with full production migrations applied."""
+    await run_migrations(db_path)
     db = await aiosqlite.connect(str(db_path))
     await db.execute("PRAGMA foreign_keys=ON")
-    await db.executescript("""
-        CREATE TABLE IF NOT EXISTS auth_log (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp   TEXT NOT NULL DEFAULT (datetime('now')),
-            event_type  TEXT NOT NULL,
-            ip_address  TEXT,
-            username    TEXT,
-            outcome     TEXT NOT NULL,
-            detail      TEXT
-        );
-        CREATE TABLE IF NOT EXISTS users (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            username        TEXT NOT NULL UNIQUE,
-            password_hash   TEXT NOT NULL,
-            locked_until    TEXT,
-            failed_attempts INTEGER NOT NULL DEFAULT 0,
-            created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
-        );
-        CREATE TABLE IF NOT EXISTS sessions (
-            token       TEXT PRIMARY KEY,
-            user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            csrf_token  TEXT NOT NULL,
-            created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-            last_active TEXT NOT NULL DEFAULT (datetime('now')),
-            expires_at  TEXT NOT NULL,
-            ip_address  TEXT,
-            user_agent  TEXT
-        );
-    """)
-    await db.commit()
     return db
 
 

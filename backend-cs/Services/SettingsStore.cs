@@ -130,4 +130,7 @@ public sealed class StoredData
     public List<FanCurve>  Curves   { get; set; } = [];
     public List<AlertRule> Alerts   { get; set; } = [];
     public List<Profile>   Profiles { get; set; } = [];
+    public List<ApiKeyRecord> ApiKeys { get; set; } = [];
+    public WebhookConfig Webhook { get; set; } = new();
+    public List<WebhookDelivery> WebhookDeliveries { get; set; } = [];
 }

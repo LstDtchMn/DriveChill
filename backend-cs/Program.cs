@@ -108,8 +108,16 @@ internal static class Program
         builder.Services.AddSingleton<AlertService>();
         builder.Services.AddSingleton<DbService>();
         builder.Services.AddSingleton<SettingsStore>();
+        builder.Services.AddSingleton<ApiKeyService>();
+        builder.Services.AddSingleton<WebhookService>();
         builder.Services.AddSingleton<FanTestService>();
         builder.Services.AddSingleton<WebSocketHub>();
+        builder.Services
+            .AddHttpClient("webhooks")
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+            {
+                AllowAutoRedirect = false,
+            });
 
         // Background worker: polls hardware, broadcasts WebSocket messages
         builder.Services.AddHostedService<SensorWorker>();

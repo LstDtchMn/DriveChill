@@ -77,8 +77,9 @@ public sealed class AlertService
     // Evaluation — called by SensorWorker on every tick
     // -----------------------------------------------------------------------
 
-    public void Evaluate(IReadOnlyList<SensorReading> readings)
+    public IReadOnlyList<AlertEvent> Evaluate(IReadOnlyList<SensorReading> readings)
     {
+        var fired = new List<AlertEvent>();
         lock (_lock)
         {
             foreach (var rule in _rules)
@@ -107,6 +108,7 @@ public sealed class AlertService
                         Message     = rule.Message,
                     };
                     _events.Add(ev);
+                    fired.Add(ev);
                     _active.Add(rule.RuleId);
 
                     // Trim history to 500 events
@@ -121,5 +123,6 @@ public sealed class AlertService
                 }
             }
         }
+        return fired;
     }
 }

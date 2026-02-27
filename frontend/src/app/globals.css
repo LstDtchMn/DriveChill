@@ -69,6 +69,7 @@ body {
   font-family: 'Inter', system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
 }
 
 /* Scrollbar styling */
@@ -178,5 +179,22 @@ body {
   to {
     opacity: 1;
     transform: translateY(0) scale(1);
+  }
+}
+
+@media (max-width: 767px) {
+  button,
+  select,
+  input[type='range'],
+  input[type='text'],
+  input[type='number'],
+  input[type='password'],
+  input[type='email'] {
+    min-height: 44px;
+  }
+
+  .btn-primary,
+  .btn-secondary {
+    min-height: 44px;
   }
 }

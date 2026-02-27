@@ -33,6 +33,7 @@ export function FanCurvesPage() {
   const [curves, setCurves] = useState<FanCurve[]>([]);
   const [selectedCurve, setSelectedCurve] = useState<string | null>(null);
   const [editingPoints, setEditingPoints] = useState<FanCurvePoint[]>(DEFAULT_POINTS);
+  const [editorSize, setEditorSize] = useState({ width: 500, height: 300 });
 
   const allTempSensors = [...cpuTemps, ...gpuTemps, ...hddTemps, ...caseTemps];
   const allFans = fanRpms.map((f) => f.id.replace('_rpm', ''));
@@ -79,6 +80,21 @@ export function FanCurvesPage() {
       }
     };
     fetchCurves();
+  }, []);
+
+  useEffect(() => {
+    const updateEditorSize = () => {
+      const isMobile = window.innerWidth < 768;
+      const width = isMobile
+        ? Math.max(260, Math.min(500, window.innerWidth - 72))
+        : 500;
+      const height = isMobile ? 240 : 300;
+      setEditorSize({ width, height });
+    };
+
+    updateEditorSize();
+    window.addEventListener('resize', updateEditorSize);
+    return () => window.removeEventListener('resize', updateEditorSize);
   }, []);
 
   const handleSelectCurve = (id: string) => {
@@ -157,9 +173,9 @@ export function FanCurvesPage() {
       <PresetSelector />
 
       <div className="border-t pt-6" style={{ borderColor: 'var(--border)' }}>
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center justify-between gap-2 mb-4 flex-wrap">
           <h3 className="section-title">Custom Curves</h3>
-          <button onClick={handleNewCurve} className="btn-primary flex items-center gap-2 text-sm">
+          <button onClick={handleNewCurve} className="btn-primary min-h-11 flex items-center gap-2 text-sm">
             <Plus size={14} />
             New Curve
           </button>
@@ -202,8 +218,8 @@ export function FanCurvesPage() {
               <CurveEditor
                 points={editingPoints}
                 onChange={setEditingPoints}
-                width={500}
-                height={300}
+                width={editorSize.width}
+                height={editorSize.height}
                 currentTemp={operatingPoint.temp}
                 currentSpeed={operatingPoint.speed}
               />
@@ -222,7 +238,7 @@ export function FanCurvesPage() {
                         <button
                           key={sensor.id}
                           onClick={() => handleToggleSensor(sensor.id)}
-                          className={`text-xs px-2 py-1 rounded transition-all ${
+                          className={`text-xs min-h-11 px-2 py-1 rounded transition-all ${
                             ids.includes(sensor.id)
                               ? 'ring-1'
                               : ''
@@ -253,7 +269,7 @@ export function FanCurvesPage() {
                 </div>
                 <button
                   onClick={handleSaveCurve}
-                  className="btn-primary flex items-center gap-2 text-sm"
+                  className="btn-primary min-h-11 flex items-center gap-2 text-sm"
                 >
                   <Save size={14} />
                   Save Curve
@@ -266,7 +282,7 @@ export function FanCurvesPage() {
             <p className="text-sm mb-3" style={{ color: 'var(--text-secondary)' }}>
               No custom curves yet. Create one or activate a preset above.
             </p>
-            <button onClick={handleNewCurve} className="btn-primary text-sm">
+            <button onClick={handleNewCurve} className="btn-primary min-h-11 text-sm">
               Create Your First Curve
             </button>
           </div>

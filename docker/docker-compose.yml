@@ -14,8 +14,13 @@ services:
       - DRIVECHILL_HARDWARE_BACKEND=auto
       - DRIVECHILL_SENSOR_POLL_INTERVAL=1.0
       - DRIVECHILL_HISTORY_RETENTION_HOURS=168
-    # Required for hardware sensor access on Linux
-    privileged: true
+    # Preferred locked-down profile. Add explicit device mappings only when needed.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8085/api/health', timeout=3).read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     restart: unless-stopped
 
 volumes:

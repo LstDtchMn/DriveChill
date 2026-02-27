@@ -1,6 +1,7 @@
 import atexit
 import asyncio
 import logging
+import re
 import signal
 import sys
 from contextlib import asynccontextmanager
@@ -8,6 +9,7 @@ from pathlib import Path
 
 import aiosqlite
 from fastapi import APIRouter, Depends, FastAPI
+from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -16,21 +18,30 @@ from app.db.migration_runner import run_migrations
 from app.db.repositories.profile_repo import ProfileRepo
 from app.db.repositories.settings_repo import SettingsRepo
 from app.db.repositories.fan_settings_repo import FanSettingsRepo
+from app.db.repositories.machine_repo import MachineRepo
 from app.hardware import get_backend
 from app.services.sensor_service import SensorService
 from app.services.fan_service import FanService
 from app.services.fan_test_service import FanTestService
 from app.services.alert_service import AlertService
 from app.services.auth_service import AuthService
+from app.services.machine_monitor_service import MachineMonitorService
 from app.services.logging_service import LoggingService
 from app.services.quiet_hours_service import QuietHoursService
+from app.services.webhook_service import WebhookService
 from app.api.dependencies.auth import require_auth
-from app.api.routes import sensors, fans, profiles, alerts, settings as settings_route
+from app.api.routes import sensors, fans, profiles, alerts, settings as settings_route, machines, webhooks
 from app.api.routes.auth import router as auth_router
 from app.api.routes.quiet_hours import router as quiet_hours_router
 from app.api.websocket import router as ws_router
 
 logger = logging.getLogger(__name__)
+_PROM_LABEL_SAFE_RE = re.compile(r"[^a-zA-Z0-9_.-]")
+
+
+def _sanitize_metric_label(value: object) -> str:
+    """Sanitize a dynamic label value for Prometheus text exposition."""
+    return _PROM_LABEL_SAFE_RE.sub("_", str(value))
 
 
 @asynccontextmanager
@@ -55,9 +66,11 @@ async def lifespan(app: FastAPI):
     await profile_repo.seed_missing_presets()
     await settings_repo.seed_defaults()
     fan_settings_repo = FanSettingsRepo(db)
+    machine_repo = MachineRepo(db)
     app.state.profile_repo = profile_repo
     app.state.settings_repo = settings_repo
     app.state.fan_settings_repo = fan_settings_repo
+    app.state.machine_repo = machine_repo
 
     # ------------------------------------------------------------------
     # Hardware backend
@@ -91,6 +104,9 @@ async def lifespan(app: FastAPI):
     alert_service = AlertService(db)
     await alert_service.load_rules()
     app.state.alert_service = alert_service
+    webhook_service = WebhookService(db)
+    await webhook_service.start()
+    app.state.webhook_service = webhook_service
 
     # ------------------------------------------------------------------
     # Auth service
@@ -130,7 +146,7 @@ async def lifespan(app: FastAPI):
     # Start the independent fan control loop BEFORE profile restore so that
     # fan_service._sensor_service is set when apply_profile() runs.
     # M-3: apply_profile() is the single canonical implementation.
-    await fan_service.start(sensor_service, alert_service)
+    await fan_service.start(sensor_service, alert_service, webhook_service)
 
     # ------------------------------------------------------------------
     # Restore active profile on startup
@@ -145,6 +161,8 @@ async def lifespan(app: FastAPI):
     # ------------------------------------------------------------------
     quiet_hours_service = QuietHoursService(db)
     app.state.quiet_hours_service = quiet_hours_service
+    machine_monitor_service = MachineMonitorService(machine_repo)
+    app.state.machine_monitor_service = machine_monitor_service
 
     async def _activate_profile_by_id(profile_id: str) -> None:
         """Callback for quiet hours to activate a profile.
@@ -160,6 +178,7 @@ async def lifespan(app: FastAPI):
 
     quiet_hours_service.set_activate_fn(_activate_profile_by_id)
     await quiet_hours_service.start()
+    await machine_monitor_service.start()
 
     # ------------------------------------------------------------------
     # Background task: log sensor data every 10 seconds
@@ -194,11 +213,14 @@ async def lifespan(app: FastAPI):
             try:
                 expired = await auth_service.cleanup_expired_sessions()
                 old_logs = await auth_service.cleanup_old_auth_logs()
+                pruned_webhooks = await webhook_service.prune_delivery_log()
                 if expired or old_logs:
                     logger.info(
                         "Auth cleanup: %d expired sessions, %d old auth logs",
                         expired, old_logs,
                     )
+                if pruned_webhooks:
+                    logger.info("Webhook cleanup: pruned %d old delivery rows", pruned_webhooks)
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -305,8 +327,10 @@ async def lifespan(app: FastAPI):
     await fan_service.stop()
     await fan_test_service.shutdown()
     await quiet_hours_service.stop()
+    await machine_monitor_service.stop()
     await sensor_service.stop()
     await logging_service.shutdown()
+    await webhook_service.stop()
     await backend.shutdown()
     await db.close()
 
@@ -337,6 +361,8 @@ app.include_router(fans.router, dependencies=_auth_deps)
 app.include_router(profiles.router, dependencies=_auth_deps)
 app.include_router(alerts.router, dependencies=_auth_deps)
 app.include_router(settings_route.router, dependencies=_auth_deps)
+app.include_router(machines.router, dependencies=_auth_deps)
+app.include_router(webhooks.router, dependencies=_auth_deps)
 app.include_router(quiet_hours_router, dependencies=_auth_deps)
 # WebSocket auth is handled inside the endpoint (require_ws_auth) because
 # router-level Depends(require_auth) injects Request, which fails for WS.
@@ -352,9 +378,38 @@ async def health():
     return {
         "status": "ok",
         "app": settings.app_name,
+        "api_version": "v1",
+        "capabilities": [
+            "api_keys",
+            "webhooks",
+            "machine_registry",
+            "composite_curves",
+            "fan_settings",
+        ],
         "version": settings.app_version,
         "backend": app.state.backend.get_backend_name() if hasattr(app.state, "backend") else "unknown",
     }
+
+
+@_health_router.get("/metrics", response_class=PlainTextResponse)
+async def metrics():
+    """Prometheus text exposition for core temperatures and fan RPM."""
+    readings = []
+    if hasattr(app.state, "sensor_service"):
+        readings = app.state.sensor_service.latest
+    lines = [
+        "# HELP drivechill_temperature_c Temperature reading in Celsius",
+        "# TYPE drivechill_temperature_c gauge",
+        "# HELP drivechill_fan_rpm Fan speed in RPM",
+        "# TYPE drivechill_fan_rpm gauge",
+    ]
+    for r in readings:
+        sid = _sanitize_metric_label(r.id)
+        if r.sensor_type.value in {"cpu_temp", "gpu_temp", "hdd_temp", "case_temp"}:
+            lines.append(f'drivechill_temperature_c{{sensor_id="{sid}",sensor_type="{r.sensor_type.value}"}} {float(r.value):.3f}')
+        elif r.sensor_type.value == "fan_rpm":
+            lines.append(f'drivechill_fan_rpm{{sensor_id="{sid}"}} {float(r.value):.3f}')
+    return "\n".join(lines) + "\n"
 
 
 app.include_router(_health_router)

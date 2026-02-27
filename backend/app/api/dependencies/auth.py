@@ -2,11 +2,25 @@
 
 from __future__ import annotations
 
+import hmac
 from http.cookies import SimpleCookie
 
 from fastapi import Cookie, Header, HTTPException, Request, WebSocket
 
 from app.config import settings
+
+_READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+_API_KEY_SCOPE_PREFIX_RULES: tuple[tuple[str, str], ...] = (
+    ("/api/auth/api-keys", "auth"),
+    ("/api/alerts", "alerts"),
+    ("/api/fans", "fans"),
+    ("/api/machines", "machines"),
+    ("/api/profiles", "profiles"),
+    ("/api/quiet-hours", "quiet_hours"),
+    ("/api/sensors", "sensors"),
+    ("/api/settings", "settings"),
+    ("/api/webhooks", "webhooks"),
+)
 
 
 def _auth_enabled() -> bool:
@@ -17,7 +31,45 @@ def _auth_enabled() -> bool:
 def _is_internal_request(request: Request) -> bool:
     """Check if request carries the per-process internal token (tray -> backend)."""
     token = request.headers.get("x-drivechill-internal")
-    return bool(token and token == settings.internal_token)
+    return bool(token and hmac.compare_digest(token, settings.internal_token))
+
+
+def _extract_api_key(request: Request) -> str | None:
+    """Extract API key from Authorization Bearer or X-API-Key."""
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        token = auth_header[7:].strip()
+        if token:
+            return token
+    x_api_key = request.headers.get("x-api-key", "").strip()
+    return x_api_key or None
+
+
+def _required_api_key_scope(request: Request) -> str | None:
+    """Map an API request to a required scope string."""
+    path = request.url.path.rstrip("/") or "/"
+    method = request.method.upper()
+    for prefix, domain in _API_KEY_SCOPE_PREFIX_RULES:
+        if path == prefix or path.startswith(f"{prefix}/"):
+            action = "read" if method in _READ_METHODS else "write"
+            return f"{action}:{domain}"
+    return None
+
+
+def _api_key_has_scope(scopes: list[str], required: str) -> bool:
+    scope_set = {str(s).strip().lower() for s in scopes}
+    if "*" in scope_set:
+        return True
+
+    action, _, domain = required.partition(":")
+    if not action or not domain:
+        return False
+
+    if required in scope_set or f"{action}:*" in scope_set:
+        return True
+    if action == "read" and (f"write:{domain}" in scope_set or "write:*" in scope_set):
+        return True
+    return False
 
 
 async def require_auth(
@@ -36,6 +88,29 @@ async def require_auth(
     if _is_internal_request(request):
         return None
 
+    # API key auth (machine-to-machine path)
+    api_key = _extract_api_key(request)
+    if api_key:
+        auth_service = request.app.state.auth_service
+        key_meta = await auth_service.validate_api_key(api_key)
+        if key_meta is None:
+            ip = request.client.host if request.client else "unknown"
+            await auth_service._log_auth_event(
+                "api_key_auth_failure", ip, None, "failed", "Invalid API key",
+            )
+            raise HTTPException(status_code=401, detail="Invalid API key")
+        required_scope = _required_api_key_scope(request)
+        if required_scope is None:
+            raise HTTPException(status_code=403, detail="API key not allowed for this endpoint")
+        if not _api_key_has_scope(key_meta.get("scopes", []), required_scope):
+            raise HTTPException(
+                status_code=403,
+                detail=f"API key missing required scope: {required_scope}",
+            )
+        auth_info = {"auth_type": "api_key", "api_key": key_meta}
+        request.state.auth_info = auth_info
+        return auth_info
+
     if not drivechill_session:
         raise HTTPException(status_code=401, detail="Authentication required")
 
@@ -44,6 +119,7 @@ async def require_auth(
     if session is None:
         raise HTTPException(status_code=401, detail="Session expired or invalid")
 
+    request.state.auth_info = {"auth_type": "session", "session": session}
     return session
 
 
@@ -90,17 +166,45 @@ async def require_csrf(
     if not _auth_enabled():
         return
 
+    existing = getattr(request.state, "auth_info", None)
+    if existing and existing.get("auth_type") == "api_key":
+        return
+
     # Tray sends a per-process internal token to bypass CSRF
     if _is_internal_request(request):
+        return
+
+    # API key authenticated requests are stateless and CSRF-exempt.
+    api_key = _extract_api_key(request)
+    if api_key:
+        auth_service = request.app.state.auth_service
+        key_meta = await auth_service.validate_api_key(api_key)
+        if key_meta is None:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+        required_scope = _required_api_key_scope(request)
+        if required_scope is None:
+            raise HTTPException(status_code=403, detail="API key not allowed for this endpoint")
+        if not _api_key_has_scope(key_meta.get("scopes", []), required_scope):
+            raise HTTPException(
+                status_code=403,
+                detail=f"API key missing required scope: {required_scope}",
+            )
+        request.state.auth_info = {"auth_type": "api_key", "api_key": key_meta}
         return
 
     if not drivechill_session:
         raise HTTPException(status_code=401, detail="Authentication required")
 
-    auth_service = request.app.state.auth_service
-    session = await auth_service.validate_session(drivechill_session)
+    # Re-use session already validated by require_auth (avoids double DB query).
+    session = None
+    if existing and existing.get("auth_type") == "session":
+        session = existing.get("session")
     if session is None:
-        raise HTTPException(status_code=401, detail="Session expired or invalid")
+        auth_service = request.app.state.auth_service
+        session = await auth_service.validate_session(drivechill_session)
+        if session is None:
+            raise HTTPException(status_code=401, detail="Session expired or invalid")
 
-    if not x_csrf_token or x_csrf_token != session["csrf_token"]:
+    csrf_token = session["csrf_token"]
+    if not x_csrf_token or not hmac.compare_digest(str(x_csrf_token), str(csrf_token)):
         raise HTTPException(status_code=403, detail="CSRF token invalid or missing")

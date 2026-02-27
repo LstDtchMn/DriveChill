@@ -62,7 +62,7 @@ export function ChangelogBanner() {
       </div>
       <button
         onClick={dismiss}
-        className="p-1 rounded hover:opacity-70 transition-opacity shrink-0"
+        className="min-h-11 min-w-11 p-1 rounded hover:opacity-70 transition-opacity shrink-0"
         title="Dismiss"
       >
         <X size={14} />

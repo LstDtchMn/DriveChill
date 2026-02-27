@@ -38,7 +38,7 @@ export function Sidebar() {
               key={page}
               onClick={() => setPage(page)}
               className={`
-                w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium
+                w-full min-h-11 flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium
                 transition-all duration-200 relative
                 ${isActive
                   ? 'text-white'
@@ -70,5 +70,39 @@ export function Sidebar() {
         </div>
       </div>
     </aside>
+  );
+}
+
+export function MobileNav() {
+  const { currentPage, setPage, activeAlerts } = useAppStore();
+
+  return (
+    <nav
+      className="fixed bottom-0 left-0 right-0 border-t px-2 py-2 z-40"
+      style={{ borderColor: 'var(--border)', background: 'var(--bg-secondary)' }}
+    >
+      <div className="grid grid-cols-4 gap-1">
+        {NAV_ITEMS.map(({ page, label, icon: Icon }) => {
+          const isActive = currentPage === page;
+          const hasAlert = page === 'alerts' && activeAlerts.length > 0;
+          return (
+            <button
+              key={page}
+              onClick={() => setPage(page)}
+              className="min-h-11 rounded-lg flex flex-col items-center justify-center gap-1 text-[11px] relative"
+              style={isActive
+                ? { background: 'var(--accent-muted)', color: 'var(--accent)' }
+                : { color: 'var(--text-secondary)' }}
+            >
+              <Icon size={16} />
+              <span className="leading-none">{label}</span>
+              {hasAlert && (
+                <span className="absolute top-2 right-3 w-2 h-2 rounded-full bg-red-500" />
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </nav>
   );
 }

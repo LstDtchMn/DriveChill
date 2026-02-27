@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     password: str | None = None  # DRIVECHILL_PASSWORD - used for auto-setup
     session_ttl: str = "8h"  # DRIVECHILL_SESSION_TTL - "15m", "8h", "7d", etc.
     force_auth: bool = False  # DRIVECHILL_FORCE_AUTH - force auth even on localhost
+    allow_private_outbound_targets: bool = False  # DRIVECHILL_ALLOW_PRIVATE_OUTBOUND_TARGETS
 
     model_config = {"env_prefix": "DRIVECHILL_"}
 

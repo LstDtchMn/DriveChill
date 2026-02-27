@@ -15,6 +15,7 @@ public sealed class SensorWorker : BackgroundService
     private readonly SensorService    _sensors;
     private readonly FanService       _fans;
     private readonly AlertService     _alerts;
+    private readonly WebhookService   _webhooks;
     private readonly DbService        _db;
     private readonly AppSettings      _settings;
     private readonly ILogger<SensorWorker> _log;
@@ -23,12 +24,14 @@ public sealed class SensorWorker : BackgroundService
     private const int DbIntervalSeconds = 10;
 
     public SensorWorker(IHardwareBackend hw, SensorService sensors, FanService fans,
-        AlertService alerts, DbService db, AppSettings settings, ILogger<SensorWorker> log)
+        AlertService alerts, WebhookService webhooks, DbService db, AppSettings settings,
+        ILogger<SensorWorker> log)
     {
         _hw      = hw;
         _sensors = sensors;
         _fans    = fans;
         _alerts  = alerts;
+        _webhooks = webhooks;
         _db      = db;
         _settings = settings;
         _log     = log;
@@ -59,7 +62,9 @@ public sealed class SensorWorker : BackgroundService
                 await _fans.ApplyCurvesAsync(readings, stoppingToken);
 
                 // Evaluate alert thresholds
-                _alerts.Evaluate(readings);
+                var newEvents = _alerts.Evaluate(readings);
+                if (newEvents.Count > 0)
+                    await _webhooks.DispatchAlertEventsAsync(newEvents, stoppingToken);
 
                 // Persist to DB on a slower cadence
                 if ((DateTimeOffset.UtcNow - _lastDbWrite).TotalSeconds >= DbIntervalSeconds)

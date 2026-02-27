@@ -106,7 +106,7 @@ export function PresetSelector({ onProfileChange }: PresetSelectorProps) {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-3 px-1">
+      <div className="flex items-center justify-between gap-2 mb-3 px-1 flex-wrap">
         <h3 className="section-title">Preset Profiles</h3>
         <div className="flex items-center gap-2">
           <input
@@ -118,14 +118,14 @@ export function PresetSelector({ onProfileChange }: PresetSelectorProps) {
           />
           <button
             onClick={() => fileInputRef.current?.click()}
-            className="btn-secondary flex items-center gap-1.5 text-xs"
+            className="btn-secondary min-h-11 flex items-center gap-1.5 text-xs"
           >
             <Upload size={13} />
             Import
           </button>
         </div>
       </div>
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         {profiles.map((profile) => {
           const Icon = PRESET_ICONS[profile.preset] || Volume;
           const description = PRESET_DESCRIPTIONS[profile.preset] || '';
@@ -167,7 +167,7 @@ export function PresetSelector({ onProfileChange }: PresetSelectorProps) {
               </button>
               <button
                 onClick={(e) => handleExport(e, profile.id)}
-                className="absolute top-2 right-2 p-1.5 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                className="absolute top-2 right-2 min-h-11 min-w-11 p-1.5 rounded opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
                 style={{ background: 'var(--surface-200)' }}
                 title="Export profile"
               >

@@ -106,6 +106,77 @@ export interface SafeModeStatus {
   reason: 'sensor_failure' | 'temp_panic' | 'released' | null;
 }
 
+export interface MachineSnapshotSummary {
+  cpu_temp: number | null;
+  gpu_temp: number | null;
+  case_temp: number | null;
+  fan_count: number;
+  backend: string | null;
+}
+
+export interface MachineSnapshot {
+  timestamp: string;
+  health?: {
+    status?: string;
+    app?: string;
+    api_version?: string;
+    capabilities?: string[];
+    version?: string;
+    backend?: string;
+  };
+  summary?: MachineSnapshotSummary;
+}
+
+export interface MachineInfo {
+  id: string;
+  name: string;
+  base_url: string;
+  has_api_key: boolean;
+  api_key_id: string | null;
+  enabled: boolean;
+  poll_interval_seconds: number;
+  timeout_ms: number;
+  status: 'unknown' | 'online' | 'degraded' | 'offline' | 'auth_error' | 'version_mismatch' | string;
+  last_seen_at: string | null;
+  last_error: string | null;
+  consecutive_failures: number;
+  created_at: string;
+  updated_at: string;
+  freshness_seconds: number | null;
+  snapshot: MachineSnapshot | null;
+}
+
+export interface ApiKeyInfo {
+  id: string;
+  name: string;
+  key_prefix: string;
+  scopes?: string[];
+  created_at: string;
+  revoked_at: string | null;
+  last_used_at: string | null;
+}
+
+export interface WebhookConfig {
+  enabled: boolean;
+  target_url: string;
+  has_signing_secret: boolean;
+  timeout_seconds: number;
+  max_retries: number;
+  retry_backoff_seconds: number;
+  updated_at: string;
+}
+
+export interface WebhookDelivery {
+  timestamp: string;
+  event_type: string;
+  target_url: string;
+  attempt: number;
+  success: boolean;
+  http_status: number | null;
+  latency_ms: number | null;
+  error: string | null;
+}
+
 export interface WSMessage {
   type: 'sensor_update' | 'heartbeat';
   timestamp?: string;

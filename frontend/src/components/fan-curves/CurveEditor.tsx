@@ -26,6 +26,7 @@ export function CurveEditor({
 }: CurveEditorProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [dragging, setDragging] = useState<number | null>(null);
+  const [dragPointerId, setDragPointerId] = useState<number | null>(null);
   const [hoveredPoint, setHoveredPoint] = useState<number | null>(null);
   const [selectedPoint, setSelectedPoint] = useState<number | null>(null);
   const tempUnit = useSettingsStore((s) => s.tempUnit);
@@ -38,7 +39,7 @@ export function CurveEditor({
   const xToTemp = (x: number) => Math.max(0, Math.min(110, ((x - PADDING) / chartW) * 110));
   const yToSpeed = (y: number) => Math.max(0, Math.min(100, ((PADDING + chartH - y) / chartH) * 100));
 
-  const getSVGPoint = useCallback((e: React.MouseEvent | MouseEvent) => {
+  const getSVGPoint = useCallback((e: { clientX: number; clientY: number }) => {
     if (!svgRef.current) return { x: 0, y: 0 };
     const rect = svgRef.current.getBoundingClientRect();
     return {
@@ -47,14 +48,16 @@ export function CurveEditor({
     };
   }, []);
 
-  const handleMouseDown = useCallback((index: number, e: React.MouseEvent) => {
+  const handlePointerDown = useCallback((index: number, e: React.PointerEvent<SVGCircleElement>) => {
     e.preventDefault();
     setDragging(index);
+    setDragPointerId(e.pointerId);
     setSelectedPoint(index);
   }, []);
 
-  const handleMouseMove = useCallback((e: MouseEvent) => {
+  const handlePointerMove = useCallback((e: PointerEvent) => {
     if (dragging === null) return;
+    if (dragPointerId !== null && e.pointerId !== dragPointerId) return;
 
     const { x, y } = getSVGPoint(e);
     const temp = Math.round(xToTemp(x));
@@ -68,22 +71,25 @@ export function CurveEditor({
     setDragging(newIdx >= 0 ? newIdx : dragging);
     setSelectedPoint(newIdx >= 0 ? newIdx : dragging);
     onChange(sorted);
-  }, [dragging, points, onChange, getSVGPoint, xToTemp, yToSpeed]);
+  }, [dragging, dragPointerId, points, onChange, getSVGPoint, xToTemp, yToSpeed]);
 
-  const handleMouseUp = useCallback(() => {
+  const handlePointerUp = useCallback(() => {
     setDragging(null);
+    setDragPointerId(null);
   }, []);
 
   useEffect(() => {
     if (dragging !== null) {
-      window.addEventListener('mousemove', handleMouseMove);
-      window.addEventListener('mouseup', handleMouseUp);
+      window.addEventListener('pointermove', handlePointerMove);
+      window.addEventListener('pointerup', handlePointerUp);
+      window.addEventListener('pointercancel', handlePointerUp);
       return () => {
-        window.removeEventListener('mousemove', handleMouseMove);
-        window.removeEventListener('mouseup', handleMouseUp);
+        window.removeEventListener('pointermove', handlePointerMove);
+        window.removeEventListener('pointerup', handlePointerUp);
+        window.removeEventListener('pointercancel', handlePointerUp);
       };
     }
-  }, [dragging, handleMouseMove, handleMouseUp]);
+  }, [dragging, handlePointerMove, handlePointerUp]);
 
   const handleDoubleClick = useCallback((e: React.MouseEvent) => {
     const { x, y } = getSVGPoint(e);
@@ -202,7 +208,7 @@ export function CurveEditor({
         width={width}
         height={height}
         className="select-none outline-none"
-        style={{ cursor: dragging !== null ? 'grabbing' : 'crosshair' }}
+        style={{ cursor: dragging !== null ? 'grabbing' : 'crosshair', touchAction: 'none', maxWidth: '100%' }}
         onDoubleClick={handleDoubleClick}
         onClick={handleSvgClick}
         onKeyDown={handleKeyDown}
@@ -305,7 +311,7 @@ export function CurveEditor({
                 cx={cx} cy={cy} r={12}
                 fill="transparent"
                 style={{ cursor: 'grab' }}
-                onMouseDown={(e) => handleMouseDown(i, e)}
+                onPointerDown={(e) => handlePointerDown(i, e)}
                 onMouseEnter={() => setHoveredPoint(i)}
                 onMouseLeave={() => setHoveredPoint(null)}
                 onContextMenu={(e) => handleRightClick(i, e)}

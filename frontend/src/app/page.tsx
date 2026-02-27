@@ -6,7 +6,7 @@ import { useAuthStore } from '@/stores/authStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { useNotifications } from '@/hooks/useNotifications';
-import { Sidebar } from '@/components/layout/Sidebar';
+import { MobileNav, Sidebar } from '@/components/layout/Sidebar';
 import { Header } from '@/components/layout/Header';
 import { SystemOverview } from '@/components/dashboard/SystemOverview';
 import { FanCurvesPage } from '@/components/fan-curves/FanCurvesPage';
@@ -155,15 +155,20 @@ export default function Home() {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden">
-      <Sidebar />
+    <div className="min-h-screen md:h-screen md:flex">
+      <div className="hidden md:block">
+        <Sidebar />
+      </div>
       <div className="flex-1 flex flex-col min-w-0">
         <Header />
         <ChangelogBanner />
         <SafeModeBanner />
-        <main className="flex-1 overflow-y-auto p-6" style={{ background: 'var(--bg)' }}>
+        <main className="flex-1 overflow-y-auto px-3 py-4 pb-24 md:p-6 md:pb-6" style={{ background: 'var(--bg)' }}>
           <PageContent />
         </main>
+      </div>
+      <div className="md:hidden">
+        <MobileNav />
       </div>
     </div>
   );

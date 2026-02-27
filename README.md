@@ -57,7 +57,12 @@ cd docker
 docker-compose up -d
 ```
 
-> Note: Docker requires `privileged: true` for hardware sensor access on Linux.
+If minimal permissions cannot access sensors on your host:
+
+```bash
+cd docker
+docker compose -f docker-compose.privileged.yml up -d
+```
 
 ## Development
 
@@ -112,3 +117,10 @@ Environment variables (prefix `DRIVECHILL_`):
 ## License
 
 MIT
+
+## Runbooks
+
+- Windows desktop: `docs/runbooks/windows-desktop.md`
+- Windows service: `docs/runbooks/windows-service.md`
+- Linux systemd: `docs/runbooks/linux-systemd.md`
+- Security credential rotation: `docs/runbooks/security-credential-rotation.md`

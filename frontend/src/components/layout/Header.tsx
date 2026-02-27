@@ -41,7 +41,7 @@ export function Header() {
     try {
       await api.releaseFanControl();
       setSafeMode({ active: false, released: true, reason: 'released' });
-      showToast('Fan control released — BIOS/auto mode active');
+      showToast('Fan control released - BIOS/auto mode active');
     } catch {
       showToast('Failed to release fan control');
     } finally {
@@ -57,7 +57,7 @@ export function Header() {
       setSafeMode({ active: false, released: false, reason: null });
       showToast('Fan control resumed');
     } catch {
-      showToast('No active profile — activate one first');
+      showToast('No active profile - activate one first');
     } finally {
       setResuming(false);
     }
@@ -65,51 +65,55 @@ export function Header() {
 
   return (
     <header
-      className="h-14 flex items-center justify-between px-6 border-b shrink-0 relative"
+      className="min-h-14 flex items-center justify-between gap-2 px-3 md:px-6 py-2 border-b shrink-0 relative"
       style={{ borderColor: 'var(--border)', background: 'var(--bg)' }}
     >
       <div>
-        <h2 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>
+        <h2 className="text-base md:text-lg font-semibold" style={{ color: 'var(--text)' }}>
           {PAGE_TITLES[currentPage] || 'Dashboard'}
         </h2>
       </div>
 
-      <div className="flex items-center gap-3">
+      <div className="flex items-center justify-end flex-wrap gap-2">
         {backendName && (
-          <span className="text-xs px-2.5 py-1 rounded-full" style={{ background: 'var(--accent-muted)', color: 'var(--accent)' }}>
+          <span
+            className="hidden sm:inline text-xs px-2.5 py-1 rounded-full"
+            style={{ background: 'var(--accent-muted)', color: 'var(--accent)' }}
+          >
             {backendName}
           </span>
         )}
 
-        {/* Release / Resume Fan Control */}
         {safeMode.released ? (
           <button
             onClick={handleResume}
             disabled={resuming}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors"
+            className="min-h-11 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors"
             style={{ background: 'var(--success)', color: '#fff', opacity: resuming ? 0.6 : 1 }}
             title="Resume software fan control"
           >
             <Play size={13} />
-            {resuming ? 'Resuming…' : 'Resume Profile'}
+            <span className="hidden sm:inline">{resuming ? 'Resuming...' : 'Resume Profile'}</span>
+            <span className="sm:hidden">{resuming ? '...' : 'Resume'}</span>
           </button>
         ) : (
           <button
             onClick={handleRelease}
             disabled={releasing}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors"
+            className="min-h-11 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors"
             style={{ background: 'var(--danger)', color: '#fff', opacity: releasing ? 0.6 : 1 }}
             title="Release all fans to BIOS/auto mode immediately"
           >
             <ShieldOff size={13} />
-            {releasing ? 'Releasing…' : 'Release Fans'}
+            <span className="hidden sm:inline">{releasing ? 'Releasing...' : 'Release Fans'}</span>
+            <span className="sm:hidden">{releasing ? '...' : 'Release'}</span>
           </button>
         )}
 
-        {/* Alert bell */}
         <button
           onClick={() => setPage('alerts')}
-          className="relative p-2 rounded-lg transition-colors hover:bg-surface-200"
+          className="relative min-h-11 min-w-11 p-2 rounded-lg transition-colors hover:bg-surface-200"
+          title="Alerts"
         >
           <Bell size={18} style={{ color: 'var(--text-secondary)' }} />
           {activeAlerts.length > 0 && (
@@ -124,7 +128,7 @@ export function Header() {
         {authRequired && authenticated && (
           <button
             onClick={handleLogout}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs transition-colors hover:bg-surface-200"
+            className="min-h-11 min-w-11 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs transition-colors hover:bg-surface-200"
             style={{ color: 'var(--text-secondary)' }}
             title={username ? `Logged in as ${username}` : 'Log out'}
           >
@@ -133,10 +137,9 @@ export function Header() {
         )}
       </div>
 
-      {/* Toast notification */}
       {toast && (
         <div
-          className="absolute bottom-[-2.5rem] right-6 px-4 py-2 rounded-lg text-xs font-medium shadow-lg z-50"
+          className="absolute bottom-[-2.5rem] right-3 md:right-6 px-4 py-2 rounded-lg text-xs font-medium shadow-lg z-50"
           style={{ background: 'var(--surface-200)', color: 'var(--text)', border: '1px solid var(--border)' }}
         >
           {toast}

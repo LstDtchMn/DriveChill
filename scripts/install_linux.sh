@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # DriveChill Linux Setup Script
 
-set -e
+set -euo pipefail
 
 echo "=== DriveChill Setup ==="
 echo ""

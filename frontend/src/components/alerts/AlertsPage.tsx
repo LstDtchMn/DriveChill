@@ -102,11 +102,11 @@ export function AlertsPage() {
 
       {/* Alert rules */}
       <div>
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
           <h3 className="section-title">Alert Rules</h3>
           <button
             onClick={() => setShowAddForm(!showAddForm)}
-            className="btn-primary flex items-center gap-2 text-sm"
+            className="btn-primary min-h-11 flex items-center gap-2 text-sm"
           >
             <Plus size={14} />
             Add Rule
@@ -155,8 +155,8 @@ export function AlertsPage() {
                 />
               </div>
               <div className="flex items-end gap-2">
-                <button onClick={handleAddRule} className="btn-primary text-sm flex-1">Add</button>
-                <button onClick={() => setShowAddForm(false)} className="btn-secondary text-sm p-2">
+                <button onClick={handleAddRule} className="btn-primary min-h-11 text-sm flex-1">Add</button>
+                <button onClick={() => setShowAddForm(false)} className="btn-secondary min-h-11 text-sm p-2">
                   <X size={16} />
                 </button>
               </div>
@@ -197,10 +197,10 @@ export function AlertsPage() {
                   </div>
                   <button
                     onClick={() => handleDeleteRule(rule.id)}
-                    className="p-1.5 rounded hover:bg-surface-200 transition-colors"
-                  >
-                    <Trash2 size={14} style={{ color: 'var(--text-secondary)' }} />
-                  </button>
+                  className="min-h-11 min-w-11 p-1.5 rounded hover:bg-surface-200 transition-colors"
+                >
+                  <Trash2 size={14} style={{ color: 'var(--text-secondary)' }} />
+                </button>
                 </div>
               );
             })
@@ -210,7 +210,7 @@ export function AlertsPage() {
 
       {/* Event log */}
       <div>
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
           <h3 className="section-title">Event Log</h3>
           {alertEvents.length > 0 && (
             <button onClick={handleClearEvents} className="btn-secondary text-xs">

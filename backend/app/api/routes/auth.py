@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
-from app.api.dependencies.auth import require_csrf
+from app.api.dependencies.auth import require_auth, require_csrf
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -18,6 +18,11 @@ class LoginRequest(BaseModel):
 class SetupRequest(BaseModel):
     username: str = Field(min_length=1, max_length=128)
     password: str = Field(min_length=8, max_length=256)
+
+
+class CreateApiKeyRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    scopes: list[str] | None = Field(default=None, max_length=32)
 
 
 def _is_secure_request(request: Request) -> bool:
@@ -154,3 +159,45 @@ async def auth_status():
     """Return whether auth is enabled (for frontend to know whether to show login)."""
     from app.api.dependencies.auth import _auth_enabled
     return {"auth_enabled": _auth_enabled()}
+
+
+@router.get("/api-keys", dependencies=[Depends(require_auth)])
+async def list_api_keys(request: Request):
+    """List API keys (metadata only, never includes plaintext key)."""
+    auth_service = request.app.state.auth_service
+    keys = await auth_service.list_api_keys()
+    return {"api_keys": keys}
+
+
+@router.post("/api-keys", dependencies=[Depends(require_auth), Depends(require_csrf)])
+async def create_api_key(body: CreateApiKeyRequest, request: Request):
+    """Create an API key and return plaintext key once."""
+    auth_service = request.app.state.auth_service
+    try:
+        metadata, plaintext = await auth_service.create_api_key(
+            body.name,
+            scopes=body.scopes,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    ip = request.client.host if request.client else "unknown"
+    await auth_service._log_auth_event(
+        "api_key_created", ip, None, "success",
+        f"key_id={metadata['id']} name={metadata['name']}",
+    )
+    return {"api_key": metadata, "plaintext_key": plaintext}
+
+
+@router.delete("/api-keys/{key_id}", dependencies=[Depends(require_auth), Depends(require_csrf)])
+async def revoke_api_key(key_id: str, request: Request):
+    """Revoke an API key."""
+    auth_service = request.app.state.auth_service
+    revoked = await auth_service.revoke_api_key(key_id)
+    if not revoked:
+        raise HTTPException(status_code=404, detail="API key not found")
+    ip = request.client.host if request.client else "unknown"
+    await auth_service._log_auth_event(
+        "api_key_revoked", ip, None, "success",
+        f"key_id={key_id}",
+    )
+    return {"success": True}

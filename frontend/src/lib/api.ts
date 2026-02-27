@@ -218,5 +218,86 @@ export const api = {
   },
 
   // Health
-  health: () => fetchAPI<any>('/api/health'),
+  health: () =>
+    fetchAPI<{
+      status: string;
+      app: string;
+      api_version: string;
+      capabilities: string[];
+      version: string;
+      backend: string;
+    }>('/api/health'),
+
+  // Multi-machine hub registry / snapshots
+  getMachines: () =>
+    fetchAPI<{ machines: import('./types').MachineInfo[] }>('/api/machines'),
+  createMachine: (machine: {
+    name: string;
+    base_url: string;
+    api_key?: string;
+    enabled?: boolean;
+    poll_interval_seconds?: number;
+    timeout_ms?: number;
+  }) =>
+    fetchAPI<{ machine: import('./types').MachineInfo }>('/api/machines', {
+      method: 'POST',
+      body: JSON.stringify(machine),
+    }),
+  updateMachine: (
+    machineId: string,
+    machine: Partial<{
+      name: string;
+      base_url: string;
+      api_key: string;
+      enabled: boolean;
+      poll_interval_seconds: number;
+      timeout_ms: number;
+    }>
+  ) =>
+    fetchAPI<{ machine: import('./types').MachineInfo }>(
+      `/api/machines/${encodeURIComponent(machineId)}`,
+      {
+        method: 'PUT',
+        body: JSON.stringify(machine),
+      }
+    ),
+  deleteMachine: (machineId: string) =>
+    fetchAPI<{ success: boolean }>(`/api/machines/${encodeURIComponent(machineId)}`, {
+      method: 'DELETE',
+    }),
+  getMachineSnapshot: (machineId: string) =>
+    fetchAPI<{ machine_id: string; snapshot: import('./types').MachineSnapshot }>(
+      `/api/machines/${encodeURIComponent(machineId)}/snapshot`
+    ),
+  verifyMachine: (machineId: string) =>
+    fetchAPI<{ success: boolean; status: string; snapshot?: import('./types').MachineSnapshot; error?: string }>(
+      `/api/machines/${encodeURIComponent(machineId)}/verify`,
+      { method: 'POST' }
+    ),
+
+  // API keys (agent-to-hub auth)
+  listApiKeys: () =>
+    fetchAPI<{ api_keys: import('./types').ApiKeyInfo[] }>('/api/auth/api-keys'),
+  createApiKey: (name: string, scopes?: string[]) =>
+    fetchAPI<{ api_key: import('./types').ApiKeyInfo; plaintext_key: string }>('/api/auth/api-keys', {
+      method: 'POST',
+      body: JSON.stringify(scopes && scopes.length > 0 ? { name, scopes } : { name }),
+    }),
+  revokeApiKey: (keyId: string) =>
+    fetchAPI<{ success: boolean }>(`/api/auth/api-keys/${encodeURIComponent(keyId)}`, {
+      method: 'DELETE',
+    }),
+
+  // Webhooks
+  getWebhookConfig: () =>
+    fetchAPI<{ config: import('./types').WebhookConfig }>('/api/webhooks'),
+  updateWebhookConfig: (config: Partial<import('./types').WebhookConfig> & { signing_secret?: string | null }) =>
+    fetchAPI<{ success: boolean; config: import('./types').WebhookConfig }>('/api/webhooks', {
+      method: 'PUT',
+      body: JSON.stringify(config),
+    }),
+  getWebhookDeliveries: (limit = 100, offset = 0) =>
+    fetchAPI<{ deliveries: import('./types').WebhookDelivery[] }>(
+      `/api/webhooks/deliveries?limit=${Math.max(1, Math.min(500, limit))}&offset=${Math.max(0, offset)}`
+    ),
 };
