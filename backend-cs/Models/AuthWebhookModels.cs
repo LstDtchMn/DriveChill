@@ -6,6 +6,7 @@ public sealed class ApiKeyRecord
     public string Name { get; set; } = "";
     public string KeyPrefix { get; set; } = "";
     public string KeyHash { get; set; } = "";
+    public List<string> Scopes { get; set; } = ["read:sensors"];
     public string CreatedAt { get; set; } = DateTimeOffset.UtcNow.ToString("o");
     public string? RevokedAt { get; set; }
     public string? LastUsedAt { get; set; }
@@ -14,6 +15,7 @@ public sealed class ApiKeyRecord
 public sealed class CreateApiKeyRequest
 {
     public string Name { get; set; } = "";
+    public List<string>? Scopes { get; set; }
 }
 
 public sealed class WebhookConfig

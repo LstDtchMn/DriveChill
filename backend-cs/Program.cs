@@ -1,6 +1,9 @@
 using DriveChill.Hardware;
 using DriveChill.Services;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace DriveChill;
 
@@ -15,7 +18,31 @@ namespace DriveChill;
 /// </summary>
 internal static class Program
 {
-    private const string AppUrl = "http://127.0.0.1:8085";
+    private static readonly string[] _publicApiPaths =
+    [
+        "/api/health",
+        "/api/ws",
+        "/api/auth/login",
+        "/api/auth/setup",
+        "/api/auth/status",
+        "/api/auth/session",
+    ];
+    private static readonly (string Prefix, string Domain)[] _apiKeyScopePrefixRules =
+    [
+        ("/api/auth/api-keys", "auth"),
+        ("/api/alerts", "alerts"),
+        ("/api/fans", "fans"),
+        ("/api/machines", "machines"),
+        ("/api/profiles", "profiles"),
+        ("/api/quiet-hours", "quiet_hours"),
+        ("/api/sensors", "sensors"),
+        ("/api/settings", "settings"),
+        ("/api/webhooks", "webhooks"),
+    ];
+    private static readonly HashSet<string> _readMethods = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "GET", "HEAD", "OPTIONS",
+    };
 
     [STAThread]
     static void Main(string[] args)
@@ -24,8 +51,12 @@ internal static class Program
         Application.SetCompatibleTextRenderingDefault(false);
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
 
+        var settings = new AppSettings();
+        var listenUrl = BuildListenUrl(settings.Host, settings.Port);
+        var dashboardUrl = $"http://localhost:{settings.Port}";
+
         // Build ASP.NET Core host
-        var host = BuildHost(args);
+        var host = BuildHost(args, settings, listenUrl);
         using var cts = new CancellationTokenSource();
 
         // Start host on a background Task
@@ -43,12 +74,12 @@ internal static class Program
         Task.Run(async () =>
         {
             await Task.Delay(1800);
-            try { Process.Start(new ProcessStartInfo(AppUrl) { UseShellExecute = true }); }
+            try { Process.Start(new ProcessStartInfo(dashboardUrl) { UseShellExecute = true }); }
             catch { }
         });
 
         // Build tray icon — runs on main thread, blocks until Quit
-        using var trayIcon = BuildTrayIcon(() =>
+        using var trayIcon = BuildTrayIcon(dashboardUrl, () =>
         {
             cts.Cancel();
             try { hostTask.GetAwaiter().GetResult(); } catch { }
@@ -66,7 +97,7 @@ internal static class Program
     // ASP.NET Core host
     // -----------------------------------------------------------------------
 
-    private static IHost BuildHost(string[] args)
+    private static IHost BuildHost(string[] args, AppSettings settings, string listenUrl)
     {
         // Point wwwroot at the folder next to the EXE — works for both
         // 'dotnet run' (where CWD = project dir) and self-contained publish.
@@ -78,7 +109,7 @@ internal static class Program
             WebRootPath    = wwwroot,
             ContentRootPath = AppContext.BaseDirectory,
         });
-        builder.WebHost.UseUrls(AppUrl);
+        builder.WebHost.UseUrls(listenUrl);
 
         // Suppress default console logging in tray mode
         builder.Logging.ClearProviders();
@@ -93,7 +124,6 @@ internal static class Program
         builder.Services.AddControllers().AddJsonOptions(o => jsonOpts(o.JsonSerializerOptions));
 
         // App settings singleton
-        var settings = new AppSettings();
         builder.Services.AddSingleton(settings);
 
         // Hardware backend: set env var DRIVECHILL_BACKEND=mock for dev/testing
@@ -109,6 +139,7 @@ internal static class Program
         builder.Services.AddSingleton<DbService>();
         builder.Services.AddSingleton<SettingsStore>();
         builder.Services.AddSingleton<ApiKeyService>();
+        builder.Services.AddSingleton<SessionService>();
         builder.Services.AddSingleton<WebhookService>();
         builder.Services.AddSingleton<FanTestService>();
         builder.Services.AddSingleton<WebSocketHub>();
@@ -136,25 +167,199 @@ internal static class Program
         app.UseDefaultFiles();
         app.UseStaticFiles();
 
+        // REST API auth/CSRF middleware (parity with Python backend):
+        // - Auth required only when host is non-localhost (or force-auth enabled)
+        // - API key auth supports scoped access
+        // - Session auth requires CSRF token on state-changing requests
+        app.Use(async (context, next) =>
+        {
+            if (!IsApiRequest(context.Request.Path) || IsPublicApiPath(context.Request.Path))
+            {
+                await next();
+                return;
+            }
+
+            if (!settings.AuthRequired)
+            {
+                await next();
+                return;
+            }
+
+            var apiKey = ExtractApiKey(context.Request);
+            if (!string.IsNullOrEmpty(apiKey))
+            {
+                var apiKeys = context.RequestServices.GetRequiredService<ApiKeyService>();
+                var keyMeta = apiKeys.Validate(apiKey);
+                if (keyMeta is null)
+                {
+                    await Reject(context, 401, "Invalid API key");
+                    return;
+                }
+
+                var requiredScope = RequiredApiKeyScope(context.Request);
+                if (requiredScope is null || !ApiKeyHasScope(keyMeta.Scopes, requiredScope))
+                {
+                    await Reject(
+                        context,
+                        403,
+                        requiredScope is null
+                            ? "API key not allowed for this endpoint"
+                            : $"API key missing required scope: {requiredScope}"
+                    );
+                    return;
+                }
+
+                await next();
+                return;
+            }
+
+            var sessionToken = context.Request.Cookies["drivechill_session"];
+            var sessions = context.RequestServices.GetRequiredService<SessionService>();
+            var session = await sessions.ValidateSessionAsync(sessionToken, context.RequestAborted);
+            if (session is null)
+            {
+                await Reject(context, 401, "Authentication required");
+                return;
+            }
+
+            if (!_readMethods.Contains(context.Request.Method))
+            {
+                var csrfHeader = context.Request.Headers["X-CSRF-Token"].FirstOrDefault();
+                if (
+                    string.IsNullOrEmpty(csrfHeader)
+                    || !SecureEquals(csrfHeader, session.Value.CsrfToken)
+                )
+                {
+                    await Reject(context, 403, "CSRF token invalid or missing");
+                    return;
+                }
+            }
+
+            await next();
+        });
+
         app.MapControllers();
 
-        // WebSocket endpoint
+        // WebSocket endpoint auth parity with Python:
+        // when auth is required, enforce a valid session cookie.
         app.Map("/api/ws", async context =>
         {
-            if (context.WebSockets.IsWebSocketRequest)
-                await context.RequestServices.GetRequiredService<WebSocketHub>().HandleAsync(context);
-            else
+            if (!context.WebSockets.IsWebSocketRequest)
+            {
                 context.Response.StatusCode = 400;
+                return;
+            }
+
+            if (settings.AuthRequired)
+            {
+                var sessionToken = context.Request.Cookies["drivechill_session"];
+                var sessions = context.RequestServices.GetRequiredService<SessionService>();
+                var session = await sessions.ValidateSessionAsync(sessionToken, context.RequestAborted);
+                if (session is null)
+                {
+                    context.Response.StatusCode = 401;
+                    return;
+                }
+            }
+
+            await context.RequestServices.GetRequiredService<WebSocketHub>().HandleAsync(context);
         });
 
         return app;
+    }
+
+    private static string BuildListenUrl(string host, int port)
+    {
+        var normalizedHost = host.Trim();
+        if (normalizedHost.Length == 0)
+            normalizedHost = "127.0.0.1";
+        if (normalizedHost.Contains(':') && !normalizedHost.StartsWith('['))
+            normalizedHost = $"[{normalizedHost}]";
+        return $"http://{normalizedHost}:{port}";
+    }
+
+    private static bool IsApiRequest(PathString path)
+        => path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsPublicApiPath(PathString path)
+    {
+        var value = (path.Value ?? string.Empty).TrimEnd('/');
+        if (value.Length == 0)
+            value = "/";
+        return _publicApiPaths.Any(p => value.Equals(p, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string? ExtractApiKey(HttpRequest request)
+    {
+        var auth = request.Headers.Authorization.ToString();
+        if (auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+        {
+            var token = auth["Bearer ".Length..].Trim();
+            if (token.Length > 0)
+                return token;
+        }
+        var xApiKey = request.Headers["X-API-Key"].FirstOrDefault()?.Trim();
+        return string.IsNullOrEmpty(xApiKey) ? null : xApiKey;
+    }
+
+    private static string? RequiredApiKeyScope(HttpRequest request)
+    {
+        var path = (request.Path.Value ?? "/").TrimEnd('/');
+        if (path.Length == 0)
+            path = "/";
+        foreach (var (prefix, domain) in _apiKeyScopePrefixRules)
+        {
+            if (
+                path.Equals(prefix, StringComparison.OrdinalIgnoreCase)
+                || path.StartsWith($"{prefix}/", StringComparison.OrdinalIgnoreCase)
+            )
+            {
+                var action = _readMethods.Contains(request.Method) ? "read" : "write";
+                return $"{action}:{domain}";
+            }
+        }
+        return null;
+    }
+
+    private static bool ApiKeyHasScope(IReadOnlyList<string>? scopes, string required)
+    {
+        var scopeSet = new HashSet<string>(
+            (scopes ?? Array.Empty<string>()).Select(s => (s ?? string.Empty).Trim().ToLowerInvariant())
+        );
+        if (scopeSet.Contains("*"))
+            return true;
+
+        var parts = required.Split(':', 2);
+        if (parts.Length != 2)
+            return false;
+        var action = parts[0];
+        var domain = parts[1];
+
+        if (scopeSet.Contains(required.ToLowerInvariant()) || scopeSet.Contains($"{action}:*"))
+            return true;
+        if (action == "read" && (scopeSet.Contains($"write:{domain}") || scopeSet.Contains("write:*")))
+            return true;
+        return false;
+    }
+
+    private static bool SecureEquals(string left, string right)
+    {
+        var a = Encoding.UTF8.GetBytes(left);
+        var b = Encoding.UTF8.GetBytes(right);
+        return a.Length == b.Length && CryptographicOperations.FixedTimeEquals(a, b);
+    }
+
+    private static async Task Reject(HttpContext context, int statusCode, string detail)
+    {
+        context.Response.StatusCode = statusCode;
+        await context.Response.WriteAsJsonAsync(new { detail });
     }
 
     // -----------------------------------------------------------------------
     // System tray
     // -----------------------------------------------------------------------
 
-    private static NotifyIcon BuildTrayIcon(Action onQuit)
+    private static NotifyIcon BuildTrayIcon(string dashboardUrl, Action onQuit)
     {
         var icon = new NotifyIcon
         {
@@ -171,7 +376,7 @@ internal static class Program
         var openItem = new ToolStripMenuItem("Open Dashboard");
         openItem.Font = new Font(openItem.Font, FontStyle.Bold);
         openItem.Click += (_, _) =>
-            Process.Start(new ProcessStartInfo(AppUrl) { UseShellExecute = true });
+            Process.Start(new ProcessStartInfo(dashboardUrl) { UseShellExecute = true });
         menu.Items.Add(openItem);
 
         menu.Items.Add(new ToolStripSeparator());
@@ -182,10 +387,14 @@ internal static class Program
 
         icon.ContextMenuStrip = menu;
         icon.DoubleClick += (_, _) =>
-            Process.Start(new ProcessStartInfo(AppUrl) { UseShellExecute = true });
+            Process.Start(new ProcessStartInfo(dashboardUrl) { UseShellExecute = true });
 
         return icon;
     }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool DestroyIcon(IntPtr handle);
 
     /// <summary>
     /// Draws a 6-arm snowflake icon with GDI+ — no external asset files needed.
@@ -231,6 +440,10 @@ internal static class Program
         using var center = new SolidBrush(Color.FromArgb(200, 230, 255));
         g.FillEllipse(center, cx - r, cy - r, r * 2, r * 2);
 
-        return Icon.FromHandle(bmp.GetHicon());
+        // GetHicon() allocates an unmanaged HICON — we must own and destroy it.
+        var hIcon = bmp.GetHicon();
+        var icon = (Icon)Icon.FromHandle(hIcon).Clone(); // Clone copies to managed memory
+        DestroyIcon(hIcon);
+        return icon;
     }
 }

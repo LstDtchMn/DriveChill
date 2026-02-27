@@ -172,12 +172,6 @@ class WebhookService:
         payload_json = json.dumps(payload, separators=(",", ":"), ensure_ascii=True)
         body = payload_json.encode("utf-8")
 
-        # Re-validate the target URL at dispatch time to defend against DNS rebinding.
-        ok, reason = validate_outbound_url_at_request_time(str(cfg["target_url"]))
-        if not ok:
-            logger.warning("Webhook target blocked at dispatch time: %s", reason)
-            return
-
         timeout = max(0.5, float(cfg["timeout_seconds"]))
         max_retries = max(0, int(cfg["max_retries"]))
         backoff = max(0.1, float(cfg["retry_backoff_seconds"]))
@@ -195,6 +189,13 @@ class WebhookService:
             ).hexdigest()
 
         for attempt in range(1, max_retries + 2):
+            # Re-validate immediately before each request attempt.
+            # This narrows the DNS rebinding window between validation and connect.
+            ok, reason = validate_outbound_url_at_request_time(target_url)
+            if not ok:
+                logger.warning("Webhook target blocked at dispatch time: %s", reason)
+                return
+
             headers = {
                 "Content-Type": "application/json",
                 "X-DriveChill-Timestamp": signed_timestamp,

@@ -22,12 +22,15 @@ _CREDENTIAL_RE = re.compile(
     r"(Bearer\s+)\S+|(api[_-]?key[=:]\s*)\S+|(password[=:]\s*)\S+",
     re.IGNORECASE,
 )
+_URL_USERINFO_RE = re.compile(r"://[^/\s@]+@", re.IGNORECASE)
 
 
 def _redact_error(exc: Exception) -> str:
     """Truncate and strip credentials from exception text."""
     text = str(exc)[:300]
-    return _CREDENTIAL_RE.sub(r"\1\2\3[REDACTED]", text)
+    text = _CREDENTIAL_RE.sub(r"\1\2\3[REDACTED]", text)
+    text = _URL_USERINFO_RE.sub("://[REDACTED]@", text)
+    return text
 
 
 MachineFetcher = Callable[[dict], Awaitable[dict]]
@@ -196,24 +199,30 @@ class MachineMonitorService:
 
         base_url = machine["base_url"].rstrip("/")
 
-        # Re-validate the URL at request time to defend against DNS rebinding.
+        timeout = max(0.2, float(machine["timeout_ms"]) / 1000.0)
+        headers: dict[str, str] = {}
+        if machine.get("api_key"):
+            headers["Authorization"] = f"Bearer {machine['api_key']}"
+
+        # Re-validate immediately before each outbound request.
         ok, reason = validate_outbound_url_at_request_time(
             base_url,
             allow_private=settings.allow_private_outbound_targets,
         )
         if not ok:
             raise RuntimeError(f"URL blocked: {reason}")
-        timeout = max(0.2, float(machine["timeout_ms"]) / 1000.0)
-        headers: dict[str, str] = {}
-        if machine.get("api_key"):
-            headers["Authorization"] = f"Bearer {machine['api_key']}"
-
         health_resp = await self._client.get(
             f"{base_url}/api/health", headers=headers, timeout=timeout
         )
         health_resp.raise_for_status()
         health_json = health_resp.json()
 
+        ok, reason = validate_outbound_url_at_request_time(
+            base_url,
+            allow_private=settings.allow_private_outbound_targets,
+        )
+        if not ok:
+            raise RuntimeError(f"URL blocked: {reason}")
         sensors_resp = await self._client.get(
             f"{base_url}/api/sensors", headers=headers, timeout=timeout
         )

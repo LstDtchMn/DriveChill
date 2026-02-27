@@ -12,6 +12,8 @@ DriveChill monitors CPU, GPU, hard drive, and case temperatures and automaticall
 - **Alerts & Logging** — Temperature threshold alerts with browser notifications and SQLite history
 - **Dark/Light Theme** — Clean modern UI with smooth theme switching
 - **Multi-Platform** — Windows (LibreHardwareMonitor), Linux (lm-sensors), and Docker
+- **Remote Access** — Mobile-responsive dashboard, multi-machine hub monitoring, webhook integrations
+- **Security** — Session auth, API keys, CSRF protection, HTTPS support (self-signed or custom cert)
 - **USB Controller Support** — Architecture supports Corsair, NZXT, and other USB fan controllers
 
 ## Quick Start
@@ -31,6 +33,11 @@ DriveChill monitors CPU, GPU, hard drive, and case temperatures and automaticall
    ```
 5. Open http://localhost:8085
 
+   HTTPS note: `DRIVECHILL_SSL_CERTFILE`, `DRIVECHILL_SSL_KEYFILE`, and
+   `DRIVECHILL_SSL_GENERATE_SELF_SIGNED=true` are applied by
+   `python backend\drivechill.py` (packaged entry point). If you launch via
+   `python -m uvicorn ...`, pass Uvicorn `--ssl-certfile/--ssl-keyfile` options.
+
 ### Linux
 
 1. Install prerequisites:
@@ -49,6 +56,9 @@ DriveChill monitors CPU, GPU, hard drive, and case temperatures and automaticall
    python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8085
    ```
 4. Open http://localhost:8085
+
+   HTTPS note: TLS env settings are handled by `backend/drivechill.py`. With
+   direct `uvicorn` startup, pass `--ssl-certfile/--ssl-keyfile` explicitly.
 
 ### Docker
 
@@ -113,6 +123,10 @@ Environment variables (prefix `DRIVECHILL_`):
 | `SENSOR_POLL_INTERVAL` | `1.0` | Seconds between sensor reads |
 | `HISTORY_RETENTION_HOURS` | `24` | How long to keep logged data |
 | `TEMP_UNIT` | `C` | `C` or `F` |
+| `PASSWORD` | _(none)_ | Admin password (required for non-localhost binding) |
+| `SSL_CERTFILE` | _(none)_ | Path to PEM TLS certificate |
+| `SSL_KEYFILE` | _(none)_ | Path to PEM TLS private key |
+| `SSL_GENERATE_SELF_SIGNED` | `false` | Auto-generate a self-signed certificate |
 
 ## License
 
