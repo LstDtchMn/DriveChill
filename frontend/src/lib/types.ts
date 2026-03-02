@@ -255,7 +255,7 @@ export interface AnalyticsStat {
   min_value: number;
   max_value: number;
   avg_value: number;
-  p95_value: number;
+  p95_value: number | null;
   sample_count: number;
 }
 

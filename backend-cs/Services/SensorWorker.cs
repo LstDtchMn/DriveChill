@@ -11,32 +11,37 @@ namespace DriveChill.Services;
 /// </summary>
 public sealed class SensorWorker : BackgroundService
 {
-    private readonly IHardwareBackend _hw;
-    private readonly SensorService    _sensors;
-    private readonly FanService       _fans;
-    private readonly AlertService     _alerts;
-    private readonly WebhookService   _webhooks;
-    private readonly DbService        _db;
-    private readonly SettingsStore    _store;
-    private readonly AppSettings      _settings;
-    private readonly ILogger<SensorWorker> _log;
+    private readonly IHardwareBackend            _hw;
+    private readonly SensorService               _sensors;
+    private readonly FanService                  _fans;
+    private readonly AlertService                _alerts;
+    private readonly WebhookService              _webhooks;
+    private readonly EmailNotificationService    _email;
+    private readonly PushNotificationService     _push;
+    private readonly DbService                   _db;
+    private readonly SettingsStore               _store;
+    private readonly AppSettings                 _settings;
+    private readonly ILogger<SensorWorker>       _log;
 
     private DateTimeOffset _lastDbWrite = DateTimeOffset.MinValue;
     private const int DbIntervalSeconds = 10;
 
     public SensorWorker(IHardwareBackend hw, SensorService sensors, FanService fans,
-        AlertService alerts, WebhookService webhooks, DbService db, SettingsStore store,
-        AppSettings settings, ILogger<SensorWorker> log)
+        AlertService alerts, WebhookService webhooks,
+        EmailNotificationService email, PushNotificationService push,
+        DbService db, SettingsStore store, AppSettings settings, ILogger<SensorWorker> log)
     {
-        _hw      = hw;
-        _sensors = sensors;
-        _fans    = fans;
-        _alerts  = alerts;
+        _hw       = hw;
+        _sensors  = sensors;
+        _fans     = fans;
+        _alerts   = alerts;
         _webhooks = webhooks;
-        _db      = db;
-        _store   = store;
+        _email    = email;
+        _push     = push;
+        _db       = db;
+        _store    = store;
         _settings = settings;
-        _log     = log;
+        _log      = log;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -66,7 +71,26 @@ public sealed class SensorWorker : BackgroundService
                 // Evaluate alert thresholds
                 var newEvents = _alerts.Evaluate(readings);
                 if (newEvents.Count > 0)
-                    await _webhooks.DispatchAlertEventsAsync(newEvents, stoppingToken);
+                {
+                    // Dispatch all delivery channels concurrently (fire-and-forget).
+                    // Errors inside each service are logged and swallowed so a delivery
+                    // failure never crashes the polling loop.
+                    var capturedEvents = newEvents;
+                    _ = Task.Run(async () =>
+                    {
+                        var tasks = new List<Task>
+                        {
+                            _webhooks.DispatchAlertEventsAsync(capturedEvents, CancellationToken.None),
+                        };
+                        foreach (var evt in capturedEvents)
+                        {
+                            tasks.Add(_email.SendAlertAsync(evt, CancellationToken.None));
+                            tasks.Add(_push.SendAlertAsync(evt, CancellationToken.None));
+                        }
+                        try { await Task.WhenAll(tasks); }
+                        catch (Exception ex) { _log.LogWarning(ex, "Alert delivery error"); }
+                    }, CancellationToken.None);
+                }
 
                 // Persist to DB on a slower cadence
                 if ((DateTimeOffset.UtcNow - _lastDbWrite).TotalSeconds >= DbIntervalSeconds)

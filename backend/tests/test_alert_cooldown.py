@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from app.models.sensors import SensorReading, SensorType
 from app.services.alert_service import AlertRule, AlertService
@@ -76,7 +76,7 @@ class TestAlertCooldown:
         assert len(events1) == 1
 
         # Simulate cooldown expiry by backdating _last_triggered
-        svc._last_triggered["r1"] = datetime.now() - timedelta(seconds=120)
+        svc._last_triggered["r1"] = datetime.now(timezone.utc) - timedelta(seconds=120)
 
         # Condition clears then re-triggers
         svc.check([_make_reading("cpu_0", 70)])

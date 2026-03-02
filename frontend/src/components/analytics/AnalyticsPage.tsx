@@ -44,9 +44,12 @@ function StatCard({ s, accentColor }: { s: AnalyticsStat; accentColor: string })
       <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
         {(['Min', 'Max', 'Avg', 'P95'] as const).map((lbl) => {
           const key = lbl === 'P95' ? 'p95_value' : (`${lbl.toLowerCase()}_value` as keyof AnalyticsStat);
+          const val = s[key] as number | null;
           return [
             <span key={`${lbl}l`} style={{ color: 'var(--text-secondary)' }}>{lbl}</span>,
-            <span key={`${lbl}v`} className="font-mono text-right" style={{ color: 'var(--text)' }}>{fmt(s[key] as number, s.unit)}</span>,
+            <span key={`${lbl}v`} className="font-mono text-right" style={{ color: 'var(--text)' }}>
+              {val != null ? fmt(val, s.unit) : '—'}
+            </span>,
           ];
         })}
       </div>
@@ -64,12 +67,17 @@ export function AnalyticsPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     setLoading(true); setError(null);
     const bs = hours <= 1 ? 30 : hours <= 6 ? 60 : hours <= 24 ? 300 : 3600;
     Promise.all([api.analytics.getStats(hours), api.analytics.getAnomalies(hours), api.analytics.getHistory(hours, undefined, bs)])
-      .then(([sR, aR, hR]) => { setStats(sR.stats); setAnomalies(aR.anomalies); setHistory(hR.buckets); })
-      .catch(() => setError('Failed to load analytics data.'))
-      .finally(() => setLoading(false));
+      .then(([sR, aR, hR]) => {
+        if (cancelled) return;
+        setStats(sR.stats); setAnomalies(aR.anomalies); setHistory(hR.buckets);
+      })
+      .catch(() => { if (!cancelled) setError('Failed to load analytics data.'); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
   }, [hours]);
 
   const tempStats = stats?.filter((s) => s.sensor_type.includes('temp')) ?? [];
@@ -144,7 +152,7 @@ export function AnalyticsPage() {
                 </thead>
                 <tbody>
                   {sortedAnomalies.map((a, i) => (
-                    <tr key={i} style={{ borderBottom: '1px solid var(--border)', background: i % 2 === 0 ? 'transparent' : 'var(--surface-200)' }}>
+                    <tr key={`${a.sensor_id}-${a.timestamp_utc}`} style={{ borderBottom: '1px solid var(--border)', background: i % 2 === 0 ? 'transparent' : 'var(--surface-200)' }}>
                       <td style={{ padding: '8px 14px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{new Date(a.timestamp_utc).toLocaleString()}</td>
                       <td style={{ padding: '8px 14px', color: 'var(--text)', fontWeight: 500 }}>{a.sensor_name}</td>
                       <td style={{ padding: '8px 14px', color: 'var(--text)', fontFamily: 'monospace' }}>{fmt(a.value, a.unit)}</td>

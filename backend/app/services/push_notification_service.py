@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
+from functools import partial
 
 from app.db.repositories.push_subscription_repo import PushSubscriptionRepo
 
@@ -55,16 +57,24 @@ class PushNotificationService:
         subscriptions = await self._repo.list_all()
         successes = 0
 
+        loop = asyncio.get_event_loop()
         for sub in subscriptions:
             try:
-                webpush(
-                    subscription_info={
-                        "endpoint": sub["endpoint"],
-                        "keys": {"p256dh": sub["p256dh"], "auth": sub["auth"]},
-                    },
-                    data=json.dumps(payload),
-                    vapid_private_key=self._private_key,
-                    vapid_claims=self._claims,
+                # webpush() is a blocking HTTP call; offload to a thread so we
+                # don't stall the event loop (and therefore fan control) while
+                # waiting for push service responses.
+                await loop.run_in_executor(
+                    None,
+                    partial(
+                        webpush,
+                        subscription_info={
+                            "endpoint": sub["endpoint"],
+                            "keys": {"p256dh": sub["p256dh"], "auth": sub["auth"]},
+                        },
+                        data=json.dumps(payload),
+                        vapid_private_key=self._private_key,
+                        vapid_claims=self._claims,
+                    ),
                 )
                 await self._repo.update_last_used(sub["id"])
                 successes += 1
@@ -116,14 +126,19 @@ class PushNotificationService:
         }
 
         try:
-            webpush(
-                subscription_info={
-                    "endpoint": sub["endpoint"],
-                    "keys": {"p256dh": sub["p256dh"], "auth": sub["auth"]},
-                },
-                data=json.dumps(payload),
-                vapid_private_key=self._private_key,
-                vapid_claims=self._claims,
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None,
+                partial(
+                    webpush,
+                    subscription_info={
+                        "endpoint": sub["endpoint"],
+                        "keys": {"p256dh": sub["p256dh"], "auth": sub["auth"]},
+                    },
+                    data=json.dumps(payload),
+                    vapid_private_key=self._private_key,
+                    vapid_claims=self._claims,
+                ),
             )
             await self._repo.update_last_used(sub["id"])
             return True

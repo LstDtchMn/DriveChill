@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 import aiosqlite
@@ -129,7 +129,7 @@ class AlertService:
         """
         from datetime import timedelta
 
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         sensor_map = {r.id: r for r in readings if r.sensor_type in TEMP_SENSOR_TYPES}
         new_events: list[AlertEvent] = []
 

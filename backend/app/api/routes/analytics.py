@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from collections import defaultdict
 from datetime import datetime, timezone
+from typing import Any
 
 from fastapi import APIRouter, Query, Request
 
@@ -11,6 +12,19 @@ router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 
 def _clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
+
+
+async def _fetchall_as_dicts(db: Any, sql: str, params: dict) -> list:
+    """Execute a query and return rows as dicts keyed by column name.
+
+    Uses cursor.description rather than mutating the shared connection's
+    row_factory, which is not safe under concurrent requests.
+    """
+    result: list = []
+    async with db.execute(sql, params) as cursor:
+        cols = [d[0] for d in cursor.description]
+        result = [dict(zip(cols, row)) for row in await cursor.fetchall()]
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -46,12 +60,9 @@ async def get_history(
         ORDER BY bucket_epoch ASC
     """
     db = request.app.state.db
-    db.row_factory = __import__("aiosqlite").Row
-    async with db.execute(
-        sql,
-        {"bucket": bucket_seconds, "offset": offset, "sensor_id": sensor_id},
-    ) as cursor:
-        rows = await cursor.fetchall()
+    rows = await _fetchall_as_dicts(
+        db, sql, {"bucket": bucket_seconds, "offset": offset, "sensor_id": sensor_id}
+    )
 
     buckets = []
     for row in rows:
@@ -102,34 +113,34 @@ async def get_stats(
           AND (:sensor_id IS NULL OR sensor_id = :sensor_id)
         GROUP BY sensor_id
     """
+    # Fetch all sensor values sorted in a single query for p95 computation.
+    # Ordering by sensor_id then value lets us group in one Python pass,
+    # avoiding N separate round-trips to the DB (one per sensor).
+    p95_sql = """
+        SELECT sensor_id, CAST(value AS REAL) AS v
+        FROM sensor_log
+        WHERE timestamp >= datetime('now', :offset)
+          AND (:sensor_id IS NULL OR sensor_id = :sensor_id)
+        ORDER BY sensor_id, v ASC
+    """
     db = request.app.state.db
-    db.row_factory = __import__("aiosqlite").Row
-    async with db.execute(
-        agg_sql, {"offset": offset, "sensor_id": sensor_id}
-    ) as cursor:
-        agg_rows = await cursor.fetchall()
+    params = {"offset": offset, "sensor_id": sensor_id}
+    agg_rows = await _fetchall_as_dicts(db, agg_sql, params)
+
+    # Build per-sensor sorted value lists in a single DB round-trip.
+    sorted_vals: dict[str, list[float]] = defaultdict(list)
+    async with db.execute(p95_sql, params) as cursor:
+        async for row in cursor:
+            sorted_vals[row[0]].append(row[1])
 
     stats = []
     for row in agg_rows:
         sid = row["sensor_id"]
-        count = row["sample_count"]
-
-        # Fetch sorted values for p95
-        p95_sql = """
-            SELECT CAST(value AS REAL) AS v
-            FROM sensor_log
-            WHERE sensor_id = :sid
-              AND timestamp >= datetime('now', :offset)
-            ORDER BY v ASC
-        """
-        async with db.execute(p95_sql, {"sid": sid, "offset": offset}) as p95_cursor:
-            p95_rows = await p95_cursor.fetchall()
-
+        vals = sorted_vals.get(sid, [])
         p95_value: float | None = None
-        if p95_rows:
-            idx = int(len(p95_rows) * 0.95)
-            idx = min(idx, len(p95_rows) - 1)
-            p95_value = p95_rows[idx]["v"]
+        if vals:
+            idx = min(int(len(vals) * 0.95), len(vals) - 1)
+            p95_value = vals[idx]
 
         stats.append(
             {
@@ -141,7 +152,7 @@ async def get_stats(
                 "max_value": row["max_value"],
                 "avg_value": row["avg_value"],
                 "p95_value": p95_value,
-                "sample_count": count,
+                "sample_count": row["sample_count"],
             }
         )
     return {"stats": stats}
@@ -168,12 +179,10 @@ async def get_anomalies(
         ORDER BY sensor_id, timestamp ASC
     """
     db = request.app.state.db
-    db.row_factory = __import__("aiosqlite").Row
-    async with db.execute(sql, {"offset": offset}) as cursor:
-        all_rows = await cursor.fetchall()
+    all_rows = await _fetchall_as_dicts(db, sql, {"offset": offset})
 
     # Group by sensor_id
-    by_sensor: dict[str, list] = defaultdict(list)
+    by_sensor: dict[str, list[dict]] = defaultdict(list)
     meta: dict[str, dict] = {}
     for row in all_rows:
         sid = row["sensor_id"]
@@ -225,8 +234,7 @@ async def get_report(
 ):
     hours = _clamp(hours, 0.1, 720.0)
 
-    # Reuse stats and anomalies logic by calling their helpers directly
-    from fastapi import Request as _Request  # already imported; just alias
+    # Reuse stats and anomalies logic by calling their helpers directly.
     stats_response = await get_stats(request, hours=hours, sensor_id=None)
     anomalies_response = await get_anomalies(
         request, hours=hours, z_score_threshold=3.0

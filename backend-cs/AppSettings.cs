@@ -64,15 +64,23 @@ public sealed class AppSettings
             StringComparison.OrdinalIgnoreCase
         );
 
-    public string? SslCertFile =>
-        string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DRIVECHILL_SSL_CERTFILE"))
-            ? null
-            : Environment.GetEnvironmentVariable("DRIVECHILL_SSL_CERTFILE")!.Trim();
+    public string? SslCertFile
+    {
+        get
+        {
+            var v = Environment.GetEnvironmentVariable("DRIVECHILL_SSL_CERTFILE")?.Trim();
+            return string.IsNullOrEmpty(v) ? null : v;
+        }
+    }
 
-    public string? SslKeyFile =>
-        string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DRIVECHILL_SSL_KEYFILE"))
-            ? null
-            : Environment.GetEnvironmentVariable("DRIVECHILL_SSL_KEYFILE")!.Trim();
+    public string? SslKeyFile
+    {
+        get
+        {
+            var v = Environment.GetEnvironmentVariable("DRIVECHILL_SSL_KEYFILE")?.Trim();
+            return string.IsNullOrEmpty(v) ? null : v;
+        }
+    }
 
     public bool SslGenerateSelfSigned =>
         string.Equals(
@@ -80,4 +88,28 @@ public sealed class AppSettings
             "true",
             StringComparison.OrdinalIgnoreCase
         );
+
+    /// <summary>
+    /// Deployment secret for encrypting sensitive credentials (e.g. SMTP password) at rest.
+    /// Generate with: python -c "import secrets; print(secrets.token_hex(32))"
+    /// If unset, credentials are stored in plaintext with a log warning.
+    /// </summary>
+    public string? SecretKey
+    {
+        get
+        {
+            var v = Environment.GetEnvironmentVariable("DRIVECHILL_SECRET_KEY")?.Trim();
+            return string.IsNullOrEmpty(v) ? null : v;
+        }
+    }
+
+    // VAPID keys for Web Push notifications (matches Python backend env vars)
+    public string VapidPublicKey =>
+        (Environment.GetEnvironmentVariable("DRIVECHILL_VAPID_PUBLIC_KEY") ?? "").Trim();
+
+    public string VapidPrivateKey =>
+        (Environment.GetEnvironmentVariable("DRIVECHILL_VAPID_PRIVATE_KEY") ?? "").Trim();
+
+    public string VapidContactEmail =>
+        (Environment.GetEnvironmentVariable("DRIVECHILL_VAPID_CONTACT_EMAIL") ?? "admin@localhost").Trim();
 }

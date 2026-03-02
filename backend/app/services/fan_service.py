@@ -85,6 +85,7 @@ class FanService:
         self._sensor_service: SensorService | None = None
         self._alert_service: AlertService | None = None
         self._webhook_service: WebhookService | None = None
+        self._push_svc = None  # PushNotificationService | None
         self._queue: asyncio.Queue | None = None
 
         # Safe-mode state
@@ -213,11 +214,12 @@ class FanService:
     # Independent control loop
     # ------------------------------------------------------------------
 
-    async def start(self, sensor_service, alert_service=None, webhook_service=None) -> None:
+    async def start(self, sensor_service, alert_service=None, webhook_service=None, push_notification_service=None) -> None:
         """Start the fan control loop, subscribing to sensor updates."""
         self._sensor_service = sensor_service
         self._alert_service = alert_service
         self._webhook_service = webhook_service
+        self._push_svc = push_notification_service
         self._queue = sensor_service.subscribe()
         self._task = asyncio.create_task(self._control_loop())
 
@@ -293,12 +295,22 @@ class FanService:
                 # Check alerts in the same loop.
                 if self._alert_service:
                     new_events = self._alert_service.check(snapshot.readings)
-                    if new_events and self._webhook_service:
-                        # Non-blocking dispatch keeps fan loop responsive.
-                        payload = [e.model_dump(mode="json") for e in new_events]
-                        asyncio.create_task(
-                            self._webhook_service.dispatch_alert_events(payload)
-                        )
+                    if new_events:
+                        if self._webhook_service:
+                            # Non-blocking dispatch keeps fan loop responsive.
+                            payload = [e.model_dump(mode="json") for e in new_events]
+                            asyncio.create_task(
+                                self._webhook_service.dispatch_alert_events(payload)
+                            )
+                        if self._push_svc:
+                            for event in new_events:
+                                asyncio.create_task(
+                                    self._push_svc.send_alert(
+                                        sensor_name=event.sensor_name,
+                                        value=event.actual_value,
+                                        threshold=event.threshold,
+                                    )
+                                )
 
             except asyncio.CancelledError:
                 raise

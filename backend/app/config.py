@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     vapid_public_key: str = ""   # DRIVECHILL_VAPID_PUBLIC_KEY
     vapid_contact_email: str = "admin@localhost"  # DRIVECHILL_VAPID_CONTACT_EMAIL
 
+    # Secret key for encrypting sensitive credentials at rest (e.g. SMTP password).
+    # Generate with: python -c "import secrets; print(secrets.token_hex(32))"
+    # If unset, credentials are stored in plaintext with a logged warning.
+    secret_key: str = ""  # DRIVECHILL_SECRET_KEY
+
     model_config = {"env_prefix": "DRIVECHILL_"}
 
     @model_validator(mode="after")

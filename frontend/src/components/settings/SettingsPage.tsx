@@ -366,12 +366,21 @@ export function SettingsPage() {
     if (!emailSettings) return;
     setEmailSaving(true);
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const payload: any = { ...emailSettings };
-      delete payload.has_password;
-      delete payload.updated_at;
-      if (emailPasswordInput) payload.smtp_password = emailPasswordInput;
-      else delete payload.smtp_password;
+      const payload: {
+        enabled: boolean; smtp_host: string; smtp_port: number;
+        smtp_username: string; sender_address: string; recipient_list: string[];
+        use_tls: boolean; use_ssl: boolean; smtp_password?: string;
+      } = {
+        enabled: emailSettings.enabled,
+        smtp_host: emailSettings.smtp_host,
+        smtp_port: emailSettings.smtp_port,
+        smtp_username: emailSettings.smtp_username,
+        sender_address: emailSettings.sender_address,
+        recipient_list: emailSettings.recipient_list,
+        use_tls: emailSettings.use_tls,
+        use_ssl: emailSettings.use_ssl,
+        ...(emailPasswordInput ? { smtp_password: emailPasswordInput } : {}),
+      };
       const data = await api.notifications.updateEmailSettings(payload);
       setEmailSettings(data.settings);
       setEmailPasswordInput('');

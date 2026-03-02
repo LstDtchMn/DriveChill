@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using DriveChill.Models;
+using DriveChill.Utils;
 using System.Text;
 
 namespace DriveChill.Services;
@@ -11,11 +12,15 @@ namespace DriveChill.Services;
 public sealed class DbService : IDisposable
 {
     private readonly string _connStr;
+    private readonly AppSettings _settings;
+    private readonly ILogger<DbService> _log;
     private readonly SemaphoreSlim _initLock = new(1, 1);
     private volatile bool _initialised;
 
-    public DbService(AppSettings settings)
+    public DbService(AppSettings settings, ILogger<DbService> log)
     {
+        _settings = settings;
+        _log = log;
         Directory.CreateDirectory(settings.DataDir);
         _connStr = $"Data Source={settings.DbPath}";
     }
@@ -261,13 +266,15 @@ public sealed class DbService : IDisposable
         await using var conn = new SqliteConnection(_connStr);
         await conn.OpenAsync(ct);
         await using var cmd = conn.CreateCommand();
-        cmd.CommandText = $"""
+        // Use a named parameter for the bucket divisor — SQLite supports
+        // integer parameters in arithmetic — avoids string interpolation in SQL.
+        cmd.CommandText = """
             SELECT
               sensor_id,
               MAX(sensor_name) AS sensor_name,
               MAX(sensor_type) AS sensor_type,
               MAX(unit) AS unit,
-              CAST(strftime('%s', ts) AS INTEGER) / {bucketSeconds} AS bucket_epoch,
+              CAST(strftime('%s', ts) AS INTEGER) / $bucket AS bucket_epoch,
               AVG(CAST(value AS REAL)) AS avg_value,
               MIN(CAST(value AS REAL)) AS min_value,
               MAX(CAST(value AS REAL)) AS max_value,
@@ -278,6 +285,7 @@ public sealed class DbService : IDisposable
             GROUP BY sensor_id, bucket_epoch
             ORDER BY bucket_epoch ASC
             """;
+        cmd.Parameters.AddWithValue("$bucket", bucketSeconds);
         cmd.Parameters.AddWithValue("$since", since);
         cmd.Parameters.AddWithValue("$sid", (object?)sensorId ?? DBNull.Value);
 
@@ -329,23 +337,35 @@ public sealed class DbService : IDisposable
             rows.Add((reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
                       reader.GetDouble(4), reader.GetDouble(5), reader.GetDouble(6), reader.GetInt32(7)));
 
+        // Fetch all sensor values in a single sorted query for p95 computation,
+        // avoiding N separate DB round-trips (one per sensor).
+        await using var cmd2 = conn.CreateCommand();
+        cmd2.CommandText = """
+            SELECT sensor_id, CAST(value AS REAL)
+            FROM sensor_log
+            WHERE ts >= $since AND ($sid IS NULL OR sensor_id = $sid)
+            ORDER BY sensor_id, CAST(value AS REAL) ASC
+            """;
+        cmd2.Parameters.AddWithValue("$since", since);
+        cmd2.Parameters.AddWithValue("$sid", (object?)sensorId ?? DBNull.Value);
+
+        var sortedVals = new Dictionary<string, List<double>>();
+        await using (var r2 = await cmd2.ExecuteReaderAsync(ct))
+        {
+            while (await r2.ReadAsync(ct))
+            {
+                var sid = r2.GetString(0);
+                if (!sortedVals.TryGetValue(sid, out var list))
+                    sortedVals[sid] = list = new List<double>();
+                list.Add(r2.GetDouble(1));
+            }
+        }
+
         var stats = new List<AnalyticsStat>();
         foreach (var row in rows)
         {
-            // Compute p95 via separate sorted query
             double p95 = row.Avg;
-            await using var cmd2 = conn.CreateCommand();
-            cmd2.CommandText = """
-                SELECT CAST(value AS REAL) FROM sensor_log
-                WHERE ts >= $since AND sensor_id = $sid
-                ORDER BY CAST(value AS REAL) ASC
-                """;
-            cmd2.Parameters.AddWithValue("$since", since);
-            cmd2.Parameters.AddWithValue("$sid", row.Id);
-            var vals = new List<double>();
-            await using var r2 = await cmd2.ExecuteReaderAsync(ct);
-            while (await r2.ReadAsync(ct)) vals.Add(r2.GetDouble(0));
-            if (vals.Count > 0)
+            if (sortedVals.TryGetValue(row.Id, out var vals) && vals.Count > 0)
                 p95 = vals[Math.Min(vals.Count - 1, (int)(vals.Count * 0.95))];
 
             stats.Add(new AnalyticsStat
@@ -613,13 +633,15 @@ public sealed class DbService : IDisposable
         await conn.OpenAsync(ct);
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            UPDATE machines SET name=$name, base_url=$url, enabled=$en,
-                poll_interval_seconds=$poll, timeout_ms=$timeout, updated_at=$updated
+            UPDATE machines SET name=$name, base_url=$url, api_key_hash=$key,
+                enabled=$en, poll_interval_seconds=$poll, timeout_ms=$timeout,
+                updated_at=$updated
             WHERE id=$id
             """;
         cmd.Parameters.AddWithValue("$id",      id);
         cmd.Parameters.AddWithValue("$name",    patch.Name);
         cmd.Parameters.AddWithValue("$url",     patch.BaseUrl);
+        cmd.Parameters.AddWithValue("$key",     (object?)patch.ApiKeyHash ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$en",      patch.Enabled ? 1 : 0);
         cmd.Parameters.AddWithValue("$poll",    patch.PollIntervalSeconds);
         cmd.Parameters.AddWithValue("$timeout", patch.TimeoutMs);
@@ -716,6 +738,32 @@ public sealed class DbService : IDisposable
     public async Task UpdateEmailSettingsAsync(EmailNotificationSettingsRecord s, CancellationToken ct = default)
     {
         await EnsureInitialisedAsync(ct);
+
+        // Determine what to store for the password:
+        // • If caller passed an empty string, preserve the existing stored value.
+        // • Otherwise encrypt the new value (falls back to plaintext when no key).
+        string storedPassword;
+        if (string.IsNullOrEmpty(s.SmtpPassword))
+        {
+            // Preserve current stored value (could be encrypted or empty)
+            await using var rc = new SqliteConnection(_connStr);
+            await rc.OpenAsync(ct);
+            await using var rCmd = rc.CreateCommand();
+            rCmd.CommandText = "SELECT smtp_password FROM email_notification_settings WHERE id = 1";
+            storedPassword = (await rCmd.ExecuteScalarAsync(ct) as string) ?? "";
+        }
+        else if (string.IsNullOrEmpty(_settings.SecretKey))
+        {
+            _log.LogWarning(
+                "DRIVECHILL_SECRET_KEY is not set — SMTP password will be stored in plaintext. " +
+                "Set the environment variable to enable AES-256-GCM encryption at rest.");
+            storedPassword = s.SmtpPassword;
+        }
+        else
+        {
+            storedPassword = CredentialEncryption.Encrypt(s.SmtpPassword, _settings.SecretKey);
+        }
+
         await using var conn = new SqliteConnection(_connStr);
         await conn.OpenAsync(ct);
         await using var cmd = conn.CreateCommand();
@@ -730,12 +778,45 @@ public sealed class DbService : IDisposable
         cmd.Parameters.AddWithValue("$host",       s.SmtpHost);
         cmd.Parameters.AddWithValue("$port",       s.SmtpPort);
         cmd.Parameters.AddWithValue("$user",       s.SmtpUsername);
-        cmd.Parameters.AddWithValue("$pass",       s.SmtpPassword);
+        cmd.Parameters.AddWithValue("$pass",       storedPassword);
         cmd.Parameters.AddWithValue("$sender",     s.SenderAddress);
         cmd.Parameters.AddWithValue("$recipients", s.RecipientList);
         cmd.Parameters.AddWithValue("$tls",        s.UseTls ? 1 : 0);
         cmd.Parameters.AddWithValue("$ssl",        s.UseSsl ? 1 : 0);
         await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    /// <summary>
+    /// Returns the decrypted SMTP password for internal use (sending mail).
+    /// Auto-migrates legacy plaintext rows to encrypted form when a key is configured.
+    /// Never call this from API response paths — use GetEmailSettingsAsync + has_password instead.
+    /// </summary>
+    public async Task<string> GetSmtpPasswordAsync(CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT smtp_password FROM email_notification_settings WHERE id = 1";
+        var stored = (await cmd.ExecuteScalarAsync(ct) as string) ?? "";
+
+        if (string.IsNullOrEmpty(stored))
+            return "";
+
+        if (CredentialEncryption.IsEncrypted(stored))
+            return CredentialEncryption.Decrypt(stored, _settings.SecretKey);
+
+        // Legacy plaintext — migrate in place when key is available
+        if (!string.IsNullOrEmpty(_settings.SecretKey))
+        {
+            var encrypted = CredentialEncryption.Encrypt(stored, _settings.SecretKey);
+            await using var upd = conn.CreateCommand();
+            upd.CommandText = "UPDATE email_notification_settings SET smtp_password=$p WHERE id = 1";
+            upd.Parameters.AddWithValue("$p", encrypted);
+            await upd.ExecuteNonQueryAsync(ct);
+        }
+
+        return stored;
     }
 
     // -----------------------------------------------------------------------
@@ -822,6 +903,135 @@ public sealed class DbService : IDisposable
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = "DELETE FROM sessions WHERE token = $tok";
         cmd.Parameters.AddWithValue("$tok", token);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    // -----------------------------------------------------------------------
+    // Push subscriptions
+    // -----------------------------------------------------------------------
+
+    public async Task<List<PushSubscriptionRecord>> GetAllPushSubscriptionsAsync(CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT id, endpoint, p256dh, auth_key, user_agent, created_at, last_used_at FROM push_subscriptions ORDER BY created_at ASC";
+        var results = new List<PushSubscriptionRecord>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            results.Add(ReadPushSub(reader));
+        return results;
+    }
+
+    public async Task<PushSubscriptionRecord?> GetPushSubscriptionAsync(string id, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT id, endpoint, p256dh, auth_key, user_agent, created_at, last_used_at FROM push_subscriptions WHERE id = $id";
+        cmd.Parameters.AddWithValue("$id", id);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct)) return null;
+        return ReadPushSub(reader);
+    }
+
+    public async Task<PushSubscriptionRecord> CreatePushSubscriptionAsync(PushSubscriptionRecord sub, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+
+        // Check for existing subscription with same endpoint (UNIQUE constraint).
+        // Return the existing record rather than creating a phantom duplicate.
+        await using var check = conn.CreateCommand();
+        check.CommandText = "SELECT id, endpoint, p256dh, auth_key, user_agent, created_at, last_used_at FROM push_subscriptions WHERE endpoint = $ep";
+        check.Parameters.AddWithValue("$ep", sub.Endpoint);
+        await using var existingReader = await check.ExecuteReaderAsync(ct);
+        if (await existingReader.ReadAsync(ct))
+            return ReadPushSub(existingReader);
+        await existingReader.DisposeAsync();
+
+        sub.Id        = Guid.NewGuid().ToString();
+        sub.CreatedAt = DateTimeOffset.UtcNow.ToString("o");
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO push_subscriptions (id, endpoint, p256dh, auth_key, user_agent, created_at)
+            VALUES ($id, $ep, $p256, $auth, $ua, $ts)
+            """;
+        cmd.Parameters.AddWithValue("$id",   sub.Id);
+        cmd.Parameters.AddWithValue("$ep",   sub.Endpoint);
+        cmd.Parameters.AddWithValue("$p256", sub.P256dh);
+        cmd.Parameters.AddWithValue("$auth", sub.AuthKey);
+        cmd.Parameters.AddWithValue("$ua",   (object?)sub.UserAgent ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$ts",   sub.CreatedAt);
+        try
+        {
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode == 19)
+        {
+            // Another request inserted the same endpoint after our pre-check.
+            await using var retry = conn.CreateCommand();
+            retry.CommandText = "SELECT id, endpoint, p256dh, auth_key, user_agent, created_at, last_used_at FROM push_subscriptions WHERE endpoint = $ep";
+            retry.Parameters.AddWithValue("$ep", sub.Endpoint);
+            await using var retryReader = await retry.ExecuteReaderAsync(ct);
+            if (await retryReader.ReadAsync(ct))
+                return ReadPushSub(retryReader);
+            throw;
+        }
+        return sub;
+    }
+
+    public async Task<bool> DeletePushSubscriptionAsync(string id, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM push_subscriptions WHERE id = $id";
+        cmd.Parameters.AddWithValue("$id", id);
+        return await cmd.ExecuteNonQueryAsync(ct) > 0;
+    }
+
+    public async Task TouchPushSubscriptionAsync(string id, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE push_subscriptions SET last_used_at=$ts WHERE id = $id";
+        cmd.Parameters.AddWithValue("$ts", DateTimeOffset.UtcNow.ToString("o"));
+        cmd.Parameters.AddWithValue("$id", id);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    private static PushSubscriptionRecord ReadPushSub(SqliteDataReader r) => new()
+    {
+        Id         = r.GetString(0),
+        Endpoint   = r.GetString(1),
+        P256dh     = r.GetString(2),
+        AuthKey    = r.GetString(3),
+        UserAgent  = r.IsDBNull(4) ? null : r.GetString(4),
+        CreatedAt  = r.GetString(5),
+        LastUsedAt = r.IsDBNull(6) ? null : r.GetString(6),
+    };
+
+    // -----------------------------------------------------------------------
+    // Machine last_command_at
+    // -----------------------------------------------------------------------
+
+    public async Task SetMachineLastCommandAsync(string id, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE machines SET last_command_at=$ts, updated_at=$ts WHERE id = $id";
+        var now = DateTimeOffset.UtcNow.ToString("o");
+        cmd.Parameters.AddWithValue("$ts", now);
+        cmd.Parameters.AddWithValue("$id", id);
         await cmd.ExecuteNonQueryAsync(ct);
     }
 

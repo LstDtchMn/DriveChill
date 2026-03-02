@@ -158,6 +158,8 @@ internal static class Program
         builder.Services.AddSingleton<ApiKeyService>();
         builder.Services.AddSingleton<SessionService>();
         builder.Services.AddSingleton<WebhookService>();
+        builder.Services.AddSingleton<EmailNotificationService>();
+        builder.Services.AddSingleton<PushNotificationService>();
         builder.Services.AddSingleton<FanTestService>();
         builder.Services.AddSingleton<WebSocketHub>();
         builder.Services
@@ -166,20 +168,18 @@ internal static class Program
             {
                 AllowAutoRedirect = false,
             });
-        builder.Services
-            .AddHttpClient("machines")
-            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
-            {
-                AllowAutoRedirect = false,
-            });
+        // Note: MachinesController creates its own SocketsHttpHandler per request
+        // to lock DNS resolution and prevent DNS rebinding. No shared "machines" client needed.
 
         // Background worker: polls hardware, broadcasts WebSocket messages
         builder.Services.AddHostedService<SensorWorker>();
 
-        // CORS for Next.js dev server
+        // CORS for Next.js dev server.
+        // AllowCredentials() is required for session cookies to be forwarded on
+        // cross-origin requests from the dev server (port 3000).
         builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
             p.WithOrigins("http://localhost:3000", "http://localhost:8085")
-             .AllowAnyMethod().AllowAnyHeader()));
+             .AllowAnyMethod().AllowAnyHeader().AllowCredentials()));
 
         var app = builder.Build();
 

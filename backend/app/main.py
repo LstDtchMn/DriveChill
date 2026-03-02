@@ -30,6 +30,10 @@ from app.services.logging_service import LoggingService
 from app.services.quiet_hours_service import QuietHoursService
 from app.services.webhook_service import WebhookService
 from app.api.dependencies.auth import require_auth
+from app.db.repositories.push_subscription_repo import PushSubscriptionRepo
+from app.db.repositories.email_notification_repo import EmailNotificationRepo
+from app.services.push_notification_service import PushNotificationService
+from app.services.email_notification_service import EmailNotificationService
 from app.api.routes import sensors, fans, profiles, alerts, settings as settings_route, machines, webhooks
 from app.api.routes import analytics as analytics_route
 from app.api.routes.auth import router as auth_router
@@ -103,18 +107,10 @@ async def lifespan(app: FastAPI):
     await fan_service.load_fan_settings(fan_settings_repo)
     app.state.fan_service = fan_service
 
-    alert_service = AlertService(db)
-    await alert_service.load_rules()
-    app.state.alert_service = alert_service
-    webhook_service = WebhookService(db)
-    await webhook_service.start()
-    app.state.webhook_service = webhook_service
-
     # ------------------------------------------------------------------
-    # Push notification service
+    # Push + Email notification services — created before AlertService so
+    # they can be injected via the constructor (avoids private-attr patching).
     # ------------------------------------------------------------------
-    from app.db.repositories.push_subscription_repo import PushSubscriptionRepo
-    from app.services.push_notification_service import PushNotificationService
     push_sub_repo = PushSubscriptionRepo(db)
     app.state.push_subscription_repo = push_sub_repo
     vapid_claims = {"sub": f"mailto:{settings.vapid_contact_email}"}
@@ -125,19 +121,17 @@ async def lifespan(app: FastAPI):
     )
     app.state.push_notification_service = push_svc
 
-    # ------------------------------------------------------------------
-    # Email notification service
-    # ------------------------------------------------------------------
-    from app.db.repositories.email_notification_repo import EmailNotificationRepo
-    from app.services.email_notification_service import EmailNotificationService
-    email_repo = EmailNotificationRepo(db)
+    email_repo = EmailNotificationRepo(db, secret_key=settings.secret_key)
     app.state.email_notification_repo = email_repo
     email_svc = EmailNotificationService(repo=email_repo)
     app.state.email_notification_service = email_svc
 
-    # Wire push + email into alert service now that both are available
-    alert_service._push_svc = push_svc
-    alert_service._email_svc = email_svc
+    alert_service = AlertService(db, push_notification_service=push_svc, email_svc=email_svc)
+    await alert_service.load_rules()
+    app.state.alert_service = alert_service
+    webhook_service = WebhookService(db)
+    await webhook_service.start()
+    app.state.webhook_service = webhook_service
 
     # ------------------------------------------------------------------
     # Auth service

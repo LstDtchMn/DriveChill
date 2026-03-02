@@ -1,6 +1,10 @@
 using Microsoft.AspNetCore.Mvc;
 using DriveChill.Services;
 using DriveChill.Models;
+using System.Net;
+using System.Net.Security;
+using System.Net.Sockets;
+using System.Text;
 using System.Text.Json;
 
 namespace DriveChill.Api;
@@ -9,15 +13,13 @@ namespace DriveChill.Api;
 [Route("api/machines")]
 public sealed class MachinesController : ControllerBase
 {
-    private readonly DbService           _db;
-    private readonly IHttpClientFactory  _httpFactory;
-    private readonly AppSettings         _settings;
+    private readonly DbService   _db;
+    private readonly AppSettings _settings;
 
-    public MachinesController(DbService db, IHttpClientFactory httpFactory, AppSettings settings)
+    public MachinesController(DbService db, AppSettings settings)
     {
-        _db          = db;
-        _httpFactory = httpFactory;
-        _settings    = settings;
+        _db       = db;
+        _settings = settings;
     }
 
     [HttpGet]
@@ -30,9 +32,9 @@ public sealed class MachinesController : ControllerBase
     [HttpPost]
     public async Task<IActionResult> CreateMachine([FromBody] JsonElement body, CancellationToken ct)
     {
-        var name    = body.TryGetProperty("name",    out var n) ? n.GetString() ?? "" : "";
+        var name    = body.TryGetProperty("name",     out var n) ? n.GetString() ?? "" : "";
         var baseUrl = body.TryGetProperty("base_url", out var u) ? u.GetString() ?? "" : "";
-        var apiKey  = body.TryGetProperty("api_key", out var k) ? k.GetString() : null;
+        var apiKey  = body.TryGetProperty("api_key",  out var k) ? k.GetString() : null;
 
         if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(baseUrl))
             return BadRequest(new { detail = "name and base_url are required" });
@@ -45,7 +47,7 @@ public sealed class MachinesController : ControllerBase
         {
             Name       = name.Trim(),
             BaseUrl    = baseUrl.TrimEnd('/'),
-            ApiKeyHash = apiKey,  // stored as plaintext API key for outbound auth
+            ApiKeyHash = apiKey,
         };
         var created = await _db.CreateMachineAsync(record, ct);
         return Ok(new { machine = ToView(created) });
@@ -68,8 +70,9 @@ public sealed class MachinesController : ControllerBase
 
         var patch = new MachineRecord
         {
-            Name                = body.TryGetProperty("name", out var n)    ? n.GetString() ?? existing.Name   : existing.Name,
+            Name                = body.TryGetProperty("name",    out var n) ? n.GetString() ?? existing.Name   : existing.Name,
             BaseUrl             = body.TryGetProperty("base_url", out var u) ? u.GetString() ?? existing.BaseUrl : existing.BaseUrl,
+            ApiKeyHash          = body.TryGetProperty("api_key", out var k) ? k.GetString() : existing.ApiKeyHash,
             Enabled             = body.TryGetProperty("enabled", out var e) ? (e.ValueKind == JsonValueKind.True) : existing.Enabled,
             PollIntervalSeconds = body.TryGetProperty("poll_interval_seconds", out var p) ? (p.TryGetDouble(out var pd) ? pd : existing.PollIntervalSeconds) : existing.PollIntervalSeconds,
             TimeoutMs           = body.TryGetProperty("timeout_ms", out var t) ? (t.TryGetInt32(out var ti) ? ti : existing.TimeoutMs) : existing.TimeoutMs,
@@ -106,10 +109,9 @@ public sealed class MachinesController : ControllerBase
 
         try
         {
-            using var client = CreateAgentClient(machine);
+            using var client = await BuildProxyClientAsync(machine, ct);
             var resp = await client.GetAsync($"{machine.BaseUrl}/api/health", ct);
             resp.EnsureSuccessStatusCode();
-            var body = await resp.Content.ReadAsStringAsync(ct);
             await _db.UpdateMachineStatusAsync(machineId, "online",
                 DateTimeOffset.UtcNow.ToString("o"), null, 0, null, ct);
             return Ok(new { success = true, status = "online" });
@@ -130,20 +132,22 @@ public sealed class MachinesController : ControllerBase
 
         try
         {
-            using var client = CreateAgentClient(machine);
+            using var client = await BuildProxyClientAsync(machine, ct);
             var profilesTask = client.GetStringAsync($"{machine.BaseUrl}/api/profiles", ct);
             var sensorsTask  = client.GetStringAsync($"{machine.BaseUrl}/api/sensors",  ct);
-            await Task.WhenAll(profilesTask, sensorsTask);
+            var fansTask     = client.GetStringAsync($"{machine.BaseUrl}/api/fans",     ct);
+            await Task.WhenAll(profilesTask, sensorsTask, fansTask);
 
             var profiles = JsonSerializer.Deserialize<JsonElement>(await profilesTask);
             var sensors  = JsonSerializer.Deserialize<JsonElement>(await sensorsTask);
+            var fans     = JsonSerializer.Deserialize<JsonElement>(await fansTask);
             return Ok(new
             {
                 state = new
                 {
                     profiles = profiles.TryGetProperty("profiles", out var p) ? p : default,
-                    fans     = Array.Empty<object>(),
-                    sensors  = sensors.TryGetProperty("readings",  out var s) ? s : default,
+                    fans     = fans.TryGetProperty("fans", out var f) ? f : default,
+                    sensors  = sensors.TryGetProperty("readings", out var s) ? s : default,
                 }
             });
         }
@@ -154,17 +158,20 @@ public sealed class MachinesController : ControllerBase
     }
 
     [HttpPost("{machineId}/profiles/{profileId}/activate")]
-    public async Task<IActionResult> ActivateRemoteProfile(string machineId, string profileId, CancellationToken ct)
+    public async Task<IActionResult> ActivateRemoteProfile(
+        string machineId, string profileId, CancellationToken ct)
     {
         var machine = await _db.GetMachineAsync(machineId, ct);
         if (machine is null) return NotFound(new { detail = "Machine not found" });
 
         try
         {
-            using var client = CreateAgentClient(machine);
-            var resp = await client.PutAsync($"{machine.BaseUrl}/api/profiles/{Uri.EscapeDataString(profileId)}/activate",
-                new StringContent("{}", System.Text.Encoding.UTF8, "application/json"), ct);
+            using var client = await BuildProxyClientAsync(machine, ct);
+            var resp = await client.PutAsync(
+                $"{machine.BaseUrl}/api/profiles/{Uri.EscapeDataString(profileId)}/activate",
+                new StringContent("{}", Encoding.UTF8, "application/json"), ct);
             resp.EnsureSuccessStatusCode();
+            await _db.SetMachineLastCommandAsync(machineId, ct);
             return Ok(new { success = true });
         }
         catch (Exception ex)
@@ -181,10 +188,12 @@ public sealed class MachinesController : ControllerBase
 
         try
         {
-            using var client = CreateAgentClient(machine);
-            var resp = await client.PostAsync($"{machine.BaseUrl}/api/fans/release",
-                new StringContent("{}", System.Text.Encoding.UTF8, "application/json"), ct);
+            using var client = await BuildProxyClientAsync(machine, ct);
+            var resp = await client.PostAsync(
+                $"{machine.BaseUrl}/api/fans/release",
+                new StringContent("{}", Encoding.UTF8, "application/json"), ct);
             resp.EnsureSuccessStatusCode();
+            await _db.SetMachineLastCommandAsync(machineId, ct);
             return Ok(new { success = true });
         }
         catch (Exception ex)
@@ -193,17 +202,129 @@ public sealed class MachinesController : ControllerBase
         }
     }
 
+    [HttpPut("{machineId}/fans/{fanId}/settings")]
+    public async Task<IActionResult> SetRemoteFanSettings(
+        string machineId, string fanId, [FromBody] JsonElement body, CancellationToken ct)
+    {
+        var machine = await _db.GetMachineAsync(machineId, ct);
+        if (machine is null) return NotFound(new { detail = "Machine not found" });
+
+        try
+        {
+            using var client = await BuildProxyClientAsync(machine, ct);
+            var content = new StringContent(body.GetRawText(), Encoding.UTF8, "application/json");
+            var resp = await client.PutAsync(
+                $"{machine.BaseUrl}/api/fans/{Uri.EscapeDataString(fanId)}/settings",
+                content, ct);
+            resp.EnsureSuccessStatusCode();
+            await _db.SetMachineLastCommandAsync(machineId, ct);
+            var responseBody = await resp.Content.ReadAsStringAsync(ct);
+            return Content(responseBody, "application/json");
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(502, new { detail = ex.Message });
+        }
+    }
+
     // -----------------------------------------------------------------------
-    // Helpers
+    // SSRF-safe proxy client
     // -----------------------------------------------------------------------
 
-    private HttpClient CreateAgentClient(MachineRecord machine)
+    /// <summary>
+    /// Resolves the machine's hostname once, validates the resolved IP against SSRF rules,
+    /// then returns an <see cref="HttpClient"/> whose <see cref="SocketsHttpHandler"/> routes
+    /// TCP connections directly to that locked IP — closing the DNS-rebinding window.
+    ///
+    /// For HTTPS the original hostname is still used for TLS SNI (so the server certificate
+    /// can be validated against the hostname the user configured), and the Host header is set
+    /// automatically by HttpClient from the request URI.
+    /// </summary>
+    private async Task<HttpClient> BuildProxyClientAsync(MachineRecord machine, CancellationToken ct)
     {
-        var client = _httpFactory.CreateClient("machines");
-        client.Timeout = TimeSpan.FromMilliseconds(machine.TimeoutMs > 0 ? machine.TimeoutMs : 5000);
+        if (!Uri.TryCreate(machine.BaseUrl, UriKind.Absolute, out var uri))
+            throw new InvalidOperationException("Invalid machine base_url.");
+
+        var timeoutMs    = machine.TimeoutMs > 0 ? machine.TimeoutMs : 5000;
+        var originalHost = uri.DnsSafeHost;
+        var port         = uri.IsDefaultPort
+            ? (uri.Scheme == "https" ? 443 : 80)
+            : uri.Port;
+
+        IPAddress lockedIp;
+        if (_settings.AllowPrivateOutboundTargets)
+        {
+            var addrs = await Dns.GetHostAddressesAsync(originalHost, ct);
+            lockedIp = addrs.FirstOrDefault()
+                       ?? throw new InvalidOperationException($"Cannot resolve host '{originalHost}'.");
+        }
+        else
+        {
+            IPAddress[] addrs;
+            try { addrs = await Dns.GetHostAddressesAsync(originalHost, ct); }
+            catch (SocketException ex)
+            {
+                throw new InvalidOperationException(
+                    $"Cannot resolve host '{originalHost}': {ex.Message}");
+            }
+
+            lockedIp = addrs.FirstOrDefault(ip => !IsPrivateOrLoopback(ip))
+                       ?? throw new InvalidOperationException(
+                           $"Outbound requests to private/loopback addresses are not allowed " +
+                           $"(all resolved addresses for '{originalHost}' are private). " +
+                           $"Set DRIVECHILL_ALLOW_PRIVATE_OUTBOUND_TARGETS=true to override.");
+        }
+
+        var handler = new SocketsHttpHandler
+        {
+            AllowAutoRedirect = false,
+            // Route every TCP connection to the pre-resolved IP — no second DNS lookup.
+            ConnectCallback = async (ctx, cToken) =>
+            {
+                var socket = new Socket(lockedIp.AddressFamily, SocketType.Stream, ProtocolType.Tcp)
+                {
+                    NoDelay = true,
+                };
+                await socket.ConnectAsync(new IPEndPoint(lockedIp, port), cToken);
+                return new NetworkStream(socket, ownsSocket: true);
+            },
+            // For HTTPS, TargetHost tells SslStream which hostname to present in SNI
+            // so the server certificate is validated against the original hostname.
+            SslOptions = new SslClientAuthenticationOptions
+            {
+                TargetHost = originalHost,
+            },
+        };
+
+        var client = new HttpClient(handler, disposeHandler: true)
+        {
+            Timeout = TimeSpan.FromMilliseconds(timeoutMs),
+        };
+
         if (!string.IsNullOrEmpty(machine.ApiKeyHash))
-            client.DefaultRequestHeaders.Add("Authorization", $"Bearer {machine.ApiKeyHash}");
+            client.DefaultRequestHeaders.Authorization =
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", machine.ApiKeyHash);
+
         return client;
+    }
+
+    // -----------------------------------------------------------------------
+
+    private static bool IsPrivateOrLoopback(IPAddress ip)
+    {
+        if (IPAddress.IsLoopback(ip)) return true;
+
+        if (ip.AddressFamily == AddressFamily.InterNetworkV6 && ip.IsIPv4MappedToIPv6)
+            ip = ip.MapToIPv4();
+
+        if (ip.AddressFamily == AddressFamily.InterNetworkV6)
+            return ip.IsIPv6LinkLocal || ip.IsIPv6SiteLocal || ip.Equals(IPAddress.IPv6Loopback);
+
+        var b = ip.GetAddressBytes();
+        return b[0] == 10                                          // 10.0.0.0/8
+            || (b[0] == 172 && b[1] >= 16 && b[1] <= 31)          // 172.16.0.0/12
+            || (b[0] == 192 && b[1] == 168)                        // 192.168.0.0/16
+            || (b[0] == 169 && b[1] == 254);                       // 169.254.0.0/16 link-local
     }
 
     private static object ToView(MachineRecord m) => new

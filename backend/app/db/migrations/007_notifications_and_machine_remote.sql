@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS email_notification_settings (
     smtp_host       TEXT NOT NULL DEFAULT '',
     smtp_port       INTEGER NOT NULL DEFAULT 587,
     smtp_username   TEXT NOT NULL DEFAULT '',
-    smtp_password   TEXT NOT NULL DEFAULT '',   -- stored encrypted via Fernet
+    smtp_password   TEXT NOT NULL DEFAULT '',   -- AES-256-GCM encrypted (v1:...) when DRIVECHILL_SECRET_KEY is set; plaintext fallback otherwise
     sender_address  TEXT NOT NULL DEFAULT '',
     recipient_list  TEXT NOT NULL DEFAULT '[]', -- JSON array of addresses
     use_tls         INTEGER NOT NULL DEFAULT 1,  -- STARTTLS

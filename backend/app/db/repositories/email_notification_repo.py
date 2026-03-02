@@ -3,26 +3,20 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 
 import aiosqlite
 
-_ALLOWED_FIELDS = {
-    "enabled",
-    "smtp_host",
-    "smtp_port",
-    "smtp_username",
-    "smtp_password",
-    "sender_address",
-    "recipient_list",
-    "use_tls",
-    "use_ssl",
-}
+from app.utils.credential_encryption import decrypt, encrypt, is_encrypted
+
+logger = logging.getLogger(__name__)
 
 
 class EmailNotificationRepo:
-    def __init__(self, db: aiosqlite.Connection) -> None:
+    def __init__(self, db: aiosqlite.Connection, secret_key: str = "") -> None:
         self._db = db
+        self._secret_key = secret_key
 
     @staticmethod
     def _row_to_public_dict(row: tuple) -> dict:
@@ -77,47 +71,88 @@ class EmailNotificationRepo:
         return self._row_to_public_dict(row)
 
     async def update(self, **fields: object) -> dict:
-        """Update only the provided fields. Returns updated settings (sans password)."""
-        updates: dict[str, object] = {}
-        for key, value in fields.items():
-            if key not in _ALLOWED_FIELDS:
-                continue
+        """Update email settings. Uses a static UPDATE to avoid dynamic SQL.
 
-            if key == "enabled":
-                updates["enabled"] = int(bool(value))
-            elif key == "smtp_port":
-                updates["smtp_port"] = int(value)  # type: ignore[arg-type]
-            elif key == "use_tls":
-                updates["use_tls"] = int(bool(value))
-            elif key == "use_ssl":
-                updates["use_ssl"] = int(bool(value))
-            elif key == "recipient_list":
-                if isinstance(value, list):
-                    updates["recipient_list"] = json.dumps(value)
-                else:
-                    updates["recipient_list"] = str(value)
-            else:
-                updates[key] = value
-
-        if not updates:
+        Reads the current row first, merges the provided fields, then writes
+        all columns explicitly — eliminates any risk of column-name injection.
+        New smtp_password values are encrypted before storage when a secret_key
+        is configured.
+        Returns updated settings (sans password).
+        """
+        cursor = await self._db.execute(
+            "SELECT enabled, smtp_host, smtp_port, smtp_username, smtp_password, "
+            "sender_address, recipient_list, use_tls, use_ssl "
+            "FROM email_notification_settings WHERE id = 1"
+        )
+        row = await cursor.fetchone()
+        if row is None:
             return await self.get()
 
-        updates["updated_at"] = datetime.now(timezone.utc).isoformat()
-        assignments = ", ".join(f"{k} = ?" for k in updates.keys())
-        values = list(updates.values())
+        enabled, smtp_host, smtp_port, smtp_username, smtp_password, \
+            sender_address, recipient_list, use_tls, use_ssl = row
+
+        if "enabled" in fields:
+            enabled = int(bool(fields["enabled"]))
+        if "smtp_host" in fields:
+            smtp_host = fields["smtp_host"]
+        if "smtp_port" in fields:
+            smtp_port = int(fields["smtp_port"])  # type: ignore[arg-type]
+        if "smtp_username" in fields:
+            smtp_username = fields["smtp_username"]
+        if "smtp_password" in fields:
+            raw = str(fields["smtp_password"])
+            # Encrypt the new password before storing it
+            smtp_password = encrypt(raw, self._secret_key) if raw else raw
+        if "sender_address" in fields:
+            sender_address = fields["sender_address"]
+        if "recipient_list" in fields:
+            rl = fields["recipient_list"]
+            recipient_list = json.dumps(rl) if isinstance(rl, list) else str(rl)
+        if "use_tls" in fields:
+            use_tls = int(bool(fields["use_tls"]))
+        if "use_ssl" in fields:
+            use_ssl = int(bool(fields["use_ssl"]))
+
+        updated_at = datetime.now(timezone.utc).isoformat()
         await self._db.execute(
-            f"UPDATE email_notification_settings SET {assignments} WHERE id = 1",
-            tuple(values),
+            "UPDATE email_notification_settings SET "
+            "enabled=?, smtp_host=?, smtp_port=?, smtp_username=?, smtp_password=?, "
+            "sender_address=?, recipient_list=?, use_tls=?, use_ssl=?, updated_at=? "
+            "WHERE id = 1",
+            (enabled, smtp_host, smtp_port, smtp_username, smtp_password,
+             sender_address, recipient_list, use_tls, use_ssl, updated_at),
         )
         await self._db.commit()
         return await self.get()
 
     async def get_password(self) -> str:
-        """Return the raw smtp_password value (for actual sending)."""
+        """Return the decrypted smtp_password (for actual sending).
+
+        Auto-migrates legacy plaintext rows: on first read after
+        DRIVECHILL_SECRET_KEY is configured, re-encrypts in place.
+        """
         cursor = await self._db.execute(
             "SELECT smtp_password FROM email_notification_settings WHERE id = 1"
         )
         row = await cursor.fetchone()
         if row is None:
             return ""
-        return row[0] or ""
+
+        stored = row[0] or ""
+        if not stored:
+            return ""
+
+        if is_encrypted(stored):
+            return decrypt(stored, self._secret_key)
+
+        # Legacy plaintext row — migrate to encrypted form if key is available
+        if self._secret_key:
+            encrypted = encrypt(stored, self._secret_key)
+            await self._db.execute(
+                "UPDATE email_notification_settings SET smtp_password=? WHERE id = 1",
+                (encrypted,),
+            )
+            await self._db.commit()
+            logger.info("Migrated SMTP password from plaintext to encrypted storage")
+
+        return stored

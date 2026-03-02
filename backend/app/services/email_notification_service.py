@@ -95,7 +95,7 @@ class EmailNotificationService:
                 use_tls=cfg["use_ssl"],
                 start_tls=cfg["use_tls"] and not cfg["use_ssl"],
             ) as smtp:
-                if cfg["smtp_username"]:
+                if cfg["smtp_username"] and password:
                     await smtp.login(cfg["smtp_username"], password)
 
                 msg = EmailMessage()
