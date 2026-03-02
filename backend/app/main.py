@@ -394,11 +394,14 @@ class _SecurityHeadersMiddleware(BaseHTTPMiddleware):
         ws_host = f"localhost:{settings.port}"
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
-            "script-src 'self'; "
-            "style-src 'self' 'unsafe-inline'; "
+            # Next.js static export injects inline bootstrap scripts.
+            "script-src 'self' 'unsafe-inline'; "
+            # Google Fonts stylesheet loaded by the Next.js layout.
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
             "img-src 'self' data:; "
             f"connect-src 'self' ws://{ws_host} wss://{ws_host}; "
-            "font-src 'self'; "
+            # Google Fonts font files.
+            "font-src 'self' https://fonts.gstatic.com; "
             "frame-ancestors 'none'"
         )
         return response
