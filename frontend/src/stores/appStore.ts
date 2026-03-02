@@ -96,9 +96,12 @@ export const useAppStore = create<AppState>((set) => ({
   // Alerts
   alertEvents: [],
   addAlertEvents: (events) =>
-    set((state) => ({
-      alertEvents: [...state.alertEvents, ...events].slice(-100),
-    })),
+    set((state) => {
+      const existing = new Set(state.alertEvents.map((e) => `${e.timestamp}|${e.message}`));
+      const novel = events.filter((e) => !existing.has(`${e.timestamp}|${e.message}`));
+      if (novel.length === 0) return state;
+      return { alertEvents: [...state.alertEvents, ...novel].slice(-100) };
+    }),
   activeAlerts: [],
   setActiveAlerts: (alerts) => set({ activeAlerts: alerts }),
   clearAlerts: () => set({ alertEvents: [], activeAlerts: [] }),

@@ -202,6 +202,10 @@ export function SettingsPage() {
       const resp = await fetch(`${getApiBaseUrl()}/api/sensors/export?hours=24`, {
         credentials: 'include',
       });
+      if (resp.status === 401) {
+        window.dispatchEvent(new Event('drivechill:auth-expired'));
+        return;
+      }
       if (!resp.ok) {
         throw new Error(`Export failed: ${resp.status}`);
       }

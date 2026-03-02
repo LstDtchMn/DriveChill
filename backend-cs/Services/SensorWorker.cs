@@ -78,16 +78,19 @@ public sealed class SensorWorker : BackgroundService
                     var capturedEvents = newEvents;
                     _ = Task.Run(async () =>
                     {
-                        var tasks = new List<Task>
+                        try
                         {
-                            _webhooks.DispatchAlertEventsAsync(capturedEvents, CancellationToken.None),
-                        };
-                        foreach (var evt in capturedEvents)
-                        {
-                            tasks.Add(_email.SendAlertAsync(evt, CancellationToken.None));
-                            tasks.Add(_push.SendAlertAsync(evt, CancellationToken.None));
+                            var tasks = new List<Task>
+                            {
+                                _webhooks.DispatchAlertEventsAsync(capturedEvents, CancellationToken.None),
+                            };
+                            foreach (var evt in capturedEvents)
+                            {
+                                tasks.Add(_email.SendAlertAsync(evt, CancellationToken.None));
+                                tasks.Add(_push.SendAlertAsync(evt, CancellationToken.None));
+                            }
+                            await Task.WhenAll(tasks);
                         }
-                        try { await Task.WhenAll(tasks); }
                         catch (Exception ex) { _log.LogWarning(ex, "Alert delivery error"); }
                     }, CancellationToken.None);
                 }

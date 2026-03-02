@@ -177,16 +177,6 @@ class WebhookService:
         backoff = max(0.1, float(cfg["retry_backoff_seconds"]))
         target_url = str(cfg["target_url"])
         signing_secret = cfg.get("signing_secret") or ""
-        signed_timestamp = str(int(datetime.now(timezone.utc).timestamp()))
-        nonce = secrets.token_hex(16)
-        signature = None
-        if signing_secret:
-            message = f"{signed_timestamp}.{nonce}.".encode("utf-8") + body
-            signature = hmac.new(
-                signing_secret.encode("utf-8"),
-                message,
-                digestmod=hashlib.sha256,
-            ).hexdigest()
 
         for attempt in range(1, max_retries + 2):
             # Re-validate immediately before each request attempt.
@@ -196,12 +186,22 @@ class WebhookService:
                 logger.warning("Webhook target blocked at dispatch time: %s", reason)
                 return
 
+            # Generate fresh timestamp/nonce/signature per attempt so that
+            # receivers implementing replay protection accept retries.
+            signed_timestamp = str(int(datetime.now(timezone.utc).timestamp()))
+            nonce = secrets.token_hex(16)
             headers = {
                 "Content-Type": "application/json",
                 "X-DriveChill-Timestamp": signed_timestamp,
                 "X-DriveChill-Nonce": nonce,
             }
-            if signature:
+            if signing_secret:
+                message = f"{signed_timestamp}.{nonce}.".encode("utf-8") + body
+                signature = hmac.new(
+                    signing_secret.encode("utf-8"),
+                    message,
+                    digestmod=hashlib.sha256,
+                ).hexdigest()
                 headers["X-DriveChill-Signature"] = f"sha256={signature}"
 
             status_code: int | None = None

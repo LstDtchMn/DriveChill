@@ -34,14 +34,18 @@ public sealed class NotificationsController : ControllerBase
     public async Task<IActionResult> UpdateEmailSettings([FromBody] JsonElement body, CancellationToken ct)
     {
         var current = await _db.GetEmailSettingsAsync(ct);
+        var smtpPort = body.TryGetProperty("smtp_port", out var sp) ? sp.GetInt32() : current.SmtpPort;
+        if (smtpPort is < 1 or > 65535)
+            return BadRequest(new { detail = "smtp_port must be between 1 and 65535" });
+
         var s = new EmailNotificationSettingsRecord
         {
             Enabled       = body.TryGetProperty("enabled",        out var en)   ? en.GetBoolean()  : current.Enabled,
             SmtpHost      = body.TryGetProperty("smtp_host",      out var sh)   ? sh.GetString()!  : current.SmtpHost,
-            SmtpPort      = body.TryGetProperty("smtp_port",      out var sp)   ? sp.GetInt32()    : current.SmtpPort,
+            SmtpPort      = smtpPort,
             SmtpUsername  = body.TryGetProperty("smtp_username",  out var su)   ? su.GetString()!  : current.SmtpUsername,
             // Send empty string to preserve existing password; send actual value to update.
-            SmtpPassword  = body.TryGetProperty("smtp_password",  out var spw)  ? spw.GetString()! : "",
+            SmtpPassword  = body.TryGetProperty("smtp_password",  out var spw)  ? spw.GetString() ?? "" : "",
             SenderAddress = body.TryGetProperty("sender_address", out var sa)   ? sa.GetString()!  : current.SenderAddress,
             RecipientList = body.TryGetProperty("recipient_list", out var rl)   ? JsonSerializer.Serialize(rl) : current.RecipientList,
             UseTls        = body.TryGetProperty("use_tls",        out var tls)  ? tls.GetBoolean() : current.UseTls,

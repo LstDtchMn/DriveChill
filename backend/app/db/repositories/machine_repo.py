@@ -169,6 +169,33 @@ class MachineRepo:
         )
         await self._db.commit()
 
+    async def increment_failures(
+        self,
+        machine_id: str,
+        *,
+        status: str,
+        last_error: str | None,
+    ) -> int:
+        """Atomically increment consecutive_failures and return the new value."""
+        await self._db.execute(
+            "UPDATE machines SET status = ?, last_error = ?, "
+            "consecutive_failures = consecutive_failures + 1, "
+            "updated_at = ? WHERE id = ?",
+            (
+                status,
+                last_error,
+                datetime.now(timezone.utc).isoformat(),
+                machine_id,
+            ),
+        )
+        await self._db.commit()
+        cursor = await self._db.execute(
+            "SELECT consecutive_failures FROM machines WHERE id = ?",
+            (machine_id,),
+        )
+        row = await cursor.fetchone()
+        return int(row[0]) if row else 1
+
     async def update_last_command_at(self, machine_id: str, command_at: str) -> None:
         await self._db.execute(
             "UPDATE machines SET last_command_at = ?, updated_at = datetime('now') WHERE id = ?",

@@ -165,18 +165,25 @@ class MachineMonitorService:
             self._backoff_seconds[machine_id] = 2.0
             self._next_allowed_poll[machine_id] = 0.0
         except Exception as exc:
-            failures = int(machine.get("consecutive_failures", 0)) + 1
-            status = self._classify_failure(exc)
-            if status not in {"auth_error", "version_mismatch"}:
-                status = "offline" if failures >= 3 else "degraded"
-            await self._repo.update_health(
+            classified = self._classify_failure(exc)
+            # Use atomic increment to avoid stale-read race under concurrent polls
+            failures = await self._repo.increment_failures(
                 machine_id,
-                status=status,
-                last_seen_at=machine.get("last_seen_at"),
+                status=classified,
                 last_error=_redact_error(exc),
-                consecutive_failures=failures,
             )
-            if status in {"auth_error", "version_mismatch"}:
+            # Reclassify based on actual failure count (network errors escalate)
+            if classified not in {"auth_error", "version_mismatch"}:
+                final_status = "offline" if failures >= 3 else "degraded"
+                if final_status != classified:
+                    await self._repo.update_health(
+                        machine_id,
+                        status=final_status,
+                        last_seen_at=machine.get("last_seen_at"),
+                        last_error=_redact_error(exc),
+                        consecutive_failures=failures,
+                    )
+            if classified in {"auth_error", "version_mismatch"}:
                 backoff = self._backoff_seconds.get(machine_id, 2.0)
                 self._next_allowed_poll[machine_id] = asyncio.get_running_loop().time() + backoff
                 self._backoff_seconds[machine_id] = min(backoff * 2.0, 30.0)

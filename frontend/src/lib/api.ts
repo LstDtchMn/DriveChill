@@ -151,7 +151,7 @@ export const api = {
   deleteSensorLabel: (sensorId: string) =>
     fetchAPI(`/api/sensors/${encodeURIComponent(sensorId)}/label`, { method: 'DELETE' }),
   getHistory: (sensorId?: string, hours = 1) =>
-    fetchAPI<{ data: any[] }>(`/api/sensors/history?hours=${hours}${sensorId ? `&sensor_id=${sensorId}` : ''}`),
+    fetchAPI<{ data: any[] }>(`/api/sensors/history?hours=${hours}${sensorId ? `&sensor_id=${encodeURIComponent(sensorId)}` : ''}`),
 
   // Fans
   getFans: () => fetchAPI<{ fans: string[] }>('/api/fans'),

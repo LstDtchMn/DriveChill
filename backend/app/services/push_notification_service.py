@@ -57,7 +57,7 @@ class PushNotificationService:
         subscriptions = await self._repo.list_all()
         successes = 0
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         for sub in subscriptions:
             try:
                 # webpush() is a blocking HTTP call; offload to a thread so we
@@ -126,7 +126,7 @@ class PushNotificationService:
         }
 
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             await loop.run_in_executor(
                 None,
                 partial(

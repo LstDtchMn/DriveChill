@@ -164,7 +164,7 @@ export function FanCurvesPage() {
       setSelectedCurve(newCurve.id);
       setEditingPoints(newCurve.points);
     } catch {
-      // Handle error
+      alert('Failed to create curve. Check your connection.');
     }
   };
 

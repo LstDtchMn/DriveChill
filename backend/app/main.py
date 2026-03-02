@@ -392,7 +392,7 @@ class _SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "script-src 'self'; "
             "style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data:; "
-            "connect-src 'self' ws: wss:; "
+            "connect-src 'self'; "
             "font-src 'self'; "
             "frame-ancestors 'none'"
         )

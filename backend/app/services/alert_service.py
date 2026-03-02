@@ -10,6 +10,17 @@ from pydantic import BaseModel
 
 from app.models.sensors import SensorReading, SensorType
 
+logger = logging.getLogger(__name__)
+
+
+def _log_task_exception(task: asyncio.Task) -> None:
+    """Done-callback for fire-and-forget tasks: log exceptions instead of losing them."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.warning("Background alert delivery failed: %s", exc)
+
 if TYPE_CHECKING:
     from app.services.push_notification_service import PushNotificationService
     from app.services.email_notification_service import EmailNotificationService
@@ -174,18 +185,20 @@ class AlertService:
                         self._events = self._events[-self._max_events:]
                     # Fire-and-forget: push notification
                     if self._push_svc:
-                        asyncio.create_task(
+                        t = asyncio.create_task(
                             self._push_svc.send_alert(
                                 reading.name, reading.value, rule.threshold
                             )
                         )
+                        t.add_done_callback(_log_task_exception)
                     # Fire-and-forget: email notification
                     if self._email_svc:
-                        asyncio.create_task(
+                        t = asyncio.create_task(
                             self._email_svc.send_alert(
                                 reading.name, reading.value, rule.threshold
                             )
                         )
+                        t.add_done_callback(_log_task_exception)
             else:
                 # Clear alert when condition no longer met
                 self._active_alerts.discard(rule.id)

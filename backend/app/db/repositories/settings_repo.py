@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 import aiosqlite
 
@@ -56,7 +56,7 @@ class SettingsRepo:
         return {row[0]: row[1] for row in rows}
 
     async def set(self, key: str, value: str) -> None:
-        now = datetime.now().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         await self._db.execute(
             "INSERT OR REPLACE INTO settings (key, value, updated_at) "
             "VALUES (?, ?, ?)",
@@ -65,7 +65,7 @@ class SettingsRepo:
         await self._db.commit()
 
     async def set_many(self, items: dict[str, str]) -> None:
-        now = datetime.now().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         for key, value in items.items():
             await self._db.execute(
                 "INSERT OR REPLACE INTO settings (key, value, updated_at) "
@@ -80,7 +80,6 @@ class SettingsRepo:
         M-5: single INSERT OR IGNORE batch instead of N sequential
         SELECT+INSERT round-trips on every startup.
         """
-        from datetime import timezone
         now = datetime.now(timezone.utc).isoformat()
         await self._db.executemany(
             "INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)",

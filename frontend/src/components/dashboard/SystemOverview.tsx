@@ -22,7 +22,8 @@ export function SystemOverview() {
   const sensorLabels = useSettingsStore((s) => s.sensorLabels);
   const tempUnit = useSettingsStore((s) => s.tempUnit);
   const [machines, setMachines] = useState<MachineInfo[]>([]);
-  const [selectedMachine, setSelectedMachine] = useState<MachineInfo | null>(null);
+  const [selectedMachineId, setSelectedMachineId] = useState<string | null>(null);
+  const selectedMachine = selectedMachineId ? machines.find(m => m.id === selectedMachineId) ?? null : null;
 
   useEffect(() => {
     let mounted = true;
@@ -66,7 +67,7 @@ export function SystemOverview() {
   };
 
   if (selectedMachine !== null) {
-    return <MachineDrillIn machine={selectedMachine} onClose={() => setSelectedMachine(null)} />;
+    return <MachineDrillIn machine={selectedMachine} onClose={() => setSelectedMachineId(null)} />;
   }
 
   return (
@@ -81,7 +82,7 @@ export function SystemOverview() {
                 <div
                   key={machine.id}
                   className="card p-4 animate-card-enter"
-                  onClick={() => setSelectedMachine(machine)}
+                  onClick={() => setSelectedMachineId(machine.id)}
                   style={{ cursor: 'pointer', transition: 'opacity 0.15s' }}
                   onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.opacity = '0.8'; }}
                   onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.opacity = '1'; }}
