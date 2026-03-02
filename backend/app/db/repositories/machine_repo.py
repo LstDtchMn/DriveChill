@@ -168,3 +168,10 @@ class MachineRepo:
             ),
         )
         await self._db.commit()
+
+    async def update_last_command_at(self, machine_id: str, command_at: str) -> None:
+        await self._db.execute(
+            "UPDATE machines SET last_command_at = ?, updated_at = datetime('now') WHERE id = ?",
+            (command_at, machine_id),
+        )
+        await self._db.commit()

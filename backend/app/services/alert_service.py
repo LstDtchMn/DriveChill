@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 import aiosqlite
 from pydantic import BaseModel
 
 from app.models.sensors import SensorReading, SensorType
+
+if TYPE_CHECKING:
+    from app.services.push_notification_service import PushNotificationService
+    from app.services.email_notification_service import EmailNotificationService
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +42,15 @@ class AlertEvent(BaseModel):
 class AlertService:
     """Monitors sensor readings and triggers alerts when thresholds are exceeded."""
 
-    def __init__(self, db: aiosqlite.Connection | None = None) -> None:
+    def __init__(
+        self,
+        db: aiosqlite.Connection | None = None,
+        push_notification_service: PushNotificationService | None = None,
+        email_svc: EmailNotificationService | None = None,
+    ) -> None:
         self._db = db
+        self._push_svc = push_notification_service
+        self._email_svc = email_svc
         self._rules: list[AlertRule] = []
         self._events: list[AlertEvent] = []
         self._active_alerts: set[str] = set()  # rule IDs currently triggered
@@ -159,6 +172,20 @@ class AlertService:
                     # Trim old events
                     if len(self._events) > self._max_events:
                         self._events = self._events[-self._max_events:]
+                    # Fire-and-forget: push notification
+                    if self._push_svc:
+                        asyncio.create_task(
+                            self._push_svc.send_alert(
+                                reading.name, reading.value, rule.threshold
+                            )
+                        )
+                    # Fire-and-forget: email notification
+                    if self._email_svc:
+                        asyncio.create_task(
+                            self._email_svc.send_alert(
+                                reading.name, reading.value, rule.threshold
+                            )
+                        )
             else:
                 # Clear alert when condition no longer met
                 self._active_alerts.discard(rule.id)

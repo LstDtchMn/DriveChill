@@ -274,6 +274,51 @@ export const api = {
       `/api/machines/${encodeURIComponent(machineId)}/verify`,
       { method: 'POST' }
     ),
+  getMachineState: (machineId: string) =>
+    fetchAPI<{ state: import('./types').MachineRemoteState }>(`/api/machines/${encodeURIComponent(machineId)}/state`),
+  activateRemoteProfile: (machineId: string, profileId: string) =>
+    fetchAPI<{ success: boolean }>(`/api/machines/${encodeURIComponent(machineId)}/profiles/${encodeURIComponent(profileId)}/activate`, { method: 'POST' }),
+  releaseRemoteFans: (machineId: string) =>
+    fetchAPI<{ success: boolean }>(`/api/machines/${encodeURIComponent(machineId)}/fans/release`, { method: 'POST' }),
+  updateRemoteFanSettings: (machineId: string, fanId: string, settings: { min_speed_pct?: number; zero_rpm_capable?: boolean }) =>
+    fetchAPI<{ success: boolean }>(`/api/machines/${encodeURIComponent(machineId)}/fans/${encodeURIComponent(fanId)}/settings`, {
+      method: 'PUT',
+      body: JSON.stringify(settings),
+    }),
+
+  // Notifications (push subscriptions + email)
+  notifications: {
+    // Push subscriptions
+    listPushSubscriptions: () =>
+      fetchAPI<{ subscriptions: import('./types').PushSubscription[] }>('/api/notifications/push-subscriptions'),
+    createPushSubscription: (sub: { endpoint: string; p256dh: string; auth: string; user_agent?: string }) =>
+      fetchAPI<{ success: boolean; subscription: import('./types').PushSubscription }>('/api/notifications/push-subscriptions', {
+        method: 'POST',
+        body: JSON.stringify(sub),
+      }),
+    deletePushSubscription: (id: string) =>
+      fetchAPI<{ success: boolean }>(`/api/notifications/push-subscriptions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    testPushSubscription: (subscriptionId: string) =>
+      fetchAPI<{ success: boolean }>('/api/notifications/push-subscriptions/test', {
+        method: 'POST',
+        body: JSON.stringify({ subscription_id: subscriptionId }),
+      }),
+    // Email
+    getEmailSettings: () =>
+      fetchAPI<{ settings: import('./types').EmailNotificationSettings }>('/api/notifications/email'),
+    updateEmailSettings: (settings: Partial<{
+      enabled: boolean; smtp_host: string; smtp_port: number;
+      smtp_username: string; smtp_password: string;
+      sender_address: string; recipient_list: string[];
+      use_tls: boolean; use_ssl: boolean;
+    }>) =>
+      fetchAPI<{ success: boolean; settings: import('./types').EmailNotificationSettings }>('/api/notifications/email', {
+        method: 'PUT',
+        body: JSON.stringify(settings),
+      }),
+    testEmail: () =>
+      fetchAPI<{ success: boolean; error: string | null }>('/api/notifications/email/test', { method: 'POST' }),
+  },
 
   // API keys (agent-to-hub auth)
   listApiKeys: () =>

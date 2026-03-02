@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 
@@ -185,4 +186,112 @@ async def verify_machine(machine_id: str, request: Request):
     if machine is None:
         raise HTTPException(status_code=404, detail="Machine not found")
     result = await monitor.verify_machine(machine)
+    return result
+
+
+class RemoteFanSettingsRequest(BaseModel):
+    min_speed_pct: float | None = Field(default=None, ge=0, le=100)
+    zero_rpm_capable: bool | None = None
+
+
+@router.get("/{machine_id}/state")
+async def get_machine_state(machine_id: str, request: Request):
+    """Fetch full remote state: profiles, fans, sensors."""
+    repo = request.app.state.machine_repo
+    monitor = request.app.state.machine_monitor_service
+    machine = await repo.get(machine_id)
+    if machine is None:
+        raise HTTPException(status_code=404, detail="Machine not found")
+    try:
+        state = await monitor.get_remote_state(machine)
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Remote agent returned {exc.response.status_code}",
+        ) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    await repo.update_last_command_at(machine_id, datetime.now(timezone.utc).isoformat())
+    return {"state": state}
+
+
+@router.post("/{machine_id}/profiles/{profile_id}/activate", dependencies=[Depends(require_csrf)])
+async def activate_remote_profile(machine_id: str, profile_id: str, request: Request):
+    """Activate a profile on a remote agent."""
+    repo = request.app.state.machine_repo
+    monitor = request.app.state.machine_monitor_service
+    machine = await repo.get(machine_id)
+    if machine is None:
+        raise HTTPException(status_code=404, detail="Machine not found")
+    try:
+        result = await monitor.send_command(
+            machine,
+            "POST",
+            f"/api/profiles/{profile_id}/activate",
+        )
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Remote agent returned {exc.response.status_code}",
+        ) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    await repo.update_last_command_at(machine_id, datetime.now(timezone.utc).isoformat())
+    return result
+
+
+@router.post("/{machine_id}/fans/release", dependencies=[Depends(require_csrf)])
+async def release_remote_fans(machine_id: str, request: Request):
+    """Release fan control on a remote agent."""
+    repo = request.app.state.machine_repo
+    monitor = request.app.state.machine_monitor_service
+    machine = await repo.get(machine_id)
+    if machine is None:
+        raise HTTPException(status_code=404, detail="Machine not found")
+    try:
+        result = await monitor.send_command(machine, "POST", "/api/fans/release")
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Remote agent returned {exc.response.status_code}",
+        ) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    await repo.update_last_command_at(machine_id, datetime.now(timezone.utc).isoformat())
+    return result
+
+
+@router.put("/{machine_id}/fans/{fan_id}/settings", dependencies=[Depends(require_csrf)])
+async def update_remote_fan_settings(
+    machine_id: str, fan_id: str, body: RemoteFanSettingsRequest, request: Request
+):
+    """Update fan settings on a remote agent."""
+    repo = request.app.state.machine_repo
+    monitor = request.app.state.machine_monitor_service
+    machine = await repo.get(machine_id)
+    if machine is None:
+        raise HTTPException(status_code=404, detail="Machine not found")
+    payload = {
+        k: v
+        for k, v in {
+            "min_speed_pct": body.min_speed_pct,
+            "zero_rpm_capable": body.zero_rpm_capable,
+        }.items()
+        if v is not None
+    }
+    try:
+        result = await monitor.send_command(
+            machine,
+            "PUT",
+            f"/api/fans/{fan_id}/settings",
+            body=payload,
+        )
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Remote agent returned {exc.response.status_code}",
+        ) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    await repo.update_last_command_at(machine_id, datetime.now(timezone.utc).isoformat())
     return result

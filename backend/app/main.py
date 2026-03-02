@@ -33,6 +33,7 @@ from app.api.dependencies.auth import require_auth
 from app.api.routes import sensors, fans, profiles, alerts, settings as settings_route, machines, webhooks
 from app.api.routes.auth import router as auth_router
 from app.api.routes.quiet_hours import router as quiet_hours_router
+from app.api.routes.notifications import router as notifications_router
 from app.api.websocket import router as ws_router
 
 logger = logging.getLogger(__name__)
@@ -107,6 +108,35 @@ async def lifespan(app: FastAPI):
     webhook_service = WebhookService(db)
     await webhook_service.start()
     app.state.webhook_service = webhook_service
+
+    # ------------------------------------------------------------------
+    # Push notification service
+    # ------------------------------------------------------------------
+    from app.db.repositories.push_subscription_repo import PushSubscriptionRepo
+    from app.services.push_notification_service import PushNotificationService
+    push_sub_repo = PushSubscriptionRepo(db)
+    app.state.push_subscription_repo = push_sub_repo
+    vapid_claims = {"sub": f"mailto:{settings.vapid_contact_email}"}
+    push_svc = PushNotificationService(
+        repo=push_sub_repo,
+        vapid_private_key=settings.vapid_private_key,
+        vapid_claims=vapid_claims,
+    )
+    app.state.push_notification_service = push_svc
+
+    # ------------------------------------------------------------------
+    # Email notification service
+    # ------------------------------------------------------------------
+    from app.db.repositories.email_notification_repo import EmailNotificationRepo
+    from app.services.email_notification_service import EmailNotificationService
+    email_repo = EmailNotificationRepo(db)
+    app.state.email_notification_repo = email_repo
+    email_svc = EmailNotificationService(repo=email_repo)
+    app.state.email_notification_service = email_svc
+
+    # Wire push + email into alert service now that both are available
+    alert_service._push_svc = push_svc
+    alert_service._email_svc = email_svc
 
     # ------------------------------------------------------------------
     # Auth service
@@ -363,6 +393,7 @@ app.include_router(alerts.router, dependencies=_auth_deps)
 app.include_router(settings_route.router, dependencies=_auth_deps)
 app.include_router(machines.router, dependencies=_auth_deps)
 app.include_router(webhooks.router, dependencies=_auth_deps)
+app.include_router(notifications_router, dependencies=_auth_deps)
 app.include_router(quiet_hours_router, dependencies=_auth_deps)
 # WebSocket auth is handled inside the endpoint (require_ws_auth) because
 # router-level Depends(require_auth) injects Request, which fails for WS.

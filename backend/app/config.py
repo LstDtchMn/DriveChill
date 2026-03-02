@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     force_auth: bool = False  # DRIVECHILL_FORCE_AUTH - force auth even on localhost
     allow_private_outbound_targets: bool = False  # DRIVECHILL_ALLOW_PRIVATE_OUTBOUND_TARGETS
 
+    # VAPID keys for Web Push notifications
+    vapid_private_key: str = ""  # DRIVECHILL_VAPID_PRIVATE_KEY
+    vapid_public_key: str = ""   # DRIVECHILL_VAPID_PUBLIC_KEY
+    vapid_contact_email: str = "admin@localhost"  # DRIVECHILL_VAPID_CONTACT_EMAIL
+
     model_config = {"env_prefix": "DRIVECHILL_"}
 
     @model_validator(mode="after")

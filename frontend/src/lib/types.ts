@@ -127,6 +127,26 @@ export interface MachineSnapshot {
   summary?: MachineSnapshotSummary;
 }
 
+export interface RemoteProfile {
+  id: string;
+  name: string;
+  preset: string;
+  is_active: boolean;
+}
+
+export interface RemoteFan {
+  id: string;
+  name: string;
+  speed_percent: number | null;
+  rpm: number | null;
+}
+
+export interface MachineRemoteState {
+  profiles: RemoteProfile[];
+  fans: RemoteFan[];
+  sensors: SensorReading[];
+}
+
 export interface MachineInfo {
   id: string;
   name: string;
@@ -144,6 +164,8 @@ export interface MachineInfo {
   updated_at: string;
   freshness_seconds: number | null;
   snapshot: MachineSnapshot | null;
+  capabilities: string[];
+  last_command_at: string | null;
 }
 
 export interface ApiKeyInfo {
@@ -189,3 +211,24 @@ export interface WSMessage {
 }
 
 export type Page = 'dashboard' | 'curves' | 'alerts' | 'settings';
+
+export interface PushSubscription {
+  id: string;
+  endpoint: string;
+  user_agent: string | null;
+  created_at: string;
+  last_used_at: string | null;
+}
+
+export interface EmailNotificationSettings {
+  enabled: boolean;
+  smtp_host: string;
+  smtp_port: number;
+  smtp_username: string;
+  has_password: boolean;
+  sender_address: string;
+  recipient_list: string[];
+  use_tls: boolean;
+  use_ssl: boolean;
+  updated_at: string;
+}

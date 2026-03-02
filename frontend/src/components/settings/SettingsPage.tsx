@@ -7,7 +7,7 @@ import { useSettingsStore } from '@/stores/settingsStore';
 import { useSensors } from '@/hooks/useSensors';
 import type { TempUnit } from '@/lib/tempUnit';
 import { requestNotificationPermission } from '@/hooks/useNotifications';
-import type { ApiKeyInfo, MachineInfo, WebhookConfig, WebhookDelivery } from '@/lib/types';
+import type { ApiKeyInfo, MachineInfo, WebhookConfig, WebhookDelivery, PushSubscription, EmailNotificationSettings } from '@/lib/types';
 import { Save, RefreshCw, Download, Info, Pencil, X, Check, Bell, BellOff } from 'lucide-react';
 
 interface AppSettings {
@@ -54,6 +54,13 @@ export function SettingsPage() {
   const [webhookDeliveriesOffset, setWebhookDeliveriesOffset] = useState(0);
   const [webhookDeliveriesLoading, setWebhookDeliveriesLoading] = useState(false);
   const [appVersion, setAppVersion] = useState('...');
+  const [pushSubs, setPushSubs] = useState<PushSubscription[]>([]);
+  const [pushSubsBusy, setPushSubsBusy] = useState<Set<string>>(new Set());
+  const [subscribing, setSubscribing] = useState(false);
+  const [emailSettings, setEmailSettings] = useState<EmailNotificationSettings | null>(null);
+  const [emailPasswordInput, setEmailPasswordInput] = useState('');
+  const [emailSaving, setEmailSaving] = useState(false);
+  const [emailTestResult, setEmailTestResult] = useState<string | null>(null);
 
   useEffect(() => {
     api.health().then((h) => setAppVersion(h.version || '?')).catch(() => setAppVersion('?'));
@@ -148,11 +155,27 @@ export function SettingsPage() {
     }
   };
 
+  const fetchPushSubs = async () => {
+    try {
+      const data = await api.notifications.listPushSubscriptions();
+      setPushSubs(data.subscriptions);
+    } catch { setPushSubs([]); }
+  };
+
+  const fetchEmailSettings = async () => {
+    try {
+      const data = await api.notifications.getEmailSettings();
+      setEmailSettings(data.settings);
+    } catch { setEmailSettings(null); }
+  };
+
   useEffect(() => {
     fetchMachines();
     fetchApiKeys();
     fetchWebhook();
     fetchWebhookDeliveries(0);
+    fetchPushSubs();
+    fetchEmailSettings();
   }, []);
 
   const handleSave = async () => {
@@ -320,6 +343,50 @@ export function SettingsPage() {
     }
   };
 
+  const handleDeletePushSub = async (id: string) => {
+    setPushSubsBusy((prev) => new Set(prev).add(id));
+    try {
+      await api.notifications.deletePushSubscription(id);
+      await fetchPushSubs();
+    } catch { alert('Failed to remove subscription.'); }
+    finally {
+      setPushSubsBusy((prev) => { const n = new Set(prev); n.delete(id); return n; });
+    }
+  };
+
+  const handleTestPushSub = async (id: string) => {
+    try {
+      const r = await api.notifications.testPushSubscription(id);
+      if (!r.success) alert('Test push failed — check server logs.');
+      else alert('Test push sent!');
+    } catch { alert('Test push failed.'); }
+  };
+
+  const handleSaveEmailSettings = async () => {
+    if (!emailSettings) return;
+    setEmailSaving(true);
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const payload: any = { ...emailSettings };
+      delete payload.has_password;
+      delete payload.updated_at;
+      if (emailPasswordInput) payload.smtp_password = emailPasswordInput;
+      else delete payload.smtp_password;
+      const data = await api.notifications.updateEmailSettings(payload);
+      setEmailSettings(data.settings);
+      setEmailPasswordInput('');
+    } catch { alert('Failed to save email settings.'); }
+    finally { setEmailSaving(false); }
+  };
+
+  const handleTestEmail = async () => {
+    try {
+      const r = await api.notifications.testEmail();
+      setEmailTestResult(r.success ? 'Test email sent!' : (r.error || 'Send failed.'));
+      setTimeout(() => setEmailTestResult(null), 5000);
+    } catch { setEmailTestResult('Failed to send test email.'); setTimeout(() => setEmailTestResult(null), 5000); }
+  };
+
   const handleCopyIssuedKey = async () => {
     if (!issuedApiKey) return;
     try {
@@ -464,6 +531,206 @@ export function SettingsPage() {
             </span>
           )}
         </div>
+      </div>
+
+      {/* Web Push Notifications */}
+      <div className="card p-6 animate-card-enter">
+        <h3 className="text-base font-semibold mb-2" style={{ color: 'var(--text)' }}>Web Push Notifications</h3>
+        <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
+          Receive push notifications in this browser when alerts trigger. Requires a service worker and VAPID keys configured on the server.
+        </p>
+        <div className="flex items-center gap-3 mb-4">
+          <button
+            onClick={fetchPushSubs}
+            disabled={subscribing}
+            className="btn-secondary text-sm flex items-center gap-2"
+          >
+            <RefreshCw size={14} />
+            Refresh subscriptions
+          </button>
+        </div>
+        {pushSubs.length === 0 ? (
+          <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>No push subscriptions registered.</p>
+        ) : (
+          <div className="space-y-2">
+            {pushSubs.map((sub) => (
+              <div
+                key={sub.id}
+                className="rounded-lg px-3 py-2"
+                style={{ background: 'var(--bg)', border: '1px solid var(--border)' }}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-xs font-mono truncate" style={{ color: 'var(--text)' }}>
+                      {sub.endpoint.length > 60 ? sub.endpoint.slice(0, 60) + '…' : sub.endpoint}
+                    </p>
+                    {sub.user_agent && (
+                      <p className="text-xs truncate" style={{ color: 'var(--text-secondary)' }}>{sub.user_agent}</p>
+                    )}
+                    <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                      Added {new Date(sub.created_at).toLocaleDateString()}
+                    </p>
+                  </div>
+                  <div className="flex gap-2 shrink-0">
+                    <button
+                      onClick={() => handleTestPushSub(sub.id)}
+                      disabled={pushSubsBusy.has(sub.id)}
+                      className="btn-secondary text-xs px-2 py-1"
+                    >
+                      Test
+                    </button>
+                    <button
+                      onClick={() => handleDeletePushSub(sub.id)}
+                      disabled={pushSubsBusy.has(sub.id)}
+                      className="btn-secondary text-xs px-2 py-1"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Email Notifications */}
+      <div className="card p-6 animate-card-enter">
+        <h3 className="text-base font-semibold mb-2" style={{ color: 'var(--text)' }}>Email Notifications</h3>
+        <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
+          Send alert emails via SMTP when temperature thresholds are exceeded.
+        </p>
+        {emailSettings && (
+          <div className="space-y-3">
+            <label className="flex items-center gap-2 text-sm" style={{ color: 'var(--text)' }}>
+              <input
+                type="checkbox"
+                checked={emailSettings.enabled}
+                onChange={(e) => setEmailSettings({ ...emailSettings, enabled: e.target.checked })}
+              />
+              Enabled
+            </label>
+            <div>
+              <label className="text-xs font-medium mb-1 block" style={{ color: 'var(--text-secondary)' }}>SMTP Host</label>
+              <input
+                type="text"
+                value={emailSettings.smtp_host}
+                onChange={(e) => setEmailSettings({ ...emailSettings, smtp_host: e.target.value })}
+                placeholder="smtp.example.com"
+                className="w-full px-3 py-2 rounded-lg text-sm border outline-none"
+                style={{ background: 'var(--bg)', borderColor: 'var(--border)', color: 'var(--text)' }}
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium mb-1 block" style={{ color: 'var(--text-secondary)' }}>SMTP Port</label>
+              <input
+                type="number"
+                value={emailSettings.smtp_port}
+                onChange={(e) => setEmailSettings({ ...emailSettings, smtp_port: Number(e.target.value) })}
+                className="w-full px-3 py-2 rounded-lg text-sm border outline-none"
+                style={{ background: 'var(--bg)', borderColor: 'var(--border)', color: 'var(--text)' }}
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium mb-1 block" style={{ color: 'var(--text-secondary)' }}>SMTP Username</label>
+              <input
+                type="text"
+                value={emailSettings.smtp_username}
+                onChange={(e) => setEmailSettings({ ...emailSettings, smtp_username: e.target.value })}
+                placeholder="user@example.com"
+                className="w-full px-3 py-2 rounded-lg text-sm border outline-none"
+                style={{ background: 'var(--bg)', borderColor: 'var(--border)', color: 'var(--text)' }}
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium mb-1 block" style={{ color: 'var(--text-secondary)' }}>
+                SMTP Password{' '}
+                <span style={{ color: emailSettings.has_password ? 'var(--success)' : 'var(--text-secondary)' }}>
+                  ({emailSettings.has_password ? 'Password set' : 'No password set'})
+                </span>
+              </label>
+              <input
+                type="password"
+                value={emailPasswordInput}
+                onChange={(e) => setEmailPasswordInput(e.target.value)}
+                placeholder="Leave blank to keep existing"
+                className="w-full px-3 py-2 rounded-lg text-sm border outline-none"
+                style={{ background: 'var(--bg)', borderColor: 'var(--border)', color: 'var(--text)' }}
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium mb-1 block" style={{ color: 'var(--text-secondary)' }}>Sender Address</label>
+              <input
+                type="text"
+                value={emailSettings.sender_address}
+                onChange={(e) => setEmailSettings({ ...emailSettings, sender_address: e.target.value })}
+                placeholder="drivechill@example.com"
+                className="w-full px-3 py-2 rounded-lg text-sm border outline-none"
+                style={{ background: 'var(--bg)', borderColor: 'var(--border)', color: 'var(--text)' }}
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium mb-1 block" style={{ color: 'var(--text-secondary)' }}>Recipients (comma-separated)</label>
+              <input
+                type="text"
+                value={emailSettings.recipient_list.join(', ')}
+                onChange={(e) => setEmailSettings({
+                  ...emailSettings,
+                  recipient_list: e.target.value.split(',').map((s) => s.trim()).filter(Boolean),
+                })}
+                placeholder="admin@example.com, ops@example.com"
+                className="w-full px-3 py-2 rounded-lg text-sm border outline-none"
+                style={{ background: 'var(--bg)', borderColor: 'var(--border)', color: 'var(--text)' }}
+              />
+            </div>
+            <div className="flex gap-4">
+              <label className="flex items-center gap-2 text-sm" style={{ color: 'var(--text)' }}>
+                <input
+                  type="checkbox"
+                  checked={emailSettings.use_tls}
+                  onChange={(e) => setEmailSettings({ ...emailSettings, use_tls: e.target.checked })}
+                />
+                STARTTLS (port 587)
+              </label>
+              <label className="flex items-center gap-2 text-sm" style={{ color: 'var(--text)' }}>
+                <input
+                  type="checkbox"
+                  checked={emailSettings.use_ssl}
+                  onChange={(e) => setEmailSettings({ ...emailSettings, use_ssl: e.target.checked })}
+                />
+                SSL/TLS (port 465)
+              </label>
+            </div>
+            <div className="flex items-center gap-3 pt-1">
+              <button
+                onClick={handleSaveEmailSettings}
+                disabled={emailSaving}
+                className="btn-primary text-sm px-4"
+              >
+                {emailSaving ? 'Saving...' : 'Save Email Settings'}
+              </button>
+              <button
+                onClick={handleTestEmail}
+                className="btn-secondary text-sm px-4"
+              >
+                Send Test Email
+              </button>
+            </div>
+            {emailTestResult && (
+              <p
+                className="text-xs"
+                style={{ color: emailTestResult.toLowerCase().includes('sent') ? 'var(--success)' : 'var(--danger)' }}
+              >
+                {emailTestResult}
+              </p>
+            )}
+          </div>
+        )}
+        {!emailSettings && (
+          <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+            Email settings unavailable — check server connectivity.
+          </p>
+        )}
       </div>
 
       {/* Sensor Labels */}

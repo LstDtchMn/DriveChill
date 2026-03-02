@@ -193,6 +193,55 @@ class MachineMonitorService:
             return "version_mismatch"
         return "degraded"
 
+    async def send_command(
+        self,
+        machine: dict,
+        method: str,
+        path: str,
+        body: dict | None = None,
+        timeout_override: float | None = None,
+    ) -> dict:
+        """Proxy a command to a remote agent. Returns the parsed JSON response.
+        Raises httpx.HTTPStatusError on non-2xx, RuntimeError on URL block."""
+        if not self._client:
+            raise RuntimeError("Machine monitor client is not initialized")
+
+        base_url = machine["base_url"].rstrip("/")
+        timeout = timeout_override or (float(machine["timeout_ms"]) / 1000.0)
+
+        ok, reason = validate_outbound_url_at_request_time(
+            base_url,
+            allow_private=settings.allow_private_outbound_targets,
+        )
+        if not ok:
+            raise RuntimeError(f"URL blocked: {reason}")
+
+        headers: dict[str, str] = {}
+        if machine.get("api_key"):
+            headers["Authorization"] = f"Bearer {machine['api_key']}"
+
+        url = f"{base_url}{path}"
+        response = await self._client.request(
+            method=method.upper(),
+            url=url,
+            json=body,
+            headers=headers,
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def get_remote_state(self, machine: dict) -> dict:
+        """Fetch full remote state: profiles, fans, sensors."""
+        profiles = await self.send_command(machine, "GET", "/api/profiles")
+        fans = await self.send_command(machine, "GET", "/api/fans")
+        sensors = await self.send_command(machine, "GET", "/api/sensors")
+        return {
+            "profiles": profiles.get("profiles", []),
+            "fans": fans.get("fans", []),
+            "sensors": sensors.get("readings", []),
+        }
+
     async def _fetch_remote(self, machine: dict) -> dict:
         if not self._client:
             raise RuntimeError("Machine monitor client is not initialized")

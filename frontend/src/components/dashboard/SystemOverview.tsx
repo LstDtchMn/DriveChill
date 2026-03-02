@@ -5,6 +5,7 @@ import { Cpu, Monitor, HardDrive, Thermometer } from 'lucide-react';
 import { TempGauge } from './TempGauge';
 import { FanSpeedCard } from './FanSpeedCard';
 import { TempChart } from './TempChart';
+import { MachineDrillIn } from './MachineDrillIn';
 import { useSensors } from '@/hooks/useSensors';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { api } from '@/lib/api';
@@ -21,6 +22,7 @@ export function SystemOverview() {
   const sensorLabels = useSettingsStore((s) => s.sensorLabels);
   const tempUnit = useSettingsStore((s) => s.tempUnit);
   const [machines, setMachines] = useState<MachineInfo[]>([]);
+  const [selectedMachine, setSelectedMachine] = useState<MachineInfo | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -63,6 +65,10 @@ export function SystemOverview() {
     unknown: 'badge-warning',
   };
 
+  if (selectedMachine !== null) {
+    return <MachineDrillIn machine={selectedMachine} onClose={() => setSelectedMachine(null)} />;
+  }
+
   return (
     <div className="space-y-6 animate-fade-in">
       {machines.length > 0 && (
@@ -72,7 +78,14 @@ export function SystemOverview() {
             {machines.map((machine) => {
               const summary = machine.snapshot?.summary;
               return (
-                <div key={machine.id} className="card p-4 animate-card-enter">
+                <div
+                  key={machine.id}
+                  className="card p-4 animate-card-enter"
+                  onClick={() => setSelectedMachine(machine)}
+                  style={{ cursor: 'pointer', transition: 'opacity 0.15s' }}
+                  onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.opacity = '0.8'; }}
+                  onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.opacity = '1'; }}
+                >
                   <div className="flex items-center justify-between gap-2 mb-2">
                     <p className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
                       {machine.name}
