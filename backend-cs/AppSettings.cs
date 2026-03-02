@@ -63,4 +63,21 @@ public sealed class AppSettings
             "true",
             StringComparison.OrdinalIgnoreCase
         );
+
+    public string? SslCertFile =>
+        string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DRIVECHILL_SSL_CERTFILE"))
+            ? null
+            : Environment.GetEnvironmentVariable("DRIVECHILL_SSL_CERTFILE")!.Trim();
+
+    public string? SslKeyFile =>
+        string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DRIVECHILL_SSL_KEYFILE"))
+            ? null
+            : Environment.GetEnvironmentVariable("DRIVECHILL_SSL_KEYFILE")!.Trim();
+
+    public bool SslGenerateSelfSigned =>
+        string.Equals(
+            Environment.GetEnvironmentVariable("DRIVECHILL_SSL_GENERATE_SELF_SIGNED"),
+            "true",
+            StringComparison.OrdinalIgnoreCase
+        );
 }

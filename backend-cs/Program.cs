@@ -33,6 +33,7 @@ internal static class Program
         ("/api/alerts", "alerts"),
         ("/api/fans", "fans"),
         ("/api/machines", "machines"),
+        ("/api/notifications", "notifications"),
         ("/api/profiles", "profiles"),
         ("/api/quiet-hours", "quiet_hours"),
         ("/api/sensors", "sensors"),
@@ -111,6 +112,22 @@ internal static class Program
         });
         builder.WebHost.UseUrls(listenUrl);
 
+        // HTTPS/TLS configuration — applied when SSL env vars are set
+        if (settings.SslCertFile is not null && settings.SslKeyFile is not null)
+        {
+            builder.WebHost.ConfigureKestrel(serverOptions =>
+            {
+                serverOptions.ConfigureHttpsDefaults(httpsOptions =>
+                {
+                    httpsOptions.ServerCertificate =
+                        System.Security.Cryptography.X509Certificates.X509Certificate2
+                            .CreateFromPemFile(settings.SslCertFile, settings.SslKeyFile);
+                });
+            });
+            // Re-register URL as https://
+            builder.WebHost.UseUrls(listenUrl.Replace("http://", "https://"));
+        }
+
         // Suppress default console logging in tray mode
         builder.Logging.ClearProviders();
         builder.Logging.AddConsole();
@@ -145,6 +162,12 @@ internal static class Program
         builder.Services.AddSingleton<WebSocketHub>();
         builder.Services
             .AddHttpClient("webhooks")
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+            {
+                AllowAutoRedirect = false,
+            });
+        builder.Services
+            .AddHttpClient("machines")
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
             {
                 AllowAutoRedirect = false,
