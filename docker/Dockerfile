@@ -30,6 +30,10 @@ COPY --chown=drivechill:drivechill backend/ ./backend/
 # Copy built frontend
 COPY --chown=drivechill:drivechill --from=frontend-build /app/frontend/out ./frontend/out
 
+# Data directory: must match the volume mount in docker-compose.yml.
+# The model_validator in config.py automatically derives db_path from this,
+# so one env var controls both the database and TLS cert locations.
+ENV DRIVECHILL_DATA_DIR=/app/data
 ENV DRIVECHILL_HARDWARE_BACKEND=auto
 ENV DRIVECHILL_HOST=0.0.0.0
 ENV DRIVECHILL_PORT=8085
@@ -39,4 +43,6 @@ EXPOSE 8085
 USER drivechill
 
 WORKDIR /app/backend
-CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8085"]
+# --headless skips the system tray and runs uvicorn on the main thread.
+# It reads DRIVECHILL_HOST, DRIVECHILL_PORT, and SSL settings from env vars.
+CMD ["python", "drivechill.py", "--headless"]

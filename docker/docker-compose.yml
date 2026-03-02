@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   drivechill:
     build:
@@ -7,16 +5,27 @@ services:
       dockerfile: docker/Dockerfile
     container_name: drivechill
     ports:
-      - "8085:8085"
+      - "${DRIVECHILL_PORT:-8085}:${DRIVECHILL_PORT:-8085}"
     volumes:
-      - drivechill_data:/app/data
+      - drivechill_data:${DRIVECHILL_DATA_DIR:-/app/data}
     environment:
-      - DRIVECHILL_HARDWARE_BACKEND=auto
-      - DRIVECHILL_SENSOR_POLL_INTERVAL=1.0
-      - DRIVECHILL_HISTORY_RETENTION_HOURS=168
+      DRIVECHILL_HOST: ${DRIVECHILL_HOST:-0.0.0.0}
+      DRIVECHILL_PORT: ${DRIVECHILL_PORT:-8085}
+      DRIVECHILL_DATA_DIR: ${DRIVECHILL_DATA_DIR:-/app/data}
+      DRIVECHILL_HARDWARE_BACKEND: ${DRIVECHILL_HARDWARE_BACKEND:-auto}
+      DRIVECHILL_SENSOR_POLL_INTERVAL: ${DRIVECHILL_SENSOR_POLL_INTERVAL:-1.0}
+      DRIVECHILL_HISTORY_RETENTION_HOURS: ${DRIVECHILL_HISTORY_RETENTION_HOURS:-168}
+      DRIVECHILL_PASSWORD: ${DRIVECHILL_PASSWORD:-}
+      DRIVECHILL_FORCE_AUTH: ${DRIVECHILL_FORCE_AUTH:-false}
+      DRIVECHILL_SESSION_TTL: ${DRIVECHILL_SESSION_TTL:-8h}
+      DRIVECHILL_SSL_GENERATE_SELF_SIGNED: ${DRIVECHILL_SSL_GENERATE_SELF_SIGNED:-false}
+      DRIVECHILL_SSL_CERTFILE: ${DRIVECHILL_SSL_CERTFILE:-}
+      DRIVECHILL_SSL_KEYFILE: ${DRIVECHILL_SSL_KEYFILE:-}
+      DRIVECHILL_TEMP_UNIT: ${DRIVECHILL_TEMP_UNIT:-C}
+      DRIVECHILL_ALLOW_PRIVATE_OUTBOUND_TARGETS: ${DRIVECHILL_ALLOW_PRIVATE_OUTBOUND_TARGETS:-false}
     # Preferred locked-down profile. Add explicit device mappings only when needed.
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8085/api/health', timeout=3).read()"]
+      test: ["CMD", "python", "-c", "import os, urllib.request; port=os.environ.get('DRIVECHILL_PORT','8085'); urllib.request.urlopen(f'http://127.0.0.1:{port}/api/health', timeout=3).read()"]
       interval: 30s
       timeout: 5s
       retries: 3

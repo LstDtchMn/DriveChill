@@ -49,13 +49,12 @@ Write-Host "=== Setup Complete ===" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "To start DriveChill:" -ForegroundColor White
 Write-Host "  cd backend" -ForegroundColor Gray
-Write-Host "  python -m uvicorn app.main:app --host 0.0.0.0 --port 8085" -ForegroundColor Gray
+Write-Host "  python drivechill.py" -ForegroundColor Gray
 Write-Host ""
 Write-Host "Then open http://localhost:8085 in your browser" -ForegroundColor White
 Write-Host ""
-Write-Host "For development (frontend hot-reload):" -ForegroundColor White
+Write-Host "For development (frontend + backend hot-reload):" -ForegroundColor White
 Write-Host "  Terminal 1: cd backend && python -m uvicorn app.main:app --reload --port 8085" -ForegroundColor Gray
 Write-Host "  Terminal 2: cd frontend && npm run dev" -ForegroundColor Gray
 Write-Host ""
-Write-Host "IMPORTANT: Ensure LibreHardwareMonitor is running with Web Server enabled" -ForegroundColor Yellow
-Write-Host "  (Settings > Web Server > Run on port 8086)" -ForegroundColor Yellow
+Write-Host "NOTE: Run as Administrator to enable hardware sensor access (fan control requires kernel driver)." -ForegroundColor Yellow

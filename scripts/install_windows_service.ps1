@@ -24,8 +24,9 @@ $repoRoot = Resolve-Path "$PSScriptRoot\.."
 $backendDir = Join-Path $repoRoot "backend"
 
 # Install the service via NSSM
-& nssm install DriveChill "$($python.Source)" -m uvicorn app.main:app --host 127.0.0.1 --port 8085
+& nssm install DriveChill "$($python.Source)"
 & nssm set DriveChill AppDirectory "$backendDir"
+& nssm set DriveChill AppParameters "drivechill.py --headless"
 & nssm set DriveChill DisplayName "DriveChill"
 & nssm set DriveChill Description "DriveChill temperature-based fan control service"
 & nssm set DriveChill Start SERVICE_AUTO_START

@@ -40,8 +40,13 @@ def _run_uvicorn(server: "uvicorn.Server") -> None:  # type: ignore[name-defined
     asyncio.run(server.serve())
 
 
-def _start_server() -> None:
-    """Start the DriveChill server (default behavior)."""
+def _start_server(headless: bool = False) -> None:
+    """Start the DriveChill server.
+
+    headless=True  — run uvicorn on the main thread without the system tray.
+                     Use this for Docker containers and headless Linux servers.
+    headless=False — run the system tray on the main thread (Windows/macOS desktop).
+    """
     import uvicorn
     from app.config import settings
 
@@ -68,12 +73,16 @@ def _start_server() -> None:
     )
     server = uvicorn.Server(config)
 
-    t = threading.Thread(target=_run_uvicorn, args=(server,), daemon=True, name="uvicorn")
-    t.start()
+    if headless:
+        # Block the main thread directly — no tray, no background thread needed.
+        asyncio.run(server.serve())
+    else:
+        t = threading.Thread(target=_run_uvicorn, args=(server,), daemon=True, name="uvicorn")
+        t.start()
 
-    # Main thread: system tray (blocks until Quit)
-    from app.tray import run_tray
-    run_tray(server)
+        # Main thread: system tray (blocks until Quit)
+        from app.tray import run_tray
+        run_tray(server)
 
 
 def _cmd_backup(args: argparse.Namespace) -> None:
@@ -120,6 +129,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         prog="drivechill",
         description="DriveChill — Temperature-based PC fan speed management",
+    )
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Run server without system tray — for Docker containers and headless Linux servers",
     )
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
@@ -170,7 +184,7 @@ def main() -> None:
         from app.services.autostart_service import remove_autostart
         print(remove_autostart())
     else:
-        _start_server()
+        _start_server(headless=args.headless)
 
 
 if __name__ == "__main__":

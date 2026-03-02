@@ -498,15 +498,15 @@ export function SettingsPage() {
                         style={{ background: 'var(--card-bg)', borderColor: 'var(--border)', color: 'var(--text)' }}
                         autoFocus
                       />
-                      <button onClick={() => handleSaveLabel(sensor.id)} className="p-1 rounded hover:bg-green-500/20">
+                      <button onClick={() => handleSaveLabel(sensor.id)} className="p-1 rounded hover:bg-green-500/20" aria-label="Save label">
                         <Check size={14} style={{ color: 'var(--success)' }} />
                       </button>
                       {label && (
-                        <button onClick={() => handleDeleteLabel(sensor.id)} className="p-1 rounded hover:bg-red-500/20" title="Reset to default">
+                        <button onClick={() => handleDeleteLabel(sensor.id)} className="p-1 rounded hover:bg-red-500/20" aria-label="Reset to default">
                           <X size={14} style={{ color: 'var(--danger)' }} />
                         </button>
                       )}
-                      <button onClick={() => setEditingSensor(null)} className="p-1 rounded">
+                      <button onClick={() => setEditingSensor(null)} className="p-1 rounded" aria-label="Cancel editing">
                         <X size={14} style={{ color: 'var(--text-secondary)' }} />
                       </button>
                     </>
@@ -808,9 +808,9 @@ export function SettingsPage() {
       <div className="card p-4 flex items-start gap-3 animate-card-enter" style={{ background: 'var(--accent-muted)' }}>
         <Info size={16} className="mt-0.5 shrink-0" style={{ color: 'var(--accent)' }} />
         <div className="text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-          <strong style={{ color: 'var(--text)' }}>Tip:</strong> For Windows, ensure LibreHardwareMonitor
-          is running with the web server enabled (Settings &rarr; Web Server &rarr; Run).
-          For Linux/Docker, make sure lm-sensors is installed and configured.
+          <strong style={{ color: 'var(--text)' }}>Tip:</strong> On Windows, hardware sensors are read
+          directly via the bundled LibreHardwareMonitor library — no separate process is required.
+          On Linux/Docker, ensure lm-sensors is installed and <code>sensors-detect</code> has been run.
         </div>
       </div>
     </div>

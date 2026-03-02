@@ -2,6 +2,7 @@ import os
 import secrets
 from pathlib import Path
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings
 
 # Use %APPDATA%\DriveChill when running on Windows (packaged or dev),
@@ -48,6 +49,17 @@ class Settings(BaseSettings):
     allow_private_outbound_targets: bool = False  # DRIVECHILL_ALLOW_PRIVATE_OUTBOUND_TARGETS
 
     model_config = {"env_prefix": "DRIVECHILL_"}
+
+    @model_validator(mode="after")
+    def _sync_db_path_with_data_dir(self) -> "Settings":
+        """Derive db_path from data_dir when db_path is still at its default.
+
+        This means setting DRIVECHILL_DATA_DIR=/app/data automatically moves
+        both the database and TLS certs to that directory — one env var for Docker.
+        """
+        if self.db_path == _default_data_dir / "drivechill.db":
+            self.db_path = self.data_dir / "drivechill.db"
+        return self
 
     @property
     def internal_token(self) -> str:
