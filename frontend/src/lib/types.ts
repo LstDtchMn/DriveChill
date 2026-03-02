@@ -210,7 +210,7 @@ export interface WSMessage {
   safe_mode?: SafeModeStatus;
 }
 
-export type Page = 'dashboard' | 'curves' | 'alerts' | 'settings';
+export type Page = 'dashboard' | 'curves' | 'alerts' | 'settings' | 'analytics';
 
 export interface PushSubscription {
   id: string;
@@ -231,4 +231,41 @@ export interface EmailNotificationSettings {
   use_tls: boolean;
   use_ssl: boolean;
   updated_at: string;
+}
+
+// ─── Analytics ────────────────────────────────────────────────────────────────
+
+export interface AnalyticsBucket {
+  sensor_id: string;
+  sensor_name: string;
+  sensor_type: string;
+  unit: string;
+  timestamp_utc: string;
+  avg_value: number;
+  min_value: number;
+  max_value: number;
+  sample_count: number;
+}
+
+export interface AnalyticsStat {
+  sensor_id: string;
+  sensor_name: string;
+  sensor_type: string;
+  unit: string;
+  min_value: number;
+  max_value: number;
+  avg_value: number;
+  p95_value: number;
+  sample_count: number;
+}
+
+export interface AnalyticsAnomaly {
+  timestamp_utc: string;
+  sensor_id: string;
+  sensor_name: string;
+  value: number;
+  unit: string;
+  z_score: number;
+  mean: number;
+  stdev: number;
 }

@@ -31,6 +31,7 @@ from app.services.quiet_hours_service import QuietHoursService
 from app.services.webhook_service import WebhookService
 from app.api.dependencies.auth import require_auth
 from app.api.routes import sensors, fans, profiles, alerts, settings as settings_route, machines, webhooks
+from app.api.routes import analytics as analytics_route
 from app.api.routes.auth import router as auth_router
 from app.api.routes.quiet_hours import router as quiet_hours_router
 from app.api.routes.notifications import router as notifications_router
@@ -395,6 +396,7 @@ app.include_router(machines.router, dependencies=_auth_deps)
 app.include_router(webhooks.router, dependencies=_auth_deps)
 app.include_router(notifications_router, dependencies=_auth_deps)
 app.include_router(quiet_hours_router, dependencies=_auth_deps)
+app.include_router(analytics_route.router, dependencies=_auth_deps)
 # WebSocket auth is handled inside the endpoint (require_ws_auth) because
 # router-level Depends(require_auth) injects Request, which fails for WS.
 app.include_router(ws_router)

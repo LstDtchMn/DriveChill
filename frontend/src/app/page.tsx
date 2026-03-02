@@ -12,6 +12,7 @@ import { SystemOverview } from '@/components/dashboard/SystemOverview';
 import { FanCurvesPage } from '@/components/fan-curves/FanCurvesPage';
 import { AlertsPage } from '@/components/alerts/AlertsPage';
 import { SettingsPage } from '@/components/settings/SettingsPage';
+import { AnalyticsPage } from '@/components/analytics/AnalyticsPage';
 import { LoginPage } from '@/components/auth/LoginPage';
 import { ChangelogBanner } from '@/components/layout/ChangelogBanner';
 import { api, authApi } from '@/lib/api';
@@ -59,6 +60,8 @@ function PageContent() {
       return <AlertsPage />;
     case 'settings':
       return <SettingsPage />;
+    case 'analytics':
+      return <AnalyticsPage />;
     default:
       return <SystemOverview />;
   }

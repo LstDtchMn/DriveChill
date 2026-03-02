@@ -345,4 +345,28 @@ export const api = {
     fetchAPI<{ deliveries: import('./types').WebhookDelivery[] }>(
       `/api/webhooks/deliveries?limit=${Math.max(1, Math.min(500, limit))}&offset=${Math.max(0, offset)}`
     ),
+
+  // Analytics
+  analytics: {
+    getHistory: (hours = 1.0, sensorId?: string, bucketSeconds = 60) =>
+      fetchAPI<{ buckets: import('./types').AnalyticsBucket[] }>(
+        `/api/analytics/history?hours=${hours}&bucket_seconds=${bucketSeconds}${sensorId ? `&sensor_id=${encodeURIComponent(sensorId)}` : ''}`
+      ),
+    getStats: (hours = 24.0, sensorId?: string) =>
+      fetchAPI<{ stats: import('./types').AnalyticsStat[] }>(
+        `/api/analytics/stats?hours=${hours}${sensorId ? `&sensor_id=${encodeURIComponent(sensorId)}` : ''}`
+      ),
+    getAnomalies: (hours = 24.0, zScoreThreshold = 3.0) =>
+      fetchAPI<{ anomalies: import('./types').AnalyticsAnomaly[] }>(
+        `/api/analytics/anomalies?hours=${hours}&z_score_threshold=${zScoreThreshold}`
+      ),
+    getReport: (hours = 24.0) =>
+      fetchAPI<{
+        generated_at: string;
+        window_hours: number;
+        stats: import('./types').AnalyticsStat[];
+        anomalies: import('./types').AnalyticsAnomaly[];
+        top_anomalous_sensors: { sensor_id: string; sensor_name: string; count: number }[];
+      }>(`/api/analytics/report?hours=${hours}`),
+  },
 };
