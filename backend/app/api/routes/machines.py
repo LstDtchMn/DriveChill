@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 
 import httpx
@@ -11,6 +12,10 @@ from app.config import settings
 from app.utils.url_security import validate_outbound_url
 
 router = APIRouter(prefix="/api/machines", tags=["machines"])
+
+# Allowlist for IDs forwarded to remote agents as path segments.
+# Prevents path traversal (e.g. "../../admin") in proxied requests.
+_SAFE_ID_RE = re.compile(r'^[a-zA-Z0-9_\-]{1,128}$')
 
 # Sentinel: when api_key is NOT in the PUT body, keep the existing value.
 _KEEP_KEY = object()
@@ -218,6 +223,8 @@ async def get_machine_state(machine_id: str, request: Request):
 @router.post("/{machine_id}/profiles/{profile_id}/activate", dependencies=[Depends(require_csrf)])
 async def activate_remote_profile(machine_id: str, profile_id: str, request: Request):
     """Activate a profile on a remote agent."""
+    if not _SAFE_ID_RE.match(profile_id):
+        raise HTTPException(status_code=400, detail="Invalid profile_id")
     repo = request.app.state.machine_repo
     monitor = request.app.state.machine_monitor_service
     machine = await repo.get(machine_id)
@@ -266,6 +273,8 @@ async def update_remote_fan_settings(
     machine_id: str, fan_id: str, body: RemoteFanSettingsRequest, request: Request
 ):
     """Update fan settings on a remote agent."""
+    if not _SAFE_ID_RE.match(fan_id):
+        raise HTTPException(status_code=400, detail="Invalid fan_id")
     repo = request.app.state.machine_repo
     monitor = request.app.state.machine_monitor_service
     machine = await repo.get(machine_id)

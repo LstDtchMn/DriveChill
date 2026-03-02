@@ -43,17 +43,32 @@ public sealed class NotificationsController : ControllerBase
         if (smtpPort is < 1 or > 65535)
             return BadRequest(new { detail = "smtp_port must be between 1 and 65535" });
 
+        // Validate boolean fields before building the record so non-boolean
+        // JSON (e.g. a string "true") returns 400 instead of throwing.
+        if (body.TryGetProperty("enabled", out var en) &&
+            en.ValueKind != System.Text.Json.JsonValueKind.True &&
+            en.ValueKind != System.Text.Json.JsonValueKind.False)
+            return BadRequest(new { detail = "enabled must be a boolean" });
+        if (body.TryGetProperty("use_tls", out var tlsV) &&
+            tlsV.ValueKind != System.Text.Json.JsonValueKind.True &&
+            tlsV.ValueKind != System.Text.Json.JsonValueKind.False)
+            return BadRequest(new { detail = "use_tls must be a boolean" });
+        if (body.TryGetProperty("use_ssl", out var sslV) &&
+            sslV.ValueKind != System.Text.Json.JsonValueKind.True &&
+            sslV.ValueKind != System.Text.Json.JsonValueKind.False)
+            return BadRequest(new { detail = "use_ssl must be a boolean" });
+
         var s = new EmailNotificationSettingsRecord
         {
-            Enabled       = body.TryGetProperty("enabled",        out var en)   ? en.GetBoolean()  : current.Enabled,
-            SmtpHost      = body.TryGetProperty("smtp_host",      out var sh)   ? sh.GetString()!  : current.SmtpHost,
+            Enabled       = body.TryGetProperty("enabled",        out var en2)  ? en2.GetBoolean()  : current.Enabled,
+            SmtpHost      = body.TryGetProperty("smtp_host",      out var sh)   ? sh.GetString()!   : current.SmtpHost,
             SmtpPort      = smtpPort,
-            SmtpUsername  = body.TryGetProperty("smtp_username",  out var su)   ? su.GetString()!  : current.SmtpUsername,
+            SmtpUsername  = body.TryGetProperty("smtp_username",  out var su)   ? su.GetString()!   : current.SmtpUsername,
             // Send empty string to preserve existing password; send actual value to update.
             SmtpPassword  = body.TryGetProperty("smtp_password",  out var spw)  ? spw.GetString() ?? "" : "",
-            SenderAddress = body.TryGetProperty("sender_address", out var sa)   ? sa.GetString()!  : current.SenderAddress,
+            SenderAddress = body.TryGetProperty("sender_address", out var sa)   ? sa.GetString()!   : current.SenderAddress,
             RecipientList = body.TryGetProperty("recipient_list", out var rl)   ? JsonSerializer.Serialize(rl) : current.RecipientList,
-            UseTls        = body.TryGetProperty("use_tls",        out var tls)  ? tls.GetBoolean() : current.UseTls,
+            UseTls        = body.TryGetProperty("use_tls",        out var tls)  ? tls.GetBoolean()  : current.UseTls,
             UseSsl        = body.TryGetProperty("use_ssl",        out var ssl2) ? ssl2.GetBoolean() : current.UseSsl,
             UpdatedAt     = DateTimeOffset.UtcNow.ToString("o"),
         };

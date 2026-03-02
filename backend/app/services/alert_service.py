@@ -122,11 +122,15 @@ class AlertService:
         self._rules.append(rule)
         await self._persist_rule(rule)
 
-    async def remove_rule(self, rule_id: str) -> None:
+    async def remove_rule(self, rule_id: str) -> bool:
+        """Remove a rule by ID. Returns True if the rule existed, False otherwise."""
+        original_count = len(self._rules)
         self._rules = [r for r in self._rules if r.id != rule_id]
+        found = len(self._rules) < original_count
         self._active_alerts.discard(rule_id)
         self._last_triggered.pop(rule_id, None)
         await self._delete_rule(rule_id)
+        return found
 
     def set_rules(self, rules: list[AlertRule]) -> None:
         self._rules = list(rules)

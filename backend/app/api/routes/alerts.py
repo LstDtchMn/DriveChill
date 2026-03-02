@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.api.dependencies.auth import require_csrf
 
@@ -30,7 +30,9 @@ async def add_rule(rule: AlertRule, request: Request):
 async def delete_rule(rule_id: str, request: Request):
     """Delete an alert rule."""
     alert_service = request.app.state.alert_service
-    await alert_service.remove_rule(rule_id)
+    found = await alert_service.remove_rule(rule_id)
+    if not found:
+        raise HTTPException(status_code=404, detail="Rule not found")
     return {"success": True}
 
 

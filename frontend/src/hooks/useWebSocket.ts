@@ -134,11 +134,14 @@ export function useWebSocket(enabled = true) {
     connect();
 
     return () => {
+      // Prevent onclose from scheduling a reconnect after unmount.
+      enabledRef.current = false;
       if (reconnectTimer.current) {
         clearTimeout(reconnectTimer.current);
       }
       if (wsRef.current) {
         wsRef.current.close();
+        wsRef.current = null;
       }
     };
   }, [connect, enabled]);

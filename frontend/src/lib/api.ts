@@ -194,7 +194,7 @@ export const api = {
   // Alerts
   getAlerts: () => fetchAPI<{ rules: any[]; events: any[]; active: string[] }>('/api/alerts'),
   addAlertRule: (rule: any) =>
-    fetchAPI('/api/alerts/rules', { method: 'POST', body: JSON.stringify(rule) }),
+    fetchAPI<{ success: boolean; rule: import('@/lib/types').AlertRule }>('/api/alerts/rules', { method: 'POST', body: JSON.stringify(rule) }),
   deleteAlertRule: (id: string) =>
     fetchAPI(`/api/alerts/rules/${id}`, { method: 'DELETE' }),
   clearAlerts: () => fetchAPI('/api/alerts/clear', { method: 'POST' }),

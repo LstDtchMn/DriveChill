@@ -52,8 +52,11 @@ export function AlertsPage() {
     };
 
     try {
-      await api.addAlertRule(rule);
-      setRules([...rules, rule]);
+      const resp = await api.addAlertRule(rule);
+      // Use the server-assigned rule (with server-generated ID) so that
+      // delete and active-alert highlight use the correct ID.
+      const saved: AlertRule = resp?.rule ?? rule;
+      setRules([...rules, saved]);
       setShowAddForm(false);
       setNewName('');
       setNewSensorId('');

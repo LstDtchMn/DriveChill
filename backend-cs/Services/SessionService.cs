@@ -51,6 +51,10 @@ public sealed class SessionService
         lock (attempts)
         {
             attempts.RemoveAll(t => t < cutoff);
+            // Evict the entry when there are no recent attempts to prevent
+            // the dictionary growing unboundedly with stale IP entries.
+            if (attempts.Count == 0)
+                _rateLimits.TryRemove(ip, out _);
             if (attempts.Count >= MaxAttemptsPerMinute) return false;
             attempts.Add(now);
         }
