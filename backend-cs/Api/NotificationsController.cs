@@ -34,7 +34,12 @@ public sealed class NotificationsController : ControllerBase
     public async Task<IActionResult> UpdateEmailSettings([FromBody] JsonElement body, CancellationToken ct)
     {
         var current = await _db.GetEmailSettingsAsync(ct);
-        var smtpPort = body.TryGetProperty("smtp_port", out var sp) ? sp.GetInt32() : current.SmtpPort;
+        int smtpPort = current.SmtpPort;
+        if (body.TryGetProperty("smtp_port", out var sp))
+        {
+            if (sp.ValueKind != System.Text.Json.JsonValueKind.Number || !sp.TryGetInt32(out smtpPort))
+                return BadRequest(new { detail = "smtp_port must be an integer" });
+        }
         if (smtpPort is < 1 or > 65535)
             return BadRequest(new { detail = "smtp_port must be between 1 and 65535" });
 

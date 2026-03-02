@@ -192,12 +192,16 @@ internal static class Program
             context.Response.Headers["X-Content-Type-Options"] = "nosniff";
             context.Response.Headers["X-Frame-Options"] = "DENY";
             context.Response.Headers["Referrer-Policy"] = "strict-origin-when-cross-origin";
+            // Explicitly allow ws:// and wss:// to the same host so the
+            // WebSocket connection works even in browsers where 'self' alone
+            // does not cover the ws/wss scheme mapping.
+            var host = context.Request.Host.ToString();
             context.Response.Headers["Content-Security-Policy"] =
                 "default-src 'self'; " +
                 "script-src 'self'; " +
                 "style-src 'self' 'unsafe-inline'; " +
                 "img-src 'self' data:; " +
-                "connect-src 'self'; " +
+                $"connect-src 'self' ws://{host} wss://{host}; " +
                 "font-src 'self'; " +
                 "frame-ancestors 'none'";
             await next();

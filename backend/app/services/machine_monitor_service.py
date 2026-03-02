@@ -102,15 +102,25 @@ class MachineMonitorService:
             self._next_allowed_poll[machine["id"]] = 0.0
             return {"success": True, "status": "online", "snapshot": snapshot}
         except Exception as exc:
-            status = self._classify_failure(exc)
-            await self._repo.update_health(
+            classified = self._classify_failure(exc)
+            failures = await self._repo.increment_failures(
                 machine["id"],
-                status=status,
-                last_seen_at=machine.get("last_seen_at"),
+                status=classified,
                 last_error=_redact_error(exc),
-                consecutive_failures=int(machine.get("consecutive_failures", 0)) + 1,
             )
-            return {"success": False, "status": status, "error": _redact_error(exc)}
+            # Reclassify network errors based on actual failure count
+            if classified not in {"auth_error", "version_mismatch"}:
+                final_status = "offline" if failures >= 3 else "degraded"
+                if final_status != classified:
+                    await self._repo.update_health(
+                        machine["id"],
+                        status=final_status,
+                        last_seen_at=machine.get("last_seen_at"),
+                        last_error=_redact_error(exc),
+                        consecutive_failures=failures,
+                    )
+                    classified = final_status
+            return {"success": False, "status": classified, "error": _redact_error(exc)}
 
     async def poll_once(self) -> None:
         machines = await self._repo.list_enabled()

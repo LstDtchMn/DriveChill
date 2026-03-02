@@ -387,12 +387,16 @@ class _SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        # Explicitly allow ws:// and wss:// to the same host so the
+        # WebSocket connection works even in browsers where 'self' alone
+        # does not cover the ws/wss scheme mapping.
+        host = request.headers.get("host", "localhost")
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
             "script-src 'self'; "
             "style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data:; "
-            "connect-src 'self'; "
+            f"connect-src 'self' ws://{host} wss://{host}; "
             "font-src 'self'; "
             "frame-ancestors 'none'"
         )
