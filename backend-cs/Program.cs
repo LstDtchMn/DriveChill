@@ -186,6 +186,23 @@ internal static class Program
         app.UseCors();
         app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30) });
 
+        // Security response headers
+        app.Use(async (context, next) =>
+        {
+            context.Response.Headers["X-Content-Type-Options"] = "nosniff";
+            context.Response.Headers["X-Frame-Options"] = "DENY";
+            context.Response.Headers["Referrer-Policy"] = "strict-origin-when-cross-origin";
+            context.Response.Headers["Content-Security-Policy"] =
+                "default-src 'self'; " +
+                "script-src 'self'; " +
+                "style-src 'self' 'unsafe-inline'; " +
+                "img-src 'self' data:; " +
+                "connect-src 'self' ws: wss:; " +
+                "font-src 'self'; " +
+                "frame-ancestors 'none'";
+            await next();
+        });
+
         // Serve Next.js static export from wwwroot/
         app.UseDefaultFiles();
         app.UseStaticFiles();
