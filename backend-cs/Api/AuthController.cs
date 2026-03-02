@@ -10,14 +10,16 @@ public sealed class AuthController : ControllerBase
 {
     private readonly ApiKeyService   _apiKeys;
     private readonly SessionService  _sessions;
+    private readonly AppSettings     _settings;
 
     private const string SessionCookieName = "drivechill_session";
     private const string CsrfCookieName    = "drivechill_csrf";
 
-    public AuthController(ApiKeyService apiKeys, SessionService sessions)
+    public AuthController(ApiKeyService apiKeys, SessionService sessions, AppSettings settings)
     {
         _apiKeys  = apiKeys;
         _sessions = sessions;
+        _settings = settings;
     }
 
     // -----------------------------------------------------------------------
@@ -26,18 +28,13 @@ public sealed class AuthController : ControllerBase
 
     /// <summary>GET /api/auth/status — whether auth is enabled.</summary>
     [HttpGet("status")]
-    public async Task<IActionResult> GetAuthStatus(CancellationToken ct = default)
-    {
-        var hasUser = await _sessions.UserExistsAsync(ct);
-        return Ok(new { auth_enabled = hasUser });
-    }
+    public IActionResult GetAuthStatus() => Ok(new { auth_enabled = _settings.AuthRequired });
 
     /// <summary>GET /api/auth/session — current session state.</summary>
     [HttpGet("session")]
     public async Task<IActionResult> GetSession(CancellationToken ct = default)
     {
-        var hasUser = await _sessions.UserExistsAsync(ct);
-        if (!hasUser)
+        if (!_settings.AuthRequired)
             return Ok(new { auth_required = false, authenticated = true });
 
         var token = Request.Cookies[SessionCookieName];

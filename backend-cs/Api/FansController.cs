@@ -72,4 +72,29 @@ public sealed class FansController : ControllerBase
         _fans.DeleteCurve(fanId);
         return Ok(new { ok = true });
     }
+
+    // -----------------------------------------------------------------------
+    // Safe mode — release / resume / status
+    // -----------------------------------------------------------------------
+
+    /// <summary>POST /api/fans/release — release all fans to BIOS/auto control.</summary>
+    [HttpPost("release")]
+    public IActionResult ReleaseFanControl()
+    {
+        _fans.ReleaseFanControl();
+        return Ok(new { success = true, message = "Fan control released to BIOS/auto mode" });
+    }
+
+    /// <summary>POST /api/fans/resume — resume software fan control.</summary>
+    [HttpPost("resume")]
+    public IActionResult ResumeFanControl()
+    {
+        if (!_fans.Resume(out var profile))
+            return Conflict(new { error = "No active profile to resume. Activate a profile first." });
+        return Ok(new { success = true, active_profile = profile });
+    }
+
+    /// <summary>GET /api/fans/status — safe mode status and applied speeds.</summary>
+    [HttpGet("status")]
+    public IActionResult GetFanStatus() => Ok(_fans.GetSafeModeStatus());
 }

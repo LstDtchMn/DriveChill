@@ -157,25 +157,35 @@ public sealed class LhmBackend : IHardwareBackend
 
     public bool SetFanSpeed(string fanId, double speedPercent)
     {
-        if (!_controls.TryGetValue(fanId, out var control)) return false;
         _lock.Wait();
-        try { control.SetSoftware((float)Math.Clamp(speedPercent, 0, 100)); return true; }
+        try
+        {
+            if (!_controls.TryGetValue(fanId, out var control)) return false;
+            control.SetSoftware((float)Math.Clamp(speedPercent, 0, 100));
+            return true;
+        }
         catch { return false; }
         finally { _lock.Release(); }
     }
 
     public bool SetFanAuto(string fanId)
     {
-        if (!_controls.TryGetValue(fanId, out var control)) return false;
         _lock.Wait();
-        try { control.SetDefault(); return true; }
+        try
+        {
+            if (!_controls.TryGetValue(fanId, out var control)) return false;
+            control.SetDefault();
+            return true;
+        }
         catch { return false; }
         finally { _lock.Release(); }
     }
 
     public IReadOnlyList<string> GetFanIds()
     {
-        lock (_controls) return [.. _controls.Keys];
+        _lock.Wait();
+        try { return [.. _controls.Keys]; }
+        finally { _lock.Release(); }
     }
 
     public string GetBackendName() => "LibreHardwareMonitor (.NET)";

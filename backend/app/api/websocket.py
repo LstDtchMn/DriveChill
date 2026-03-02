@@ -113,8 +113,10 @@ async def websocket_endpoint(websocket: WebSocket):
                 await websocket.send_text(json.dumps(failure_msg, default=str))
                 continue
 
-            # snapshot is a real SensorSnapshot from this point forward.
-            assert snapshot is not None  # None case handled above; narrowing hint
+            # snapshot is a real SensorSnapshot from this point forward
+            # (None case handled above and continues the loop).
+            if snapshot is None:  # pragma: no cover — unreachable; narrows type
+                continue
             message = {
                 "type": "sensor_update",
                 "timestamp": snapshot.timestamp.isoformat(),

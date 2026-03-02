@@ -17,6 +17,7 @@ public sealed class SensorWorker : BackgroundService
     private readonly AlertService     _alerts;
     private readonly WebhookService   _webhooks;
     private readonly DbService        _db;
+    private readonly SettingsStore    _store;
     private readonly AppSettings      _settings;
     private readonly ILogger<SensorWorker> _log;
 
@@ -24,8 +25,8 @@ public sealed class SensorWorker : BackgroundService
     private const int DbIntervalSeconds = 10;
 
     public SensorWorker(IHardwareBackend hw, SensorService sensors, FanService fans,
-        AlertService alerts, WebhookService webhooks, DbService db, AppSettings settings,
-        ILogger<SensorWorker> log)
+        AlertService alerts, WebhookService webhooks, DbService db, SettingsStore store,
+        AppSettings settings, ILogger<SensorWorker> log)
     {
         _hw      = hw;
         _sensors = sensors;
@@ -33,6 +34,7 @@ public sealed class SensorWorker : BackgroundService
         _alerts  = alerts;
         _webhooks = webhooks;
         _db      = db;
+        _store   = store;
         _settings = settings;
         _log     = log;
     }
@@ -82,7 +84,9 @@ public sealed class SensorWorker : BackgroundService
                 _log.LogWarning(ex, "Sensor poll error — will retry");
             }
 
-            await Task.Delay(_settings.PollIntervalMs, stoppingToken).ConfigureAwait(false);
+            // Read poll interval from SettingsStore (user-editable at runtime) instead
+            // of AppSettings (immutable after startup).
+            await Task.Delay(_store.PollIntervalMs, stoppingToken).ConfigureAwait(false);
         }
 
         _log.LogInformation("SensorWorker stopped");

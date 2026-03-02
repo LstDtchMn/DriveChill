@@ -22,14 +22,23 @@ public sealed class FanService
     private readonly HashSet<string> _testLocked   = [];
     private readonly object          _testLockObj   = new();
 
+    private volatile bool _curvesSynced;
+
+    // Safe mode state
+    private volatile bool _released;      // user released fan control to BIOS
+    private volatile bool _sensorPanic;   // sensor read failure → all fans full
+    private volatile bool _tempPanic;     // temperature above panic threshold
+
+    private const double PanicCpuTemp = 95.0;
+    private const double PanicGpuTemp = 90.0;
+    private const double PanicHysteresis = 5.0;
+
     public FanService(IHardwareBackend hw, SettingsStore store)
     {
         _hw    = hw;
         _store = store;
-
-        // Initialise curve slots for all known fans (null = no curve = auto)
-        foreach (var id in hw.GetFanIds())
-            _curves[id] = null;
+        // NOTE: GetFanIds() returns empty before Initialize() — fan IDs are
+        // populated lazily on the first ApplyCurvesAsync tick (see SyncCurveSlots).
     }
 
     // -----------------------------------------------------------------------
@@ -82,6 +91,112 @@ public sealed class FanService
     {
         lock (_testLockObj) _testLocked.Remove(fanId);
     }
+
+    // -----------------------------------------------------------------------
+    // Safe mode — release / resume / panic
+    // -----------------------------------------------------------------------
+
+    /// <summary>Release all fans to BIOS/auto control. Suspends curve engine.</summary>
+    public void ReleaseFanControl()
+    {
+        _released = true;
+        foreach (var fanId in _hw.GetFanIds())
+            _hw.SetFanAuto(fanId);
+    }
+
+    /// <summary>Resume software control after release.</summary>
+    public bool Resume(out Profile? activeProfile)
+    {
+        var profiles = _store.LoadProfiles();
+        activeProfile = profiles.FirstOrDefault(p => p.IsActive);
+        if (activeProfile == null) return false;
+
+        _released = false;
+        // Re-apply curves from active profile
+        _rwl.EnterWriteLock();
+        try
+        {
+            foreach (var curve in activeProfile.Curves)
+                _curves[curve.FanId] = curve;
+        }
+        finally { _rwl.ExitWriteLock(); }
+        return true;
+    }
+
+    public object GetSafeModeStatus()
+    {
+        _rwl.EnterReadLock();
+        Dictionary<string, double> speeds;
+        int activeCurves;
+        try
+        {
+            speeds = new Dictionary<string, double>(_lastApplied);
+            activeCurves = _curves.Values.Count(c => c is { Enabled: true });
+        }
+        finally { _rwl.ExitReadLock(); }
+
+        return new
+        {
+            safe_mode = new
+            {
+                released = _released,
+                sensor_panic = _sensorPanic,
+                temp_panic = _tempPanic,
+                panic_cpu_temp = PanicCpuTemp,
+                panic_gpu_temp = PanicGpuTemp,
+            },
+            curves_active = activeCurves,
+            applied_speeds = speeds,
+        };
+    }
+
+    /// <summary>Check panic thresholds. Called by SensorWorker each tick.</summary>
+    public void CheckPanicThresholds(IReadOnlyList<SensorReading> readings)
+    {
+        // Sensor panic: no temp readings at all → force all fans to 100%
+        var hasTempReadings = readings.Any(r =>
+            r.SensorType is SensorTypeValues.CpuTemp or SensorTypeValues.GpuTemp);
+        if (!hasTempReadings && _curvesSynced)
+        {
+            if (!_sensorPanic)
+            {
+                _sensorPanic = true;
+                foreach (var fanId in _hw.GetFanIds())
+                    _hw.SetFanSpeed(fanId, 100);
+            }
+            return;
+        }
+        _sensorPanic = false;
+
+        var cpuMax = readings
+            .Where(r => r.SensorType == SensorTypeValues.CpuTemp)
+            .Select(r => r.Value)
+            .DefaultIfEmpty(0)
+            .Max();
+        var gpuMax = readings
+            .Where(r => r.SensorType == SensorTypeValues.GpuTemp)
+            .Select(r => r.Value)
+            .DefaultIfEmpty(0)
+            .Max();
+
+        bool shouldPanic = cpuMax >= PanicCpuTemp || gpuMax >= PanicGpuTemp;
+        bool shouldClear = cpuMax < (PanicCpuTemp - PanicHysteresis)
+                        && gpuMax < (PanicGpuTemp - PanicHysteresis);
+
+        if (shouldPanic && !_tempPanic)
+        {
+            _tempPanic = true;
+            // Force all fans to 100%
+            foreach (var fanId in _hw.GetFanIds())
+                _hw.SetFanSpeed(fanId, 100);
+        }
+        else if (shouldClear && _tempPanic)
+        {
+            _tempPanic = false;
+        }
+    }
+
+    public bool IsReleased => _released;
 
     // -----------------------------------------------------------------------
     // Manual control
@@ -138,6 +253,17 @@ public sealed class FanService
     public Task ApplyCurvesAsync(IReadOnlyList<SensorReading> readings,
         CancellationToken ct = default)
     {
+        // Lazy-sync: populate curve slots once the hardware backend has fan IDs
+        if (!_curvesSynced)
+            SyncCurveSlots();
+
+        // Check panic thresholds every tick
+        CheckPanicThresholds(readings);
+
+        // Skip curve application when released to BIOS or in panic mode
+        if (_released || _tempPanic)
+            return Task.CompletedTask;
+
         _rwl.EnterReadLock();
         List<(string fanId, double speed)> toApply = [];
         try
@@ -159,13 +285,44 @@ public sealed class FanService
         }
         finally { _rwl.ExitReadLock(); }
 
-        foreach (var (fanId, speed) in toApply)
+        // Apply speeds and record under write lock to avoid concurrent dictionary mutation
+        if (toApply.Count > 0)
         {
-            _hw.SetFanSpeed(fanId, speed);
-            _lastApplied[fanId] = speed;
+            foreach (var (fanId, speed) in toApply)
+                _hw.SetFanSpeed(fanId, speed);
+
+            _rwl.EnterWriteLock();
+            try
+            {
+                foreach (var (fanId, speed) in toApply)
+                    _lastApplied[fanId] = speed;
+            }
+            finally { _rwl.ExitWriteLock(); }
         }
 
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Populate curve slots from the hardware backend's fan IDs.
+    /// Called lazily because GetFanIds() is empty before Initialize().
+    /// </summary>
+    private void SyncCurveSlots()
+    {
+        var fanIds = _hw.GetFanIds();
+        if (fanIds.Count == 0) return; // not ready yet
+
+        _rwl.EnterWriteLock();
+        try
+        {
+            foreach (var id in fanIds)
+            {
+                if (!_curves.ContainsKey(id))
+                    _curves[id] = null;
+            }
+            _curvesSynced = true;
+        }
+        finally { _rwl.ExitWriteLock(); }
     }
 
     // -----------------------------------------------------------------------

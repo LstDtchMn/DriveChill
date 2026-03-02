@@ -53,6 +53,11 @@ export function SettingsPage() {
   const [webhookDeliveries, setWebhookDeliveries] = useState<WebhookDelivery[]>([]);
   const [webhookDeliveriesOffset, setWebhookDeliveriesOffset] = useState(0);
   const [webhookDeliveriesLoading, setWebhookDeliveriesLoading] = useState(false);
+  const [appVersion, setAppVersion] = useState('...');
+
+  useEffect(() => {
+    api.health().then((h) => setAppVersion(h.version || '?')).catch(() => setAppVersion('?'));
+  }, []);
 
   useEffect(() => {
     if (typeof window !== 'undefined' && 'Notification' in window) {
@@ -794,7 +799,7 @@ export function SettingsPage() {
           </div>
           <div className="flex justify-between">
             <span style={{ color: 'var(--text-secondary)' }}>Version</span>
-            <span className="font-mono text-xs" style={{ color: 'var(--text)' }}>1.5.0</span>
+            <span className="font-mono text-xs" style={{ color: 'var(--text)' }}>{appVersion}</span>
           </div>
         </div>
       </div>

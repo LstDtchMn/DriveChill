@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     # Temperature units: "C" or "F"
     temp_unit: str = "C"
 
+    # TLS / HTTPS
+    ssl_certfile: str | None = None  # DRIVECHILL_SSL_CERTFILE - path to PEM certificate
+    ssl_keyfile: str | None = None  # DRIVECHILL_SSL_KEYFILE - path to PEM private key
+    ssl_generate_self_signed: bool = False  # DRIVECHILL_SSL_GENERATE_SELF_SIGNED
+
     # Authentication
     password: str | None = None  # DRIVECHILL_PASSWORD - used for auto-setup
     session_ttl: str = "8h"  # DRIVECHILL_SESSION_TTL - "15m", "8h", "7d", etc.

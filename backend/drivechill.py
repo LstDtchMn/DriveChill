@@ -45,6 +45,18 @@ def _start_server() -> None:
     import uvicorn
     from app.config import settings
 
+    ssl_kwargs: dict = {}
+    if settings.ssl_certfile and settings.ssl_keyfile:
+        ssl_kwargs["ssl_certfile"] = settings.ssl_certfile
+        ssl_kwargs["ssl_keyfile"] = settings.ssl_keyfile
+    elif settings.ssl_generate_self_signed:
+        from app.utils.tls import generate_self_signed_cert
+        certfile, keyfile = generate_self_signed_cert(
+            settings.data_dir, hostname=settings.host or "localhost",
+        )
+        ssl_kwargs["ssl_certfile"] = certfile
+        ssl_kwargs["ssl_keyfile"] = keyfile
+
     config = uvicorn.Config(
         app="app.main:app",
         host=settings.host,
@@ -52,6 +64,7 @@ def _start_server() -> None:
         loop="asyncio",      # explicit asyncio (uvloop not available on Windows)
         log_level="warning",
         access_log=False,
+        **ssl_kwargs,
     )
     server = uvicorn.Server(config)
 
