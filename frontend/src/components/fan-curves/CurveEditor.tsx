@@ -306,9 +306,9 @@ export function CurveEditor({
 
           return (
             <g key={i}>
-              {/* Hit area (larger) */}
+              {/* Hit area — 40px diameter for reliable touch targeting */}
               <circle
-                cx={cx} cy={cy} r={12}
+                cx={cx} cy={cy} r={20}
                 fill="transparent"
                 style={{ cursor: 'grab' }}
                 onPointerDown={(e) => handlePointerDown(i, e)}

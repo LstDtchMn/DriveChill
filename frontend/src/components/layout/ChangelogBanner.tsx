@@ -3,10 +3,16 @@
 import { useState, useEffect } from 'react';
 import { X, Sparkles } from 'lucide-react';
 
-const APP_VERSION = '1.5.0';
+const APP_VERSION = '1.6.0';
 const STORAGE_KEY = 'drivechill_changelog_dismissed';
 
 const CHANGELOG: Record<string, string[]> = {
+  '1.6.0': [
+    'Analytics: temperature values now respect your °C/°F preference',
+    'Fan curve editor: larger touch targets for reliable mobile dragging',
+    'Temp unit preference synced from backend on every startup',
+    'Playwright E2E test suite covering dashboard, curves, alerts, and settings',
+  ],
   '1.5.0': [
     'Safety hardening: panic mode now overrides released fan control',
     'Authentication: session auth + CSRF protection across all write APIs',

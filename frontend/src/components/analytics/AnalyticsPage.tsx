@@ -1,7 +1,9 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { api } from '@/lib/api';
+import { useSettingsStore } from '@/stores/settingsStore';
+import { displayTemp, tempUnitSymbol } from '@/lib/tempUnit';
 import type { AnalyticsStat, AnalyticsAnomaly, AnalyticsBucket } from '@/lib/types';
 
 const TIME_OPTIONS = [
@@ -11,9 +13,9 @@ const TIME_OPTIONS = [
   { label: '7d', hours: 168 },
 ];
 
-function fmt(v: number, unit: string) { return `${v.toFixed(1)} ${unit}`; }
+type FmtFn = (v: number, unit: string) => string;
 
-function Sparkline({ buckets }: { buckets: AnalyticsBucket[] }) {
+function Sparkline({ buckets, fmt }: { buckets: AnalyticsBucket[]; fmt: FmtFn }) {
   const W = 120; const H = 36;
   const sorted = [...buckets].sort((a, b) => new Date(a.timestamp_utc).getTime() - new Date(b.timestamp_utc).getTime());
   if (sorted.length < 2) return null;
@@ -37,7 +39,7 @@ function Sparkline({ buckets }: { buckets: AnalyticsBucket[] }) {
   );
 }
 
-function StatCard({ s, accentColor }: { s: AnalyticsStat; accentColor: string }) {
+function StatCard({ s, accentColor, fmt }: { s: AnalyticsStat; accentColor: string; fmt: FmtFn }) {
   return (
     <div className="card p-4 animate-card-enter" style={{ borderLeft: `3px solid ${accentColor}` }}>
       <p className="text-xs font-semibold mb-3 truncate" style={{ color: accentColor }}>{s.sensor_name}</p>
@@ -65,6 +67,21 @@ export function AnalyticsPage() {
   const [history, setHistory] = useState<AnalyticsBucket[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const { tempUnit } = useSettingsStore();
+
+  // Unit-aware formatter: converts °C values to the user's preferred unit.
+  const fmt = useCallback<FmtFn>((v, unit) => {
+    if (unit === '°C') return `${displayTemp(v, tempUnit).toFixed(1)} ${tempUnitSymbol(tempUnit)}`;
+    return `${v.toFixed(1)} ${unit}`;
+  }, [tempUnit]);
+
+  // Stdev is a delta (scale only), so the offset (+32) doesn't apply for °C→°F.
+  const fmtDelta = useCallback((v: number, unit: string) => {
+    if (unit === '°C' && tempUnit === 'F') return `${(v * 9 / 5).toFixed(1)} ${tempUnitSymbol(tempUnit)}`;
+    if (unit === '°C') return `${v.toFixed(1)} ${tempUnitSymbol(tempUnit)}`;
+    return `${v.toFixed(1)} ${unit}`;
+  }, [tempUnit]);
 
   useEffect(() => {
     let cancelled = false;
@@ -120,12 +137,12 @@ export function AnalyticsPage() {
           <div className="space-y-4">
             {tempStats.length > 0 && (
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-                {tempStats.map((s) => <StatCard key={s.sensor_id} s={s} accentColor="var(--warning)" />)}
+                {tempStats.map((s) => <StatCard key={s.sensor_id} s={s} accentColor="var(--warning)" fmt={fmt} />)}
               </div>
             )}
             {fanStats.length > 0 && (
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-                {fanStats.map((s) => <StatCard key={s.sensor_id} s={s} accentColor="var(--accent)" />)}
+                {fanStats.map((s) => <StatCard key={s.sensor_id} s={s} accentColor="var(--accent)" fmt={fmt} />)}
               </div>
             )}
           </div>
@@ -157,7 +174,7 @@ export function AnalyticsPage() {
                       <td style={{ padding: '8px 14px', color: 'var(--text)', fontWeight: 500 }}>{a.sensor_name}</td>
                       <td style={{ padding: '8px 14px', color: 'var(--text)', fontFamily: 'monospace' }}>{fmt(a.value, a.unit)}</td>
                       <td style={{ padding: '8px 14px', color: 'var(--danger)', fontFamily: 'monospace', fontWeight: 600 }}>{a.z_score.toFixed(1)}</td>
-                      <td style={{ padding: '8px 14px', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>{a.mean.toFixed(1)} &plusmn; {a.stdev.toFixed(1)} {a.unit}</td>
+                      <td style={{ padding: '8px 14px', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>{fmt(a.mean, a.unit)} &plusmn; {fmtDelta(a.stdev, a.unit)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -177,7 +194,7 @@ export function AnalyticsPage() {
             {Object.entries(tempBuckets).map(([sensorId, bkts]) => (
               <div key={sensorId} className="card p-4 animate-card-enter">
                 <p className="text-xs font-semibold mb-3" style={{ color: 'var(--text-secondary)' }}>{bkts[0].sensor_name}</p>
-                <Sparkline buckets={bkts} />
+                <Sparkline buckets={bkts} fmt={fmt} />
               </div>
             ))}
           </div>

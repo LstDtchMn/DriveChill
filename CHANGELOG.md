@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.6.0] - 2026-03-03
+
+### Features
+- Analytics page temperature values now respect the user's °C/°F unit preference
+- Fan curve editor touch hit area increased to 40px diameter for reliable mobile dragging
+- Temperature unit preference synced from backend on every page startup (no longer resets to °C)
+- Playwright E2E test suite: dashboard, fan curves, alerts, and settings flows
+
+### Infrastructure
+- `@playwright/test` added as devDependency; `test:e2e`, `test:e2e:ui`, `test:e2e:debug` npm scripts
+- `playwright.config.ts` with webServer auto-start (Next.js dev server + mock backend)
+- Frontend package version bumped to 1.6.0
+
 ## [1.5.0] - 2026-03-02
 
 ### Security
