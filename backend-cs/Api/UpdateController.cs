@@ -85,13 +85,24 @@ public sealed class UpdateController : ControllerBase
             return StatusCode(500, new { detail = "Unexpected version string from GitHub." });
         }
 
-        // Locate update_windows.ps1 adjacent to the running executable.
-        var exeDir   = AppContext.BaseDirectory;
-        var psScript = Path.Combine(exeDir, "scripts", "update_windows.ps1");
-
-        if (!System.IO.File.Exists(psScript))
+        // Locate update_windows.ps1 via fallback chain.
+        var scriptName = "update_windows.ps1";
+        var exeDir     = AppContext.BaseDirectory;
+        var candidates = new[]
         {
-            _log.LogError("Update script not found at {Path}", psScript);
+            Environment.GetEnvironmentVariable("DRIVECHILL_SCRIPTS_DIR"),
+            Path.Combine(exeDir, "scripts"),
+            Path.Combine(exeDir, "..", "scripts"),
+        };
+        var psScript = candidates
+            .Where(d => d != null)
+            .Select(d => Path.Combine(d!, scriptName))
+            .FirstOrDefault(System.IO.File.Exists);
+
+        if (psScript is null)
+        {
+            _log.LogError("Update script not found. Searched: {Candidates}",
+                string.Join(", ", candidates.Where(d => d != null)));
             return StatusCode(500, new { detail = "Update script not found. Check server logs." });
         }
 
@@ -102,7 +113,7 @@ public sealed class UpdateController : ControllerBase
             var psi = new ProcessStartInfo
             {
                 FileName        = "powershell.exe",
-                Arguments       = $"-NoProfile -ExecutionPolicy Bypass -File \"{psScript}\" -Version \"{version}\"",
+                Arguments       = $"-NoProfile -ExecutionPolicy Bypass -File \"{psScript}\" -Version \"{version}\" -Artifact windows -InstallDir \"{exeDir.TrimEnd(Path.DirectorySeparatorChar)}\"",
                 Verb            = "runas",
                 UseShellExecute = true,
             };

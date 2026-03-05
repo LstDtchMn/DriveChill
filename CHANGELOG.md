@@ -1,5 +1,27 @@
 # Changelog
 
+## [2.1.1] - 2026-03-05
+
+### Bug Fixes
+- Fix C# analytics `GetRegression` accepting one-sided custom range (now requires both start and end, matching Python)
+- Fix release workflow tag glob pattern (`v[0-9]+` → `v[0-9]*`) for reliable GitHub Actions triggering
+- Fix Docker pull command in release notes using wrong tag (v-prefixed vs semver-only)
+- Add `NODE_OPTIONS=--max-old-space-size=4096` to CI frontend build to prevent OOM
+
+### Improvements
+- Update script (`update_windows.ps1`): add `-Artifact` parameter to select Python or Windows ZIP
+- Update script: install-dir fallback chain (explicit → NSSM service → script-relative)
+- C# `UpdateController`: robust script discovery with env var override + fallback paths
+- C# `UpdateController`: passes `-Artifact windows -InstallDir` to update script
+- Python `update.py`: passes `-Artifact python` to update script
+
+### Tests
+- Add C# `ResolveRange` unit tests (6 tests: both/one-sided/neither/invalid/reversed)
+- Add Python updater route tests (8 tests: version comparison, semver regex, check, apply)
+
+### Docs
+- Add `docs/updating.md` — update procedures for Python, C#, Docker, and rollback
+
 ## [2.1.0] - 2026-03-04
 
 ### Features

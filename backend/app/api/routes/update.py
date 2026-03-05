@@ -157,7 +157,7 @@ async def apply_update(request: Request):
     # Launch PowerShell with UAC elevation (ShellExecute runas).
     # Version is validated as semver above and double-quoted in the argument string.
     import ctypes
-    args = f'-NoProfile -ExecutionPolicy Bypass -File "{ps_script}" -Version "{version}"'
+    args = f'-NoProfile -ExecutionPolicy Bypass -File "{ps_script}" -Version "{version}" -Artifact python'
     result = ctypes.windll.shell32.ShellExecuteW(
         None, "runas", "powershell.exe", args, None, 1
     )

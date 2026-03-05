@@ -8,8 +8,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>DriveChill</RootNamespace>
     <AssemblyName>DriveChill</AssemblyName>
-    <Version>2.1.0</Version>
-    <AssemblyVersion>2.1.0.0</AssemblyVersion>
+    <Version>2.1.1</Version>
+    <AssemblyVersion>2.1.1.0</AssemblyVersion>
 
     <!--
       UAC manifest — only embedded when explicitly requested (i.e. during dotnet publish).
@@ -18,6 +18,10 @@
     -->
     <ApplicationManifest Condition="'$(EmbedManifest)' == 'true'">app.manifest</ApplicationManifest>
   </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="DriveChill.Tests" />
+  </ItemGroup>
 
   <!--
     Copy the Next.js static export (frontend/out/) into wwwroot/ at publish time.

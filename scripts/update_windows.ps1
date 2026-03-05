@@ -8,16 +8,23 @@
 
 .PARAMETER InstallDir
     Path to the existing DriveChill installation root.
-    Defaults to the directory discovered via NSSM (DriveChill service AppDirectory).
+    Resolution order: explicit param → NSSM service directory → script-relative fallback.
+
+.PARAMETER Artifact
+    Which release artifact to download: 'python' or 'windows'.
+    Defaults to 'python'. Use 'windows' for C# native installs.
 
 .EXAMPLE
     .\update_windows.ps1
     .\update_windows.ps1 -Version 2.2.0
     .\update_windows.ps1 -InstallDir "C:\DriveChill"
+    .\update_windows.ps1 -Artifact windows -InstallDir "C:\DriveChill"
 #>
 param(
     [string]$Version,
-    [string]$InstallDir
+    [string]$InstallDir,
+    [ValidateSet('python', 'windows')]
+    [string]$Artifact = 'python'
 )
 
 $ErrorActionPreference = "Stop"
@@ -29,17 +36,18 @@ Write-Host ""
 
 # ── 1. Resolve install directory ────────────────────────────────────────────
 if (-not $InstallDir) {
+    # Try NSSM service directory first
     $nssm = Get-Command nssm -ErrorAction SilentlyContinue
-    if (-not $nssm) {
-        Write-Error "NSSM not found. Provide -InstallDir or install NSSM (choco install nssm)."
-        exit 1
+    if ($nssm) {
+        $backendDir = & nssm get $SERVICE_NAME AppDirectory 2>$null
+        if ($backendDir -and (Test-Path $backendDir)) {
+            $InstallDir = Resolve-Path (Join-Path $backendDir "..")
+        }
     }
-    $backendDir = & nssm get $SERVICE_NAME AppDirectory 2>$null
-    if (-not $backendDir -or -not (Test-Path $backendDir)) {
-        Write-Error "Cannot determine install location via NSSM. Is the '$SERVICE_NAME' service installed?"
-        exit 1
+    # Fall back to script-relative parent (standalone installs)
+    if (-not $InstallDir) {
+        $InstallDir = Resolve-Path (Join-Path $PSScriptRoot "..")
     }
-    $InstallDir = Resolve-Path (Join-Path $backendDir "..")
 }
 
 Write-Host "[OK] Install directory: $InstallDir" -ForegroundColor Green
@@ -58,7 +66,7 @@ if (-not $Version) {
     }
 }
 
-$zipName    = "DriveChill-python-$Version.zip"
+$zipName    = "DriveChill-$Artifact-$Version.zip"
 $zipUrl     = "https://github.com/$GITHUB_REPO/releases/download/v$Version/$zipName"
 $tempZip    = Join-Path $env:TEMP $zipName
 $tempExtDir = Join-Path $env:TEMP "DriveChill-update-$Version"
@@ -104,13 +112,15 @@ Get-ChildItem $srcRoot | Where-Object { $_.Name -ne 'data' } | ForEach-Object {
 }
 Write-Host "[OK] Files updated" -ForegroundColor Green
 
-# ── 6. Update Python dependencies ────────────────────────────────────────────
-$reqFile = Join-Path $InstallDir "backend\requirements.txt"
-$python  = Get-Command python -ErrorAction SilentlyContinue
-if ($python -and (Test-Path $reqFile)) {
-    Write-Host "Updating Python dependencies..." -ForegroundColor Yellow
-    & python -m pip install -r $reqFile --quiet
-    Write-Host "[OK] Dependencies updated" -ForegroundColor Green
+# ── 6. Update Python dependencies (Python artifact only) ─────────────────────
+if ($Artifact -eq 'python') {
+    $reqFile = Join-Path $InstallDir "backend\requirements.txt"
+    $python  = Get-Command python -ErrorAction SilentlyContinue
+    if ($python -and (Test-Path $reqFile)) {
+        Write-Host "Updating Python dependencies..." -ForegroundColor Yellow
+        & python -m pip install -r $reqFile --quiet
+        Write-Host "[OK] Dependencies updated" -ForegroundColor Green
+    }
 }
 
 # ── 7. Restart service ───────────────────────────────────────────────────────

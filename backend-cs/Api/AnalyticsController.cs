@@ -20,7 +20,7 @@ public sealed class AnalyticsController : ControllerBase
     // Helpers
     // -----------------------------------------------------------------------
 
-    private static (DateTimeOffset Start, DateTimeOffset End) ResolveRange(
+    internal static (DateTimeOffset Start, DateTimeOffset End) ResolveRange(
         double? hours, string? startStr, string? endStr)
     {
         var now = DateTimeOffset.UtcNow;
@@ -197,7 +197,7 @@ public sealed class AnalyticsController : ControllerBase
         DateTimeOffset? recentSinceOverride = null;
         DateTimeOffset? recentUntilOverride = null;
         DateTimeOffset? baselineSinceOverride = null;
-        if (!string.IsNullOrEmpty(start))
+        if (!string.IsNullOrEmpty(start) && !string.IsNullOrEmpty(end))
         {
             var (startDt, endDt) = ResolveRange(null, start, end);
             recentSinceOverride   = startDt;
