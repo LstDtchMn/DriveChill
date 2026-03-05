@@ -6,6 +6,35 @@ $ErrorActionPreference = "Stop"
 Write-Host "=== DriveChill Setup ===" -ForegroundColor Cyan
 Write-Host ""
 
+# -----------------------------------------------------------------------
+# smartmontools — optional but needed for drive SMART health data.
+# Installed via winget if available; degrades gracefully if skipped.
+# -----------------------------------------------------------------------
+$smartctl = Get-Command smartctl -ErrorAction SilentlyContinue
+if ($smartctl) {
+    Write-Host "[OK] smartmontools already installed ($($smartctl.Source))" -ForegroundColor Green
+} else {
+    $winget = Get-Command winget -ErrorAction SilentlyContinue
+    if ($winget) {
+        Write-Host "Installing smartmontools via winget..." -ForegroundColor Yellow
+        winget install --id Smartmontools.Smartmontools -e --accept-source-agreements --accept-package-agreements
+        # Refresh PATH so smartctl is findable in the same session
+        $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH","Machine") +
+                    ";" +
+                    [System.Environment]::GetEnvironmentVariable("PATH","User")
+        if (Get-Command smartctl -ErrorAction SilentlyContinue) {
+            Write-Host "[OK] smartmontools installed" -ForegroundColor Green
+        } else {
+            Write-Host "[WARN] smartmontools installed; restart your terminal if 'smartctl' is not on PATH" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "[WARN] winget not found. Install smartmontools manually for drive health monitoring:" -ForegroundColor Yellow
+        Write-Host "        https://www.smartmontools.org/wiki/Download" -ForegroundColor Gray
+        Write-Host "       DriveChill will still run but the Drives page will show degraded mode." -ForegroundColor Gray
+    }
+}
+Write-Host ""
+
 # Check Python
 $python = Get-Command python -ErrorAction SilentlyContinue
 if (-not $python) {

@@ -23,7 +23,24 @@ services:
       DRIVECHILL_SSL_KEYFILE: ${DRIVECHILL_SSL_KEYFILE:-}
       DRIVECHILL_TEMP_UNIT: ${DRIVECHILL_TEMP_UNIT:-C}
       DRIVECHILL_ALLOW_PRIVATE_OUTBOUND_TARGETS: ${DRIVECHILL_ALLOW_PRIVATE_OUTBOUND_TARGETS:-false}
-    # Preferred locked-down profile. Add explicit device mappings only when needed.
+      DRIVECHILL_SECRET_KEY: ${DRIVECHILL_SECRET_KEY:-}
+      DRIVECHILL_VAPID_PUBLIC_KEY: ${DRIVECHILL_VAPID_PUBLIC_KEY:-}
+      DRIVECHILL_VAPID_PRIVATE_KEY: ${DRIVECHILL_VAPID_PRIVATE_KEY:-}
+      DRIVECHILL_VAPID_CONTACT_EMAIL: ${DRIVECHILL_VAPID_CONTACT_EMAIL:-admin@localhost}
+      DRIVECHILL_PROMETHEUS_ENABLED: ${DRIVECHILL_PROMETHEUS_ENABLED:-false}
+    # Drive monitoring: smartctl requires read access to block devices.
+    # By default the container runs without extra capabilities and drive
+    # monitoring operates in degraded mode (no SMART data, no temperature).
+    # To enable full drive monitoring, choose ONE of:
+    #
+    #   Option A — map specific block devices (least privilege):
+    #     devices:
+    #       - "/dev/sda:/dev/sda:r"
+    #       - "/dev/nvme0:/dev/nvme0:r"
+    #     cap_add:
+    #       - SYS_RAWIO
+    #
+    #   Option B — use docker-compose.privileged.yml (grants full host access).
     healthcheck:
       test: ["CMD", "python", "-c", "import os, urllib.request; port=os.environ.get('DRIVECHILL_PORT','8085'); urllib.request.urlopen(f'http://127.0.0.1:{port}/api/health', timeout=3).read()"]
       interval: 30s

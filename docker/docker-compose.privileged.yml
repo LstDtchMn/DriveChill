@@ -23,6 +23,11 @@ services:
       DRIVECHILL_SSL_KEYFILE: ${DRIVECHILL_SSL_KEYFILE:-}
       DRIVECHILL_TEMP_UNIT: ${DRIVECHILL_TEMP_UNIT:-C}
       DRIVECHILL_ALLOW_PRIVATE_OUTBOUND_TARGETS: ${DRIVECHILL_ALLOW_PRIVATE_OUTBOUND_TARGETS:-false}
+      DRIVECHILL_SECRET_KEY: ${DRIVECHILL_SECRET_KEY:-}
+      DRIVECHILL_VAPID_PUBLIC_KEY: ${DRIVECHILL_VAPID_PUBLIC_KEY:-}
+      DRIVECHILL_VAPID_PRIVATE_KEY: ${DRIVECHILL_VAPID_PRIVATE_KEY:-}
+      DRIVECHILL_VAPID_CONTACT_EMAIL: ${DRIVECHILL_VAPID_CONTACT_EMAIL:-admin@localhost}
+      DRIVECHILL_PROMETHEUS_ENABLED: ${DRIVECHILL_PROMETHEUS_ENABLED:-false}
     # ⚠ WARNING: privileged mode grants FULL host access. It disables all
     # container isolation (AppArmor, seccomp, device cgroups, the non-root
     # USER directive in the Dockerfile, etc.). Only use this file when the
@@ -30,6 +35,10 @@ services:
     # Prefer adding specific device capabilities instead:
     #   cap_add: [SYS_RAWIO]
     #   devices: ["/dev/mem:/dev/mem:r"]
+    #
+    # Drive monitoring: privileged mode grants smartctl full access to all
+    # block devices (/dev/sda, /dev/nvme*, etc.) so SMART health and
+    # temperature monitoring work without additional device mappings.
     privileged: true
     healthcheck:
       test: ["CMD", "python", "-c", "import os, urllib.request; port=os.environ.get('DRIVECHILL_PORT','8085'); urllib.request.urlopen(f'http://127.0.0.1:{port}/api/health', timeout=3).read()"]

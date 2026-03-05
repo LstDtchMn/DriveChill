@@ -1,3 +1,4 @@
+#Requires -RunAsAdministrator
 $ErrorActionPreference = "Stop"
 
 Write-Host "=== DriveChill Windows Service Install ===" -ForegroundColor Cyan
@@ -6,6 +7,24 @@ Write-Host "=== DriveChill Windows Service Install ===" -ForegroundColor Cyan
 # Python/uvicorn is not one, so `sc.exe create` with `cmd /c` will not work.
 # We use NSSM (https://nssm.cc) to wrap the process as a proper service.
 # Install via: choco install nssm  OR  scoop install nssm
+
+# smartmontools — check and install if missing (needed for drive health monitoring).
+$smartctl = Get-Command smartctl -ErrorAction SilentlyContinue
+if ($smartctl) {
+    Write-Host "[OK] smartmontools found ($($smartctl.Source))" -ForegroundColor Green
+} else {
+    $winget = Get-Command winget -ErrorAction SilentlyContinue
+    if ($winget) {
+        Write-Host "Installing smartmontools via winget..." -ForegroundColor Yellow
+        winget install --id Smartmontools.Smartmontools -e --accept-source-agreements --accept-package-agreements
+        $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH","Machine") +
+                    ";" +
+                    [System.Environment]::GetEnvironmentVariable("PATH","User")
+        Write-Host "[OK] smartmontools installed" -ForegroundColor Green
+    } else {
+        Write-Host "[WARN] Install smartmontools for drive health monitoring: https://www.smartmontools.org/wiki/Download" -ForegroundColor Yellow
+    }
+}
 
 $nssm = Get-Command nssm -ErrorAction SilentlyContinue
 if (-not $nssm) {
@@ -30,8 +49,10 @@ $backendDir = Join-Path $repoRoot "backend"
 & nssm set DriveChill DisplayName "DriveChill"
 & nssm set DriveChill Description "DriveChill temperature-based fan control service"
 & nssm set DriveChill Start SERVICE_AUTO_START
-& nssm set DriveChill AppStopMethodSkip 6
-& nssm set DriveChill AppStopMethodConsole 5000
+# Graceful shutdown: send Ctrl+C first, allow 10s for cleanup before escalating
+& nssm set DriveChill AppStopMethodConsole 10000
+& nssm set DriveChill AppStopMethodWindow 5000
+& nssm set DriveChill AppStopMethodThreads 3000
 & nssm start DriveChill
 
 Write-Host "[OK] Service DriveChill installed and started via NSSM" -ForegroundColor Green

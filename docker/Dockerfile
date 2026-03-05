@@ -10,9 +10,13 @@ RUN npm run build
 FROM python:3.12-slim
 WORKDIR /app
 
-# Install system dependencies for lm-sensors
+# Install system dependencies: lm-sensors for CPU/GPU readings,
+# smartmontools for drive SMART health and temperature monitoring.
+# smartctl runs as the drivechill user; privileged mode or a host udev
+# rule granting /dev/sd* read access is required for full drive access.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     lm-sensors \
+    smartmontools \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
