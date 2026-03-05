@@ -1,5 +1,11 @@
 # DriveChill — Implementation Plan
 
+## Active Design References
+
+- Drive monitoring + thermal link design: `docs/plans/2026-03-03-drive-monitoring-and-thermal-link-design.md`
+- v2.0 Insights Engine design: `docs/plans/2026-03-03-v2-insights-engine-design.md`
+- v2.0 Insights Engine checklist: `docs/plans/2026-03-03-v2-insights-engine-implementation-checklist.md`
+
 ## Architecture Overview
 
 ```

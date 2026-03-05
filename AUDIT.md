@@ -7,6 +7,12 @@
 
 ---
 
+## Related Design Documents
+
+- Drive monitoring + thermal link design: `docs/plans/2026-03-03-drive-monitoring-and-thermal-link-design.md`
+- v2.0 Insights Engine design: `docs/plans/2026-03-03-v2-insights-engine-design.md`
+- v2.0 Insights Engine checklist: `docs/plans/2026-03-03-v2-insights-engine-implementation-checklist.md`
+
 ## Table of Contents
 
 1. [Architecture Overview](#1-architecture-overview)
@@ -53,7 +59,7 @@ Selection: `DRIVECHILL_HARDWARE_BACKEND` env var (`auto` | `mock` | `lhm_direct`
 
 ## 2. API Endpoint Inventory
 
-**Total: 79 HTTP + 1 WebSocket = 80 endpoints**
+**Total: 92 HTTP + 1 WebSocket = 93 endpoints**
 
 ### 2.1 Authentication (`/api/auth/*`) — 8 endpoints
 
@@ -172,21 +178,52 @@ Selection: `DRIVECHILL_HARDWARE_BACKEND` env var (`auto` | `mock` | `lhm_direct`
 | PUT | `/api/quiet-hours/{id}` | Yes | Yes | Update rule |
 | DELETE | `/api/quiet-hours/{id}` | Yes | Yes | Delete rule |
 
-### 2.11 Analytics (`/api/analytics/*`) — 4 endpoints
+### 2.11 Analytics (`/api/analytics/*`) — 6 endpoints
 
 | Method | Path | Auth | CSRF | Description |
 |--------|------|------|------|-------------|
-| GET | `/api/analytics/history` | Yes | No | Time-bucketed history (avg/min/max) |
-| GET | `/api/analytics/stats` | Yes | No | Aggregate stats (min/max/avg/p95) |
+| GET | `/api/analytics/history` | Yes | No | Time-bucketed history (avg/min/max/count per bucket) |
+| GET | `/api/analytics/stats` | Yes | No | Aggregate stats (min/max/avg/p95, per sensor) |
 | GET | `/api/analytics/anomalies` | Yes | No | Z-score anomaly detection |
-| GET | `/api/analytics/report` | Yes | No | Combined report |
+| GET | `/api/analytics/regression` | Yes | No | Thermal regression vs rolling baseline; load-band aware when load data present |
+| GET | `/api/analytics/correlation` | Yes | No | Pearson correlation between two sensors |
+| GET | `/api/analytics/report` | Yes | No | Combined stats + anomalies + regression snapshot |
 
-### 2.12 Infrastructure — 3 endpoints
+### 2.12 Drive Monitoring (`/api/drives/*`) — 13 endpoints
+
+| Method | Path | Auth | CSRF | Description |
+|--------|------|------|------|-------------|
+| GET | `/api/drives` | Yes | No | List all drives (summary, health, temperature) |
+| POST | `/api/drives/rescan` | Yes | Yes | Trigger full drive rescan |
+| GET | `/api/drives/settings` | Yes | No | Global drive monitoring settings |
+| PUT | `/api/drives/settings` | Yes | Yes | Update global drive monitoring settings |
+| GET | `/api/drives/{drive_id}` | Yes | No | Drive detail (SMART attributes, serial, full health) |
+| GET | `/api/drives/{drive_id}/attributes` | Yes | No | Raw SMART / NVMe attribute table |
+| GET | `/api/drives/{drive_id}/history` | Yes | No | Health history snapshots (query: `hours`, capped to retention) |
+| POST | `/api/drives/{drive_id}/refresh` | Yes | Yes | Force immediate re-poll of a single drive |
+| POST | `/api/drives/{drive_id}/self-tests` | Yes | Yes | Start SMART self-test (short / extended / conveyance) |
+| GET | `/api/drives/{drive_id}/self-tests` | Yes | No | List last 10 self-test runs |
+| POST | `/api/drives/{drive_id}/self-tests/{run_id}/abort` | Yes | Yes | Abort running self-test |
+| GET | `/api/drives/{drive_id}/settings` | Yes | No | Per-drive settings override |
+| PUT | `/api/drives/{drive_id}/settings` | Yes | Yes | Update per-drive settings override |
+
+### 2.13 Temperature Targets (`/api/temperature-targets/*`) — 6 endpoints
+
+| Method | Path | Auth | CSRF | Description |
+|--------|------|------|------|-------------|
+| GET | `/api/temperature-targets` | Yes | No | List all temperature targets |
+| POST | `/api/temperature-targets` | Yes | Yes | Create a temperature target |
+| GET | `/api/temperature-targets/{id}` | Yes | No | Get a single target |
+| PUT | `/api/temperature-targets/{id}` | Yes | Yes | Update a target |
+| DELETE | `/api/temperature-targets/{id}` | Yes | Yes | Delete a target |
+| PATCH | `/api/temperature-targets/{id}/enabled` | Yes | Yes | Toggle target enabled state |
+
+### 2.14 Infrastructure — 3 endpoints
 
 | Method | Path | Auth | CSRF | Description |
 |--------|------|------|------|-------------|
 | GET | `/api/health` | No | No | Health + version + capabilities |
-| GET | `/metrics` | No | No | Prometheus exposition format |
+| GET | `/metrics` | No | No | Prometheus exposition (gated by `DRIVECHILL_PROMETHEUS_ENABLED`) |
 | WS | `/api/ws` | Yes | No | Real-time sensor stream |
 
 ---
@@ -195,7 +232,7 @@ Selection: `DRIVECHILL_HARDWARE_BACKEND` env var (`auto` | `mock` | `lhm_direct`
 
 ### Session Auth
 - **Login:** POST username + password → server sets `drivechill_session` (httponly) + `drivechill_csrf` (JS-readable) cookies
-- **Session TTL:** Configurable (default 24h on Python, 8h on C#)
+- **Session TTL:** Configurable via `DRIVECHILL_SESSION_TTL` (default `8h` on both backends)
 - **CSRF double-submit:** All POST/PUT/DELETE require `X-CSRF-Token` header matching cookie value
 - **API key bypass:** CSRF is skipped when authenticating via `Authorization: Bearer <key>` or `X-API-Key: <key>`
 
@@ -231,12 +268,12 @@ default-src 'self';
 script-src 'self' 'unsafe-inline';
 style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
 img-src 'self' data:;
-connect-src 'self' ws://localhost:{port} wss://localhost:{port};
+connect-src 'self' ws://{request-host} wss://{request-host};
 font-src 'self' https://fonts.gstatic.com;
 frame-ancestors 'none';
 ```
 
-- `connect-src` uses server-configured port (not `Host` header) to prevent CSP injection
+- `connect-src` uses the request `Host` header so WebSocket CSP works for any deployment (not just localhost). This is safe because CSP is a browser-side directive and the Host header reflects the origin the browser used.
 - `'unsafe-inline'` required for Next.js static export bootstrap scripts
 - `frame-ancestors 'none'` prevents clickjacking
 
@@ -275,7 +312,7 @@ frame-ancestors 'none';
 
 - Direct TLS via `DRIVECHILL_SSL_CERTFILE` + `DRIVECHILL_SSL_KEYFILE`
 - Self-signed cert generation via `DRIVECHILL_SSL_GENERATE_SELF_SIGNED=true`
-- Reverse proxy detection via `X-Forwarded-Proto` header
+- Reverse proxy detection via `X-Forwarded-Proto` header (both Python and C# backends)
 - Secure cookie flags set when TLS detected (direct or proxied)
 
 ---
@@ -304,6 +341,11 @@ frame-ancestors 'none';
 | `webhook_deliveries` | timestamp, status_code, payload, error | No |
 | `push_subscriptions` | endpoint, p256dh, auth, user_agent | **Yes** (push keys) |
 | `email_notification_settings` | SMTP host/port/user/password, TLS flags | **Yes** (SMTP password, encrypted) |
+| `drives` | id, name, model, serial, device_path, bus_type, media_type, capacity, firmware | No |
+| `drive_health_snapshots` | drive_id, recorded_at, temperature_c, health_status, health_percent, SMART counters | No |
+| `drive_attributes_latest` | drive_id, key, name, normalized/worst/threshold values, raw_value, status | No |
+| `drive_self_test_runs` | id, drive_id, type, status, progress_percent, started_at, finished_at, provider_ref | No |
+| `temperature_targets` | id, name, drive_id, sensor_id, fan_ids_json, target_temp_c, tolerance_c, min_fan_speed, enabled | No |
 
 ### Encryption at Rest
 
@@ -435,14 +477,17 @@ Hub instance polls N remote agent instances. Each agent runs its own DriveChill 
 
 | Endpoint | Description |
 |----------|-------------|
-| `/api/analytics/history` | Time-bucketed aggregation (min/avg/max per bucket, 10s–86400s buckets) |
-| `/api/analytics/stats` | Per-sensor aggregate (min, max, avg, p95, sample count) |
-| `/api/analytics/anomalies` | Z-score anomaly detection (threshold 1.0–10.0) |
-| `/api/analytics/report` | Combined stats + anomalies + top anomalous sensors |
+| `/api/analytics/history` | Time-bucketed aggregation (min/avg/max per bucket, 10s–86400s buckets); `hours`, `start`/`end`, `sensor_id(s)`, `bucket_seconds`; retention-gated |
+| `/api/analytics/stats` | Per-sensor aggregate (min, max, avg, p95, sample count); `hours`, `start`/`end`, `sensor_id(s)` |
+| `/api/analytics/anomalies` | Z-score anomaly detection; `z_score_threshold` 1.0–10.0; `hours`, `start`/`end`, `sensor_id(s)` |
+| `/api/analytics/regression` | Thermal regression vs rolling baseline; `baseline_days` (7–90), `recent_hours` (1–168), `threshold_delta`; load-band aware (`low`/`medium`/`high`) when cpu_load/gpu_load data is present; `load_band_aware` flag in response |
+| `/api/analytics/correlation` | Pearson correlation coefficient between two sensors; requires `x_sensor_id` + `y_sensor_id`; returns coefficient, sample count, raw scatter points |
+| `/api/analytics/report` | Combined stats + anomalies + top anomalous sensors + regression snapshot |
 
 ### Prometheus Metrics
 
-- `GET /metrics` — text exposition format
+- `GET /metrics` — text exposition format (disabled by default)
+- Enabled via `DRIVECHILL_PROMETHEUS_ENABLED=true`
 - Metric name regex validated to reject injection characters
 
 ---
@@ -460,18 +505,19 @@ Hub instance polls N remote agent instances. Each agent runs its own DriveChill 
 
 | Page | Component | Description |
 |------|-----------|-------------|
-| Dashboard | `SystemOverview.tsx` | Sensor cards, fan cards, machine hub, temp charts |
-| Fan Curves | `FanCurvesPage.tsx` | Curve editor (SVG), preset selector, profile manager |
+| Dashboard | `SystemOverview.tsx` | Sensor cards, fan cards, machine hub, temp charts, storage summary card |
+| Fan Curves | `FanCurvesPage.tsx` | Curve editor (SVG), preset selector, profile manager, drive sensor preselection |
 | Alerts | `AlertsPage.tsx` | Rule CRUD, event log, active alert indicators |
 | Analytics | `AnalyticsPage.tsx` | Stat cards, anomaly table, sparkline charts |
-| Settings | `SettingsPage.tsx` | General, notifications, webhooks, quiet hours, API keys |
+| Settings | `SettingsPage.tsx` | General, notifications, webhooks, quiet hours, API keys, Storage Monitoring |
+| Drives | `DrivesPage.tsx` | Drive list (health/temp badges), detail drill-in, SMART attributes, self-test management |
 
 ### Key Frontend Features
 
 | Feature | Implementation |
 |---------|---------------|
 | Real-time updates | WebSocket via `useWebSocket` hook (auto-reconnect with backoff) |
-| °C/°F toggle | `tempUnit.ts` utilities; `settingsStore` synced from backend on mount |
+| °C/°F toggle | `tempUnit.ts` utilities; `settingsStore` synced from backend on mount; applied in Drives, Analytics, Dashboard |
 | "You are here" indicator | Animated pulsing dot + crosshairs on curve editor |
 | Touch-friendly curves | 40px invisible hit-area circles on draggable points |
 | Safe mode banner | Red/blue banner with explanation text |
@@ -479,6 +525,8 @@ Hub instance polls N remote agent instances. Each agent runs its own DriveChill 
 | Machine drill-in | Clickable machine cards → remote sensor/fan/profile state |
 | Dark/light theme | CSS custom properties toggled via `ThemeToggle` component |
 | Confirmation dialogs | All destructive actions (delete profile, revoke key, remove machine) |
+| Drive "Use for cooling" | Button in drive detail → pre-selects drive's `hdd_temp` sensor in Fan Curves sensor picker |
+| Degraded mode banner | Drives page shows warning when `smartctl` unavailable |
 
 ---
 
@@ -489,8 +537,8 @@ Hub instance polls N remote agent instances. Each agent runs its own DriveChill 
 | File | Purpose |
 |------|---------|
 | `docker/Dockerfile` | Multi-stage build: Node 20 (frontend) → Python 3.12 (backend); non-root `drivechill` user |
-| `docker/docker-compose.yml` | Standard deployment with health check |
-| `docker/docker-compose.privileged.yml` | Privileged mode for direct hardware access |
+| `docker/docker-compose.yml` | Standard deployment with health check; notes on drive device access |
+| `docker/docker-compose.privileged.yml` | Privileged mode for full drive monitoring without device mapping |
 | `docker/.env.example` | Documents all 14 `DRIVECHILL_*` environment variables |
 
 ### Windows
@@ -524,32 +572,40 @@ Hub instance polls N remote agent instances. Each agent runs its own DriveChill 
 | `DRIVECHILL_SSL_GENERATE_SELF_SIGNED` | `false` | Auto-generate self-signed cert |
 | `DRIVECHILL_FORCE_AUTH` | `false` | Force auth even on localhost |
 | `DRIVECHILL_ALLOW_PRIVATE_OUTBOUND_TARGETS` | `false` | Allow LAN machine targets |
-| `DRIVECHILL_SESSION_TTL_SECONDS` | `86400` | Session TTL |
+| `DRIVECHILL_SESSION_TTL` | `8h` | Session TTL (e.g., `15m`, `8h`, `7d`) |
 | `DRIVECHILL_PROMETHEUS_ENABLED` | `false` | Enable `/metrics` endpoint |
 
 ---
 
 ## 13. Test Coverage
 
-### Python Backend (175 tests)
+### Python Backend (334 tests)
 
 | Test File | Tests | Coverage Area |
 |-----------|-------|---------------|
 | `test_alert_cooldown.py` | 6 | Alert cooldown, active alerts, event limit |
+| `test_analytics_contract.py` | — | Analytics API contract (history/stats/anomalies/regression/correlation/report) |
+| `test_analytics_downsampling.py` | 4 | §6.3 downsampling correctness: raw min/max preserved per bucket, no bleed-through |
+| `test_analytics_perf.py` | 7 | Analytics performance over 130k-row/30d dataset (all queries < 2 s) |
 | `test_api_keys.py` | 3 | API key CRUD |
 | `test_api_key_scopes.py` | 4 | Scoped key filtering, wildcard matching |
 | `test_auth.py` | 19 | Login/logout/setup, rate limiting, lockout |
 | `test_auth_http.py` | 7 | HTTP auth (Bearer, X-API-Key), session revalidation |
 | `test_backup_restore.py` | 9 | Profile/curve/setting export/import, DB snapshots |
 | `test_composite_curves.py` | 3 | Composite temp resolution (CPU/GPU/HDD) |
+| `test_drive_monitoring.py` | 60 | ATA/NVMe parsing, device path validation, health normalization, self-test state, route validation, degraded mode |
+| `test_drives_parity.py` | 38 | Cross-backend contract parity for all `/api/drives/*` endpoints |
+| `test_drives_routes.py` | 30 | Drive route integration tests |
 | `test_fan_settings.py` | 4 | Per-fan min speed, zero-RPM, persistence |
 | `test_machine_registry.py` | 13 | Machine CRUD, polling, snapshots, backoff |
 | `test_migration_backup.py` | 6 | Migration execution, backup before migration |
 | `test_profile_import_export.py` | 8 | Profile JSON import/export, curve ID freshening |
-| `test_release_gates.py` | 20 | Safety gates (dangerous curves, active profile deletion) |
+| `test_ramp_rate.py` | 5 | Fan ramp-rate service (gradual acceleration, deceleration) |
+| `test_release_gates.py` | 20 | Safety gates (dangerous curves, active profile deletion, quiet hours) |
 | `test_security_regressions.py` | 4 | Auth bypass, CSRF, credential redaction |
 | `test_sensor_labels.py` | 5 | Label CRUD, max length, collision handling |
 | `test_settings_ttl_validation.py` | 1 | Session TTL enforcement |
+| `test_thermal_regression.py` | 6 | Thermal regression detection (warning/critical/insufficient baseline) |
 | `test_webhooks.py` | 11 | Webhook delivery, retries, signing, failure handling |
 
 ### Frontend
@@ -557,7 +613,7 @@ Hub instance polls N remote agent instances. Each agent runs its own DriveChill 
 | Type | Tool | Status |
 |------|------|--------|
 | TypeScript type-check | `npm run build` | Passing (0 errors) |
-| E2E tests | Playwright | 4 spec files (dashboard, fan-curves, alerts, settings) |
+| E2E tests | Playwright | 5 spec files (dashboard, fan-curves, alerts, settings, drives) |
 
 ### C# Backend
 
@@ -573,6 +629,7 @@ Hub instance polls N remote agent instances. Each agent runs its own DriveChill 
 |------|--------|-------|
 | E2E tests in CI | Not configured | Playwright tests exist but no GitHub Actions workflow runs them |
 | C# backend unit tests | None | C# backend verified via build only; no test project |
+| C# drive-monitoring provider layer | Deferred | C# drive monitoring is functionally complete (uses `smartctl` via inline `DriveMonitorService`); the provider-layer abstraction described in design docs is a backlog refactor, not a functional gap |
 | `alert()` / `confirm()` dialogs | Using browser native | Not replaced with custom toast/modal system |
 | °F gauge rendering | Partial | Values converted but gauge arc/colors still based on °C thresholds |
 | Playwright browser install | Manual | `npx playwright install chromium` required before first run |

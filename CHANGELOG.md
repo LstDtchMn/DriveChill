@@ -1,17 +1,60 @@
 # Changelog
 
+## [2.1.0] - 2026-03-04
+
+### Features
+- Temperature Targets: set a target temperature for any drive sensor with a tolerance band, floor fan speed, and fan selection
+- Proportional fan control: fans ramp linearly within the tolerance band, hold floor below, and go 100% above
+- Multi-drive shared fan support: when multiple targets point to the same fan, the hottest drive wins (max speed)
+- Relationship Map view: SVG bipartite diagram showing drive-to-fan connections with thermal-state coloured lines
+- List view: card-based target list with live speed labels and enable/disable toggle
+- Temperature targets integrate with existing fan curves via union-of-fan-IDs merge (higher speed wins)
+- Full C# backend parity: TemperatureTargetService, controller, DB schema, and FanService integration
+- API key scope `temperature_targets` added to both Python and C# backends
+
+## [2.0.0] - 2026-03-03
+
+### Features
+- Analytics v2.0: custom date-range queries (start/end params), multi-sensor filtering (`sensor_ids`), auto-sized buckets
+- Analytics v2.0: new `/api/analytics/correlation` endpoint — Pearson r between any two sensors
+- Analytics v2.0: `retention_limited` flag in history responses; banner shown in UI when active
+- Analytics page: 30-day time window option, custom start/end date pickers, sensor filter chips, correlation panel with scatter plot
+- Analytics anomalies: `severity` field (`warning` / `critical`) based on z-score vs threshold
+- Drive temperature mini-sparkline (24h) on the drive detail panel
+- "New cooling curve" button on the Drives page: creates a pre-configured storage cooling curve draft and navigates to Fan Curves
+- History retention default raised from 24 hours to 720 hours (30 days) for all new and existing installations
+- Migration 009: auto-upgrades existing installs still at the 24-hour retention default
+
+### Infrastructure
+- Python analytics routes rewritten for v2.0 (custom ranges, multi-sensor IN clause, correlation, retention gate)
+- C# analytics parity with Python v2.0: `AnalyticsController` updated, `DbService` analytics methods accept `DateTimeOffset start/end` + `string[]? sensorIds`; correlation method added
+- `AnalyticsAnomaly` model gains `Severity` property; new `AnalyticsCorrelationSample` model
+- C# `AnalyticsController` reads retention from `SettingsStore.RetentionDays` (was `AppSettings`)
+- 7 analytics performance tests — each query over a 130 k-row / 30-day dataset must complete under 2 s
+- 30 drive-routes integration tests added
+- Drive E2E tests: "Use for cooling" and "New cooling curve" flows
+
 ## [1.6.0] - 2026-03-03
 
 ### Features
+- Drive monitoring: SMART health, temperature, and self-test support via smartmontools
+- New Drives page with health badges, per-drive temperature display, and SMART attribute drill-in
+- Drive temperatures injected into the fan-curve and alert pipeline as `hdd_temp` sensors
+- Per-drive settings overrides: custom temperature warning/critical thresholds, alert opt-out, curve picker opt-out
+- Storage Monitoring section in Settings: global thresholds for HDD, SSD, and NVMe drives
+- Dashboard storage summary card: drive count, health summary, and hottest drive temperature
 - Analytics page temperature values now respect the user's °C/°F unit preference
 - Fan curve editor touch hit area increased to 40px diameter for reliable mobile dragging
 - Temperature unit preference synced from backend on every page startup (no longer resets to °C)
 - Playwright E2E test suite: dashboard, fan curves, alerts, and settings flows
 
 ### Infrastructure
+- `smartmontools` added to Docker image for SMART data collection
 - `@playwright/test` added as devDependency; `test:e2e`, `test:e2e:ui`, `test:e2e:debug` npm scripts
 - `playwright.config.ts` with webServer auto-start (Next.js dev server + mock backend)
 - Frontend package version bumped to 1.6.0
+- Drive monitoring `DriveMonitorWorker` BackgroundService registered in C# DI
+- API key scope domain `drives` added to both Python and C# backends
 
 ## [1.5.0] - 2026-03-02
 
