@@ -112,6 +112,13 @@ async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
     }
   }
 
+  if (res.status === 403) {
+    // Notify the app that the action was forbidden (e.g. viewer role trying to write)
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('drivechill:forbidden'));
+    }
+  }
+
   if (!res.ok) {
     let detail: unknown = null;
     try {
@@ -127,9 +134,30 @@ async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
 /** Auth-specific API calls. */
 export const authApi = {
   checkSession: () =>
-    fetchAPI<{ auth_required: boolean; authenticated: boolean; username?: string }>(
+    fetchAPI<{ auth_required: boolean; authenticated: boolean; username?: string; role?: string }>(
       '/api/auth/session'
     ),
+  listUsers: () =>
+    fetchAPI<{ users: Array<{ id: number; username: string; role: string; created_at: string }> }>(
+      '/api/auth/users'
+    ),
+  createUser: (username: string, password: string, role: string) =>
+    fetchAPI<{ success: boolean; username: string; role: string }>('/api/auth/users', {
+      method: 'POST',
+      body: JSON.stringify({ username, password, role }),
+    }),
+  setUserRole: (userId: number, role: string) =>
+    fetchAPI<{ success: boolean }>(`/api/auth/users/${userId}/role`, {
+      method: 'PUT',
+      body: JSON.stringify({ role }),
+    }),
+  changeUserPassword: (userId: number, password: string) =>
+    fetchAPI<{ success: boolean }>(`/api/auth/users/${userId}/password`, {
+      method: 'PUT',
+      body: JSON.stringify({ password }),
+    }),
+  deleteUser: (userId: number) =>
+    fetchAPI<{ success: boolean }>(`/api/auth/users/${userId}`, { method: 'DELETE' }),
   login: (username: string, password: string) =>
     fetchAPI<{ success: boolean; username: string }>('/api/auth/login', {
       method: 'POST',

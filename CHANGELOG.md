@@ -1,5 +1,42 @@
 # Changelog
 
+## [2.2.0] - 2026-03-05
+
+### Features
+- **PID temperature controller**: temperature targets now support full PID control (Kp, Ki, Kd) as an opt-in alternative to the proportional band. Derivative term uses an EMA low-pass filter (α=0.7) to suppress sensor noise; integral uses conditional anti-windup to prevent overshoot. Default gains (Kp=1, Ki=0, Kd=0) are pure proportional — fully backwards-compatible.
+- **Multi-user RBAC (viewer role)**: users can now be created with an `admin` or `viewer` role. Viewers have full read access but all write/mutate routes return 403. Logout is exempt from the write-block. Frontend disables all write controls (buttons, inputs, toggles) when the authenticated role is `viewer` and shows a "Read-only access" banner on write-heavy pages.
+- **Last-admin safety guard**: demoting or deleting the last remaining admin account is blocked with a 409 response in both Python and C# backends.
+- **Session security hardening**: deleting a user now immediately invalidates all their active sessions (explicit DELETE + INNER JOIN validation — deleted users cannot keep using existing session cookies).
+- **User management UI**: Settings page gains a User Management section (admin-only) — list users, create users with role selection, change role, change password, delete user.
+- **Custom confirm/modal dialogs**: `ConfirmDialog` component and `useConfirm()` hook replace all `window.confirm` calls; `ToastProvider` and `useToast()` hook replace all `window.alert` error messages. Dialogs respect dark/light theme.
+- **°F gauge fix**: `TempGauge` arc colours and fill ratios are computed in the user's display unit so a 90°F reading no longer appears in the danger zone.
+- **C# profile export/import**: `GET /api/profiles/{id}/export` returns `{export_version: 1, profile: {name, preset, curves}}`; `POST /api/profiles/import` accepts the flat profile body matching the Python contract. Frontend import/export round-trip verified.
+- **C# auth_log**: login, logout, user CRUD events are written to the `auth_log` table (both Python and C# backends now parity). Logs are pruned hourly to a 90-day retention window.
+- **E2E tests in CI**: GitHub Actions `e2e.yml` workflow starts the Python mock backend, installs Playwright, and runs all specs including new `analytics.spec.ts` and `temperature-targets.spec.ts`.
+
+### Migrations
+- `011_pid_fields.sql`: adds `pid_mode`, `pid_kp`, `pid_ki`, `pid_kd` columns to `temperature_targets` (default: proportional-only)
+- `012_rbac.sql`: adds `role TEXT NOT NULL DEFAULT 'admin'` to `users`; adds `role` column to `sessions`
+
+### Tests
+- Python: 418 passing (9 new RBAC tests in `test_auth.py`: viewer write-block, logout exemption, session invalidation on delete, last-admin guards, role propagation)
+- C#: 75 passing (up from 16) — new test files: `FanServiceTests.cs`, `ProfilesControllerTests.cs`, `AlertServiceTests.cs`, `WebhookServiceTests.cs`, `SessionServiceTests.cs` covering RBAC, fan service, alert cooldown, webhook delivery, profile export/import
+
+## [2.1.2] - 2026-03-05
+
+### Bug Fixes
+- Fix C# `ActivateProfile` leaving orphaned curves from the previous profile active (now calls `FanService.SetCurves` which clears all slots before applying the new profile's curves)
+- Fix Python `AlertService.remove_rule` mutating in-memory state before the DB delete (now consistent with `add_rule` — DB write first, then mutation)
+- Fix C# `PUT /api/fans/curves` accepting `FanCurve` directly instead of `{curve, allow_dangerous}` body — frontend was sending the wrapped form, causing silent deserialization failure
+
+### Features
+- C# `GET /api/profiles/{id}` endpoint added (parity with Python)
+- C# `GET /api/fans/settings` + `GET/PUT /api/fans/{fanId}/settings` endpoints added — per-fan minimum speed floor and zero-RPM capability now fully supported
+- C# `FanService` enforces per-fan minimum speed floor in `ApplyCurvesAsync` (zero-RPM fans exempt at 0%)
+- C# dangerous-curve safety gate: `PUT /api/fans/curves` now returns 409 with warning list when curve has dangerously low speeds at high temps; `allow_dangerous=true` overrides
+- C# `POST /api/fans/curves/validate` endpoint added — pre-check curve for dangerous speeds without saving
+- C# `GET /api/webhooks/deliveries` now supports `offset` query parameter for pagination
+
 ## [2.1.1] - 2026-03-05
 
 ### Bug Fixes

@@ -58,13 +58,15 @@ public sealed class WebhookService
         }
     }
 
-    public IReadOnlyList<WebhookDelivery> GetDeliveries(int limit = 100)
+    public IReadOnlyList<WebhookDelivery> GetDeliveries(int limit = 100, int offset = 0)
     {
-        var safeLimit = Math.Clamp(limit, 1, 500);
+        var safeLimit  = Math.Clamp(limit, 1, 500);
+        var safeOffset = Math.Max(0, offset);
         lock (_lock)
         {
             return _store.GetAll().WebhookDeliveries
                 .OrderByDescending(d => d.Timestamp)
+                .Skip(safeOffset)
                 .Take(safeLimit)
                 .ToList();
         }
@@ -97,14 +99,6 @@ public sealed class WebhookService
         var json = JsonSerializer.Serialize(payload);
         var body = Encoding.UTF8.GetBytes(json);
 
-        string? signature = null;
-        if (!string.IsNullOrWhiteSpace(cfg.SigningSecret))
-        {
-            signature = "sha256=" + Convert.ToHexString(
-                HMACSHA256.HashData(Encoding.UTF8.GetBytes(cfg.SigningSecret), body)
-            ).ToLowerInvariant();
-        }
-
         var client = _httpClientFactory.CreateClient("webhooks");
         client.Timeout = TimeSpan.FromSeconds(cfg.TimeoutSeconds);
 
@@ -115,13 +109,31 @@ public sealed class WebhookService
             string? error = null;
             var success = false;
 
+            // Generate fresh timestamp + nonce per attempt so that receivers
+            // implementing replay protection accept retries (mirrors Python behaviour).
+            var signedTimestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
+            var nonce = Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
+
             try
             {
                 using var req = new HttpRequestMessage(HttpMethod.Post, cfg.TargetUrl);
                 req.Content = new ByteArrayContent(body);
                 req.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
-                if (!string.IsNullOrWhiteSpace(signature))
-                    req.Headers.Add("X-DriveChill-Signature", signature);
+                req.Headers.Add("X-DriveChill-Timestamp", signedTimestamp);
+                req.Headers.Add("X-DriveChill-Nonce", nonce);
+                if (!string.IsNullOrWhiteSpace(cfg.SigningSecret))
+                {
+                    // Signature format: HMAC-SHA256(key, "{timestamp}.{nonce}.{body}")
+                    // Matches Python: hmac.new(secret, f"{ts}.{nonce}.".encode() + body, sha256).hexdigest()
+                    var prefix = Encoding.UTF8.GetBytes($"{signedTimestamp}.{nonce}.");
+                    var message = new byte[prefix.Length + body.Length];
+                    prefix.CopyTo(message, 0);
+                    body.CopyTo(message, prefix.Length);
+                    var sig = "sha256=" + Convert.ToHexString(
+                        HMACSHA256.HashData(Encoding.UTF8.GetBytes(cfg.SigningSecret), message)
+                    ).ToLowerInvariant();
+                    req.Headers.Add("X-DriveChill-Signature", sig);
+                }
                 using var resp = await client.SendAsync(req, ct);
                 statusCode = (int)resp.StatusCode;
                 success = resp.IsSuccessStatusCode;

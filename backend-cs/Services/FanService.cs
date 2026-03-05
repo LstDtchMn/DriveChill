@@ -18,6 +18,8 @@ public sealed class FanService
     private readonly Dictionary<string, FanCurve?> _curves = new();
     // fanId → last applied speed percent (used to avoid redundant hardware calls)
     private readonly Dictionary<string, double> _lastApplied = new();
+    // fanId → (minSpeedPct, zeroRpmCapable) — loaded from DB at startup
+    private Dictionary<string, FanSettingsModel> _fanSettings = new();
 
     // Test locking — prevent curve engine from overriding speeds during a benchmark sweep
     private readonly HashSet<string> _testLocked   = [];
@@ -42,6 +44,32 @@ public sealed class FanService
         _tempTargetSvc = tempTargetSvc;
         // NOTE: GetFanIds() returns empty before Initialize() — fan IDs are
         // populated lazily on the first ApplyCurvesAsync tick (see SyncCurveSlots).
+    }
+
+    // -----------------------------------------------------------------------
+    // Fan settings (min speed floor, zero-RPM capability)
+    // -----------------------------------------------------------------------
+
+    /// <summary>Load per-fan settings from DB on startup.</summary>
+    public async Task LoadFanSettingsAsync(DbService db, CancellationToken ct = default)
+    {
+        _fanSettings = await db.GetAllFanSettingsAsync(ct);
+    }
+
+    /// <summary>Update cached fan settings (caller persists to DB).</summary>
+    public void UpdateFanSettings(string fanId, double minSpeedPct, bool zeroRpmCapable)
+    {
+        _rwl.EnterWriteLock();
+        try
+        {
+            _fanSettings[fanId] = new FanSettingsModel
+            {
+                FanId          = fanId,
+                MinSpeedPct    = minSpeedPct,
+                ZeroRpmCapable = zeroRpmCapable,
+            };
+        }
+        finally { _rwl.ExitWriteLock(); }
     }
 
     // -----------------------------------------------------------------------
@@ -241,6 +269,25 @@ public sealed class FanService
         _store.SaveCurves(GetCurves());
     }
 
+    /// <summary>
+    /// Replace ALL active curves atomically (used when activating a profile).
+    /// Clears orphaned curves from the previously active profile before applying
+    /// the new set, so stale curves never persist across profile switches.
+    /// </summary>
+    public void SetCurves(IEnumerable<FanCurve> curves)
+    {
+        _rwl.EnterWriteLock();
+        try
+        {
+            foreach (var key in _curves.Keys.ToList())
+                _curves[key] = null;
+            foreach (var curve in curves)
+                _curves[curve.FanId] = curve;
+        }
+        finally { _rwl.ExitWriteLock(); }
+        _store.SaveCurves(GetCurves());
+    }
+
     public void DeleteCurve(string fanId)
     {
         _rwl.EnterWriteLock();
@@ -306,6 +353,20 @@ public sealed class FanService
             curveSpeeds.TryGetValue(fanId, out var curveSpeed);
             ttSpeeds.TryGetValue(fanId, out var ttSpeed);
             var finalSpeed = Math.Max(curveSpeed, ttSpeed);
+
+            // Enforce per-fan minimum speed floor (zero-RPM fans are exempt at 0%)
+            _fanSettings.TryGetValue(fanId, out var fs);
+            if (fs is { MinSpeedPct: > 0 })
+            {
+                if (finalSpeed == 0 && fs.ZeroRpmCapable)
+                {
+                    // Allow true 0% on zero-RPM capable fans
+                }
+                else
+                {
+                    finalSpeed = Math.Max(finalSpeed, fs.MinSpeedPct);
+                }
+            }
 
             _rwl.EnterReadLock();
             double last;

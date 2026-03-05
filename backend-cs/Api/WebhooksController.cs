@@ -93,8 +93,8 @@ public sealed class WebhooksController : ControllerBase
     }
 
     [HttpGet("deliveries")]
-    public IActionResult GetDeliveries([FromQuery] int limit = 100)
+    public IActionResult GetDeliveries([FromQuery] int limit = 100, [FromQuery] int offset = 0)
     {
-        return Ok(new { deliveries = _webhooks.GetDeliveries(limit) });
+        return Ok(new { deliveries = _webhooks.GetDeliveries(limit, offset) });
     }
 }

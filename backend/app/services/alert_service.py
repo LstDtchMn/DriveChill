@@ -127,12 +127,13 @@ class AlertService:
 
     async def remove_rule(self, rule_id: str) -> bool:
         """Remove a rule by ID. Returns True if the rule existed, False otherwise."""
-        original_count = len(self._rules)
-        self._rules = [r for r in self._rules if r.id != rule_id]
-        found = len(self._rules) < original_count
-        self._active_alerts.discard(rule_id)
-        self._last_triggered.pop(rule_id, None)
+        found = any(r.id == rule_id for r in self._rules)
+        # Write to DB first so that if it fails, in-memory state stays consistent.
         await self._delete_rule(rule_id)
+        if found:
+            self._rules = [r for r in self._rules if r.id != rule_id]
+            self._active_alerts.discard(rule_id)
+            self._last_triggered.pop(rule_id, None)
         return found
 
     def set_rules(self, rules: list[AlertRule]) -> None:

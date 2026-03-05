@@ -224,6 +224,10 @@ export interface TemperatureTarget {
   tolerance_c: number;
   min_fan_speed: number;
   enabled: boolean;
+  pid_mode: boolean;
+  pid_kp: number;
+  pid_ki: number;
+  pid_kd: number;
 }
 
 // ── Drive monitoring types ────────────────────────────────────────────────────
