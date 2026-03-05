@@ -38,7 +38,7 @@ public sealed class SessionService
     {
         if (await _db.UserExistsAsync(ct)) return false;
         var hash = HashPassword(password);
-        await _db.CreateUserAsync(username, hash, ct);
+        await _db.CreateUserAsync(username, hash, role: "admin", ct: ct);
         return true;
     }
 
@@ -50,10 +50,12 @@ public sealed class SessionService
         var attempts = _rateLimits.GetOrAdd(ip, _ => []);
         lock (attempts)
         {
+            int before = attempts.Count;
             attempts.RemoveAll(t => t < cutoff);
-            // Evict the entry when there are no recent attempts to prevent
-            // the dictionary growing unboundedly with stale IP entries.
-            if (attempts.Count == 0)
+            // Evict only when stale entries were pruned away, not on first-ever call.
+            // This prevents a new empty list from being immediately removed from the dict,
+            // which would cause the count to never accumulate.
+            if (attempts.Count == 0 && before > 0)
                 _rateLimits.TryRemove(ip, out _);
             if (attempts.Count >= MaxAttemptsPerMinute) return false;
             attempts.Add(now);
@@ -87,6 +89,8 @@ public sealed class SessionService
                         ? (count, DateTimeOffset.UtcNow.Add(LockoutDuration))
                         : (count, existing.LockUntil);
                 });
+            _ = _db.LogAuthEventAsync("login", ip, username, "failure",
+                user == null ? "unknown_user" : "wrong_password");
             return null;
         }
 
@@ -97,11 +101,12 @@ public sealed class SessionService
         var sessionToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
         var csrfToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
         await _db.CreateSessionAsync(sessionToken, csrfToken, username, ip, userAgent, SessionTtl, ct);
+        _ = _db.LogAuthEventAsync("login", ip, username, "success", null);
         return (sessionToken, csrfToken);
     }
 
-    /// <summary>Validate a session token. Returns username if valid.</summary>
-    public async Task<(string Username, string CsrfToken)?> ValidateSessionAsync(
+    /// <summary>Validate a session token. Returns username, csrf token, and role if valid.</summary>
+    public async Task<(string Username, string CsrfToken, string Role)?> ValidateSessionAsync(
         string? token, CancellationToken ct = default)
     {
         if (string.IsNullOrEmpty(token)) return null;
@@ -119,7 +124,7 @@ public sealed class SessionService
     // PBKDF2 password hashing (built-in .NET, no external NuGet)
     // -----------------------------------------------------------------------
 
-    private static string HashPassword(string password)
+    public static string HashPassword(string password)
     {
         var salt = RandomNumberGenerator.GetBytes(16);
         var hash = Rfc2898DeriveBytes.Pbkdf2(password, salt, 100_000, HashAlgorithmName.SHA256, 32);

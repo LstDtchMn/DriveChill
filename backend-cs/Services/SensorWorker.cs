@@ -53,6 +53,7 @@ public sealed class SensorWorker : BackgroundService
     {
         _hw.Initialize();
         await _tempTargets.LoadAsync(stoppingToken);
+        await _fans.LoadFanSettingsAsync(_db, stoppingToken);
         _log.LogInformation("SensorWorker started — backend: {Backend}", _hw.GetBackendName());
 
         while (!stoppingToken.IsCancellationRequested)
@@ -108,13 +109,14 @@ public sealed class SensorWorker : BackgroundService
                     _lastDbWrite = DateTimeOffset.UtcNow;
                 }
 
-                // Prune old sensor_log + drive_health_snapshots once per hour
+                // Prune old sensor_log + drive_health_snapshots + auth_log once per hour
                 if ((DateTimeOffset.UtcNow - _lastPrune).TotalSeconds >= PruneIntervalSeconds)
                 {
                     try
                     {
                         var retentionDays = Math.Max(_store.RetentionDays, 1);
                         await _db.PruneAsync(retentionDays, stoppingToken);
+                        await _db.CleanupOldAuthLogsAsync(90, stoppingToken);
                         _lastPrune = DateTimeOffset.UtcNow;
                     }
                     catch (Exception ex)

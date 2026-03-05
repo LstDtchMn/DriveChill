@@ -71,6 +71,7 @@ public sealed class DbService : IDisposable
                     id            INTEGER PRIMARY KEY AUTOINCREMENT,
                     username      TEXT    NOT NULL UNIQUE,
                     password_hash TEXT    NOT NULL,
+                    role          TEXT    NOT NULL DEFAULT 'admin',
                     created_at    TEXT    NOT NULL
                 );
 
@@ -195,6 +196,24 @@ public sealed class DbService : IDisposable
                     updated_at             TEXT NOT NULL DEFAULT (datetime('now'))
                 );
 
+                CREATE TABLE IF NOT EXISTS fan_settings (
+                    fan_id           TEXT PRIMARY KEY,
+                    min_speed_pct    REAL    NOT NULL DEFAULT 0.0,
+                    zero_rpm_capable INTEGER NOT NULL DEFAULT 0,
+                    updated_at       TEXT    NOT NULL DEFAULT (datetime('now'))
+                );
+
+                CREATE TABLE IF NOT EXISTS auth_log (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp  TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    ip         TEXT,
+                    username   TEXT,
+                    outcome    TEXT NOT NULL,
+                    detail     TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_auth_log_ts ON auth_log(timestamp);
+
                 CREATE TABLE IF NOT EXISTS temperature_targets (
                     id            TEXT PRIMARY KEY,
                     name          TEXT NOT NULL DEFAULT '',
@@ -205,6 +224,10 @@ public sealed class DbService : IDisposable
                     tolerance_c   REAL NOT NULL DEFAULT 5.0,
                     min_fan_speed REAL NOT NULL DEFAULT 20.0,
                     enabled       INTEGER NOT NULL DEFAULT 1,
+                    pid_mode      INTEGER NOT NULL DEFAULT 0,
+                    pid_kp        REAL    NOT NULL DEFAULT 5.0,
+                    pid_ki        REAL    NOT NULL DEFAULT 0.05,
+                    pid_kd        REAL    NOT NULL DEFAULT 1.0,
                     created_at    TEXT NOT NULL DEFAULT (datetime('now')),
                     updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
                 );
@@ -233,6 +256,27 @@ public sealed class DbService : IDisposable
                     ('drive_wear_critical_percent_used','90');
                 """;
             await cmd.ExecuteNonQueryAsync(ct);
+
+            // Idempotent column migrations for existing databases.
+            // ALTER TABLE ADD COLUMN throws if the column already exists — we suppress that.
+            foreach (var alter in new[]
+            {
+                "ALTER TABLE temperature_targets ADD COLUMN pid_mode INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE temperature_targets ADD COLUMN pid_kp   REAL    NOT NULL DEFAULT 5.0",
+                "ALTER TABLE temperature_targets ADD COLUMN pid_ki   REAL    NOT NULL DEFAULT 0.05",
+                "ALTER TABLE temperature_targets ADD COLUMN pid_kd   REAL    NOT NULL DEFAULT 1.0",
+                "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'",
+            })
+            {
+                try
+                {
+                    await using var mig = conn.CreateCommand();
+                    mig.CommandText = alter;
+                    await mig.ExecuteNonQueryAsync(ct);
+                }
+                catch (SqliteException) { /* column already exists — safe to ignore */ }
+            }
+
             _initialised = true;
         }
         finally { _initLock.Release(); }
@@ -337,6 +381,73 @@ public sealed class DbService : IDisposable
               .Append(CsvEscape(reader.GetString(5))).Append('\n');
         }
         return sb.ToString();
+    }
+
+    // -----------------------------------------------------------------------
+    // Fan settings
+    // -----------------------------------------------------------------------
+
+    public async Task<Dictionary<string, FanSettingsModel>> GetAllFanSettingsAsync(
+        CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT fan_id, min_speed_pct, zero_rpm_capable FROM fan_settings";
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        var result = new Dictionary<string, FanSettingsModel>();
+        while (await reader.ReadAsync(ct))
+        {
+            var fanId = reader.GetString(0);
+            result[fanId] = new FanSettingsModel
+            {
+                FanId          = fanId,
+                MinSpeedPct    = reader.GetDouble(1),
+                ZeroRpmCapable = reader.GetInt32(2) != 0,
+            };
+        }
+        return result;
+    }
+
+    public async Task<FanSettingsModel?> GetFanSettingAsync(string fanId,
+        CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT min_speed_pct, zero_rpm_capable FROM fan_settings WHERE fan_id = $id";
+        cmd.Parameters.AddWithValue("$id", fanId);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct)) return null;
+        return new FanSettingsModel
+        {
+            FanId          = fanId,
+            MinSpeedPct    = reader.GetDouble(0),
+            ZeroRpmCapable = reader.GetInt32(1) != 0,
+        };
+    }
+
+    public async Task SetFanSettingAsync(string fanId, double minSpeedPct, bool zeroRpmCapable,
+        CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO fan_settings (fan_id, min_speed_pct, zero_rpm_capable, updated_at)
+            VALUES ($id, $min, $zrpm, datetime('now'))
+            ON CONFLICT(fan_id) DO UPDATE SET
+                min_speed_pct    = excluded.min_speed_pct,
+                zero_rpm_capable = excluded.zero_rpm_capable,
+                updated_at       = excluded.updated_at
+            """;
+        cmd.Parameters.AddWithValue("$id",   fanId);
+        cmd.Parameters.AddWithValue("$min",  minSpeedPct);
+        cmd.Parameters.AddWithValue("$zrpm", zeroRpmCapable ? 1 : 0);
+        await cmd.ExecuteNonQueryAsync(ct);
     }
 
     // -----------------------------------------------------------------------
@@ -1204,15 +1315,16 @@ public sealed class DbService : IDisposable
         return Convert.ToInt32(await cmd.ExecuteScalarAsync(ct)) > 0;
     }
 
-    public async Task CreateUserAsync(string username, string passwordHash, CancellationToken ct = default)
+    public async Task CreateUserAsync(string username, string passwordHash, string role = "admin", CancellationToken ct = default)
     {
         await EnsureInitialisedAsync(ct);
         await using var conn = new SqliteConnection(_connStr);
         await conn.OpenAsync(ct);
         await using var cmd = conn.CreateCommand();
-        cmd.CommandText = "INSERT INTO users (username, password_hash, created_at) VALUES ($u, $h, $t)";
+        cmd.CommandText = "INSERT INTO users (username, password_hash, role, created_at) VALUES ($u, $h, $r, $t)";
         cmd.Parameters.AddWithValue("$u", username);
         cmd.Parameters.AddWithValue("$h", passwordHash);
+        cmd.Parameters.AddWithValue("$r", role);
         cmd.Parameters.AddWithValue("$t", DateTimeOffset.UtcNow.ToString("o"));
         await cmd.ExecuteNonQueryAsync(ct);
     }
@@ -1228,6 +1340,97 @@ public sealed class DbService : IDisposable
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct)) return null;
         return (reader.GetString(0), reader.GetString(1));
+    }
+
+    public async Task<List<UserRecord>> ListUsersAsync(CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT id, username, COALESCE(role,'admin'), created_at FROM users ORDER BY id";
+        var results = new List<UserRecord>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            results.Add(new UserRecord(reader.GetInt64(0), reader.GetString(1), reader.GetString(2), reader.GetString(3)));
+        return results;
+    }
+
+    public async Task<UserRecord?> GetUserByIdAsync(long userId, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT id, username, COALESCE(role,'admin'), created_at FROM users WHERE id = $id";
+        cmd.Parameters.AddWithValue("$id", userId);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct)) return null;
+        return new UserRecord(reader.GetInt64(0), reader.GetString(1), reader.GetString(2), reader.GetString(3));
+    }
+
+    public async Task<bool> SetUserRoleAsync(long userId, string role, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE users SET role = $role WHERE id = $id";
+        cmd.Parameters.AddWithValue("$role", role);
+        cmd.Parameters.AddWithValue("$id", userId);
+        return await cmd.ExecuteNonQueryAsync(ct) > 0;
+    }
+
+    public async Task<bool> SetUserPasswordAsync(long userId, string passwordHash, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE users SET password_hash = $h WHERE id = $id";
+        cmd.Parameters.AddWithValue("$h", passwordHash);
+        cmd.Parameters.AddWithValue("$id", userId);
+        return await cmd.ExecuteNonQueryAsync(ct) > 0;
+    }
+
+    public async Task<int> CountAdminUsersAsync(CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM users WHERE COALESCE(role,'admin') = 'admin'";
+        return Convert.ToInt32(await cmd.ExecuteScalarAsync(ct));
+    }
+
+    public async Task<bool> DeleteUserAsync(long userId, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+
+        // Resolve username first so we can invalidate their sessions.
+        await using var getUserCmd = conn.CreateCommand();
+        getUserCmd.CommandText = "SELECT username FROM users WHERE id = $id";
+        getUserCmd.Parameters.AddWithValue("$id", userId);
+        var username = await getUserCmd.ExecuteScalarAsync(ct) as string;
+        if (username is null) return false;
+
+        await using var deleteCmd = conn.CreateCommand();
+        deleteCmd.CommandText = "DELETE FROM users WHERE id = $id";
+        deleteCmd.Parameters.AddWithValue("$id", userId);
+        var deleted = await deleteCmd.ExecuteNonQueryAsync(ct) > 0;
+
+        if (deleted)
+        {
+            // Invalidate all active sessions belonging to the deleted user.
+            await using var sessionCmd = conn.CreateCommand();
+            sessionCmd.CommandText = "DELETE FROM sessions WHERE username = $u";
+            sessionCmd.Parameters.AddWithValue("$u", username);
+            await sessionCmd.ExecuteNonQueryAsync(ct);
+        }
+
+        return deleted;
     }
 
     public async Task CreateSessionAsync(string token, string csrfToken, string username,
@@ -1252,18 +1455,23 @@ public sealed class DbService : IDisposable
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
-    public async Task<(string Username, string CsrfToken)?> ValidateSessionAsync(string token, CancellationToken ct = default)
+    public async Task<(string Username, string CsrfToken, string Role)?> ValidateSessionAsync(string token, CancellationToken ct = default)
     {
         await EnsureInitialisedAsync(ct);
         await using var conn = new SqliteConnection(_connStr);
         await conn.OpenAsync(ct);
         await using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT username, csrf_token FROM sessions WHERE token = $tok AND expires_at > $now";
+        cmd.CommandText = """
+            SELECT s.username, s.csrf_token, u.role
+            FROM sessions s
+            INNER JOIN users u ON s.username = u.username
+            WHERE s.token = $tok AND s.expires_at > $now
+            """;
         cmd.Parameters.AddWithValue("$tok", token);
         cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("o"));
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct)) return null;
-        return (reader.GetString(0), reader.GetString(1));
+        return (reader.GetString(0), reader.GetString(1), reader.GetString(2));
     }
 
     public async Task DeleteSessionAsync(string token, CancellationToken ct = default)
@@ -1721,7 +1929,8 @@ public sealed class DbService : IDisposable
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             SELECT id, name, drive_id, sensor_id, fan_ids_json,
-                   target_temp_c, tolerance_c, min_fan_speed, enabled
+                   target_temp_c, tolerance_c, min_fan_speed, enabled,
+                   pid_mode, pid_kp, pid_ki, pid_kd
             FROM temperature_targets ORDER BY created_at
             """;
         var results = new List<TemperatureTarget>();
@@ -1739,7 +1948,8 @@ public sealed class DbService : IDisposable
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             SELECT id, name, drive_id, sensor_id, fan_ids_json,
-                   target_temp_c, tolerance_c, min_fan_speed, enabled
+                   target_temp_c, tolerance_c, min_fan_speed, enabled,
+                   pid_mode, pid_kp, pid_ki, pid_kd
             FROM temperature_targets WHERE id = $id
             """;
         cmd.Parameters.AddWithValue("$id", targetId);
@@ -1757,9 +1967,11 @@ public sealed class DbService : IDisposable
         cmd.CommandText = """
             INSERT INTO temperature_targets
                 (id, name, drive_id, sensor_id, fan_ids_json,
-                 target_temp_c, tolerance_c, min_fan_speed, enabled, created_at, updated_at)
+                 target_temp_c, tolerance_c, min_fan_speed, enabled,
+                 pid_mode, pid_kp, pid_ki, pid_kd, created_at, updated_at)
             VALUES ($id, $name, $driveId, $sensorId, $fanIds,
-                    $targetTemp, $tolerance, $minSpeed, $enabled, $now, $now)
+                    $targetTemp, $tolerance, $minSpeed, $enabled,
+                    $pidMode, $pidKp, $pidKi, $pidKd, $now, $now)
             """;
         cmd.Parameters.AddWithValue("$id", target.Id);
         cmd.Parameters.AddWithValue("$name", target.Name);
@@ -1770,6 +1982,10 @@ public sealed class DbService : IDisposable
         cmd.Parameters.AddWithValue("$tolerance", target.ToleranceC);
         cmd.Parameters.AddWithValue("$minSpeed", target.MinFanSpeed);
         cmd.Parameters.AddWithValue("$enabled", target.Enabled ? 1 : 0);
+        cmd.Parameters.AddWithValue("$pidMode", target.PidMode ? 1 : 0);
+        cmd.Parameters.AddWithValue("$pidKp", target.PidKp);
+        cmd.Parameters.AddWithValue("$pidKi", target.PidKi);
+        cmd.Parameters.AddWithValue("$pidKd", target.PidKd);
         cmd.Parameters.AddWithValue("$now", now);
         await cmd.ExecuteNonQueryAsync(ct);
         return target;
@@ -1778,6 +1994,7 @@ public sealed class DbService : IDisposable
     public async Task<TemperatureTarget?> UpdateTemperatureTargetAsync(
         string targetId, string name, string? driveId, string sensorId,
         string[] fanIds, double targetTempC, double toleranceC, double minFanSpeed,
+        bool pidMode, double pidKp, double pidKi, double pidKd,
         CancellationToken ct = default)
     {
         await EnsureInitialisedAsync(ct);
@@ -1790,6 +2007,7 @@ public sealed class DbService : IDisposable
                 name = $name, drive_id = $driveId, sensor_id = $sensorId,
                 fan_ids_json = $fanIds, target_temp_c = $targetTemp,
                 tolerance_c = $tolerance, min_fan_speed = $minSpeed,
+                pid_mode = $pidMode, pid_kp = $pidKp, pid_ki = $pidKi, pid_kd = $pidKd,
                 updated_at = $now
             WHERE id = $id
             """;
@@ -1801,6 +2019,10 @@ public sealed class DbService : IDisposable
         cmd.Parameters.AddWithValue("$targetTemp", targetTempC);
         cmd.Parameters.AddWithValue("$tolerance", toleranceC);
         cmd.Parameters.AddWithValue("$minSpeed", minFanSpeed);
+        cmd.Parameters.AddWithValue("$pidMode", pidMode ? 1 : 0);
+        cmd.Parameters.AddWithValue("$pidKp", pidKp);
+        cmd.Parameters.AddWithValue("$pidKi", pidKi);
+        cmd.Parameters.AddWithValue("$pidKd", pidKd);
         cmd.Parameters.AddWithValue("$now", now);
         var rows = await cmd.ExecuteNonQueryAsync(ct);
         return rows > 0 ? await GetTemperatureTargetAsync(targetId, ct) : null;
@@ -1849,7 +2071,57 @@ public sealed class DbService : IDisposable
             ToleranceC  = reader.GetDouble(6),
             MinFanSpeed = reader.GetDouble(7),
             Enabled     = reader.GetInt32(8) != 0,
+            PidMode     = !reader.IsDBNull(9)  && reader.GetInt32(9)  != 0,
+            PidKp       = reader.IsDBNull(10)  ? 5.0  : reader.GetDouble(10),
+            PidKi       = reader.IsDBNull(11)  ? 0.05 : reader.GetDouble(11),
+            PidKd       = reader.IsDBNull(12)  ? 1.0  : reader.GetDouble(12),
         };
+    }
+
+    // -----------------------------------------------------------------------
+    // Auth log
+    // -----------------------------------------------------------------------
+
+    public async Task LogAuthEventAsync(string eventType, string? ip, string? username,
+        string outcome, string? detail, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO auth_log (timestamp, event_type, ip, username, outcome, detail)
+            VALUES ($ts, $et, $ip, $user, $outcome, $detail)
+            """;
+        cmd.Parameters.AddWithValue("$ts",      DateTimeOffset.UtcNow.ToString("o"));
+        cmd.Parameters.AddWithValue("$et",      eventType);
+        cmd.Parameters.AddWithValue("$ip",      (object?)ip       ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$user",    (object?)username ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$outcome", outcome);
+        cmd.Parameters.AddWithValue("$detail",  (object?)detail   ?? DBNull.Value);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    /// <summary>Delete auth_log rows older than retentionDays in batches of 500.</summary>
+    public async Task CleanupOldAuthLogsAsync(int retentionDays = 90, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        var cutoff = DateTimeOffset.UtcNow.AddDays(-retentionDays).ToString("o");
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+
+        while (true)
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                DELETE FROM auth_log WHERE id IN (
+                    SELECT id FROM auth_log WHERE timestamp < $cutoff LIMIT 500
+                )
+                """;
+            cmd.Parameters.AddWithValue("$cutoff", cutoff);
+            var deleted = await cmd.ExecuteNonQueryAsync(ct);
+            if (deleted == 0) break;
+        }
     }
 }
 

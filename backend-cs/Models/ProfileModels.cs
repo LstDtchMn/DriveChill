@@ -40,6 +40,19 @@ public sealed class CreateProfileRequest
     public List<FanCurve> Curves { get; set; } = [];
 }
 
+/// <summary>Request body for POST /api/profiles/import (flat profile object, matches Python contract).</summary>
+public sealed class ImportProfileRequest
+{
+    [JsonPropertyName("name")]
+    public string? Name { get; set; }
+
+    [JsonPropertyName("preset")]
+    public string Preset { get; set; } = "custom";
+
+    [JsonPropertyName("curves")]
+    public List<FanCurve> Curves { get; set; } = [];
+}
+
 /// <summary>Built-in preset curve templates exposed at GET /api/profiles/preset-curves.</summary>
 public static class PresetCurves
 {

@@ -21,6 +21,14 @@ public sealed class ProfilesController : ControllerBase
     [HttpGet]
     public IActionResult GetProfiles() => Ok(_store.LoadProfiles());
 
+    /// <summary>GET /api/profiles/{id}</summary>
+    [HttpGet("{id}")]
+    public IActionResult GetProfile(string id)
+    {
+        var profile = _store.LoadProfiles().FirstOrDefault(p => p.Id == id);
+        return profile is not null ? Ok(profile) : NotFound(new { detail = "Profile not found" });
+    }
+
     /// <summary>POST /api/profiles</summary>
     [HttpPost]
     public IActionResult CreateProfile([FromBody] CreateProfileRequest req)
@@ -82,14 +90,61 @@ public sealed class ProfilesController : ControllerBase
         foreach (var p in profiles) p.IsActive = p.Id == id;
         _store.SaveProfiles(profiles);
 
-        // Apply all curves in the profile
-        foreach (var curve in profile.Curves)
-            _fans.SetCurve(curve);
+        // Replace all active curves atomically so orphaned curves from the
+        // previous profile don't linger.
+        _fans.SetCurves(profile.Curves);
 
         return Ok(profile);
+    }
+
+    /// <summary>GET /api/profiles/{id}/export — portable JSON snapshot, export_version: 1.</summary>
+    [HttpGet("{id}/export")]
+    public IActionResult ExportProfile(string id)
+    {
+        var profile = _store.LoadProfiles().FirstOrDefault(p => p.Id == id);
+        if (profile is null) return NotFound(new { detail = "Profile not found" });
+
+        return Ok(new
+        {
+            export_version = 1,
+            profile = new
+            {
+                name   = profile.Name,
+                preset = profile.Description,
+                curves = profile.Curves,
+            },
+        });
+    }
+
+    /// <summary>POST /api/profiles/import — create a new profile from a portable snapshot.</summary>
+    [HttpPost("import")]
+    public IActionResult ImportProfile([FromBody] ImportProfileRequest req)
+    {
+        var profileName = string.IsNullOrWhiteSpace(req.Name)
+            ? $"Imported {RandomHex(3)}"
+            : req.Name;
+
+        var profile = new Profile
+        {
+            Name        = profileName,
+            Description = req.Preset,
+            Curves      = req.Curves,
+        };
+
+        var profiles = _store.LoadProfiles().ToList();
+        profiles.Add(profile);
+        _store.SaveProfiles(profiles);
+        return StatusCode(201, new { success = true, profile });
     }
 
     /// <summary>GET /api/profiles/preset-curves — built-in curve templates.</summary>
     [HttpGet("preset-curves")]
     public IActionResult GetPresets() => Ok(PresetCurves.All);
+
+    private static string RandomHex(int bytes)
+    {
+        Span<byte> buf = stackalloc byte[bytes];
+        System.Security.Cryptography.RandomNumberGenerator.Fill(buf);
+        return Convert.ToHexStringLower(buf);
+    }
 }
