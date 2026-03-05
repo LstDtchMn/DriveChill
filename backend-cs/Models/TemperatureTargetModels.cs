@@ -13,6 +13,10 @@ public sealed class TemperatureTarget
     public double  ToleranceC  { get; set; } = 5.0;
     public double  MinFanSpeed { get; set; } = 20.0;
     public bool    Enabled     { get; set; } = true;
+    public bool    PidMode     { get; set; } = false;
+    public double  PidKp       { get; set; } = 5.0;
+    public double  PidKi       { get; set; } = 0.05;
+    public double  PidKd       { get; set; } = 1.0;
 }
 
 public sealed class TemperatureTargetCreateRequest
@@ -21,9 +25,13 @@ public sealed class TemperatureTargetCreateRequest
     public string? DriveId     { get; set; }
     public string  SensorId    { get; set; } = "";
     public string[] FanIds     { get; set; } = [];
-    [Range(20.0, 85.0)] public double  TargetTempC { get; set; }
-    [Range(1.0, 20.0)]  public double  ToleranceC  { get; set; } = 5.0;
-    [Range(0.0, 100.0)] public double  MinFanSpeed { get; set; } = 20.0;
+    [Range(20.0, 85.0)]  public double  TargetTempC { get; set; }
+    [Range(1.0, 20.0)]   public double  ToleranceC  { get; set; } = 5.0;
+    [Range(0.0, 100.0)]  public double  MinFanSpeed { get; set; } = 20.0;
+    public bool    PidMode     { get; set; } = false;
+    [Range(0.0, 100.0)]  public double  PidKp       { get; set; } = 5.0;
+    [Range(0.0, 10.0)]   public double  PidKi       { get; set; } = 0.05;
+    [Range(0.0, 100.0)]  public double  PidKd       { get; set; } = 1.0;
 }
 
 public sealed class TemperatureTargetUpdateRequest
@@ -32,9 +40,13 @@ public sealed class TemperatureTargetUpdateRequest
     public string? DriveId     { get; set; }
     public string  SensorId    { get; set; } = "";
     public string[] FanIds     { get; set; } = [];
-    [Range(20.0, 85.0)] public double  TargetTempC { get; set; }
-    [Range(1.0, 20.0)]  public double  ToleranceC  { get; set; } = 5.0;
-    [Range(0.0, 100.0)] public double  MinFanSpeed { get; set; } = 20.0;
+    [Range(20.0, 85.0)]  public double  TargetTempC { get; set; }
+    [Range(1.0, 20.0)]   public double  ToleranceC  { get; set; } = 5.0;
+    [Range(0.0, 100.0)]  public double  MinFanSpeed { get; set; } = 20.0;
+    public bool    PidMode     { get; set; } = false;
+    [Range(0.0, 100.0)]  public double  PidKp       { get; set; } = 5.0;
+    [Range(0.0, 10.0)]   public double  PidKi       { get; set; } = 0.05;
+    [Range(0.0, 100.0)]  public double  PidKd       { get; set; } = 1.0;
 }
 
 public sealed class TemperatureTargetToggleRequest

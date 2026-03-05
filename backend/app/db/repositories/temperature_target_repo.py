@@ -18,7 +18,8 @@ class TemperatureTargetRepo:
     async def list_all(self) -> list[TemperatureTarget]:
         cursor = await self._db.execute(
             "SELECT id, name, drive_id, sensor_id, fan_ids_json, "
-            "target_temp_c, tolerance_c, min_fan_speed, enabled "
+            "target_temp_c, tolerance_c, min_fan_speed, enabled, "
+            "pid_mode, pid_kp, pid_ki, pid_kd "
             "FROM temperature_targets ORDER BY created_at"
         )
         rows = await cursor.fetchall()
@@ -27,7 +28,8 @@ class TemperatureTargetRepo:
     async def get(self, target_id: str) -> TemperatureTarget | None:
         cursor = await self._db.execute(
             "SELECT id, name, drive_id, sensor_id, fan_ids_json, "
-            "target_temp_c, tolerance_c, min_fan_speed, enabled "
+            "target_temp_c, tolerance_c, min_fan_speed, enabled, "
+            "pid_mode, pid_kp, pid_ki, pid_kd "
             "FROM temperature_targets WHERE id = ?",
             (target_id,),
         )
@@ -39,8 +41,9 @@ class TemperatureTargetRepo:
         await self._db.execute(
             "INSERT INTO temperature_targets "
             "(id, name, drive_id, sensor_id, fan_ids_json, "
-            "target_temp_c, tolerance_c, min_fan_speed, enabled, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "target_temp_c, tolerance_c, min_fan_speed, enabled, "
+            "pid_mode, pid_kp, pid_ki, pid_kd, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 target.id,
                 target.name,
@@ -51,6 +54,10 @@ class TemperatureTargetRepo:
                 target.tolerance_c,
                 target.min_fan_speed,
                 1 if target.enabled else 0,
+                1 if target.pid_mode else 0,
+                target.pid_kp,
+                target.pid_ki,
+                target.pid_kd,
                 now,
                 now,
             ),
@@ -60,7 +67,8 @@ class TemperatureTargetRepo:
 
     _ALLOWED_UPDATE_FIELDS = frozenset({
         "name", "drive_id", "sensor_id", "fan_ids", "fan_ids_json",
-        "target_temp_c", "tolerance_c", "min_fan_speed", "enabled", "updated_at",
+        "target_temp_c", "tolerance_c", "min_fan_speed", "enabled",
+        "pid_mode", "pid_kp", "pid_ki", "pid_kd", "updated_at",
     })
 
     async def update(self, target_id: str, **fields) -> TemperatureTarget | None:
@@ -80,9 +88,11 @@ class TemperatureTargetRepo:
         if "fan_ids" in updates:
             updates["fan_ids_json"] = json.dumps(updates.pop("fan_ids"))
 
-        # Convert enabled bool to int
+        # Convert bool fields to int
         if "enabled" in updates:
             updates["enabled"] = 1 if updates["enabled"] else 0
+        if "pid_mode" in updates:
+            updates["pid_mode"] = 1 if updates["pid_mode"] else 0
 
         set_clause = ", ".join(f"{k} = ?" for k in updates)
         values = list(updates.values()) + [target_id]
@@ -117,4 +127,8 @@ class TemperatureTargetRepo:
             tolerance_c=row[6],
             min_fan_speed=row[7],
             enabled=bool(row[8]),
+            pid_mode=bool(row[9]) if len(row) > 9 and row[9] is not None else False,
+            pid_kp=float(row[10]) if len(row) > 10 and row[10] is not None else 5.0,
+            pid_ki=float(row[11]) if len(row) > 11 and row[11] is not None else 0.05,
+            pid_kd=float(row[12]) if len(row) > 12 and row[12] is not None else 1.0,
         )

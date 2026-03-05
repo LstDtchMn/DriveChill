@@ -15,6 +15,10 @@ class TemperatureTarget(BaseModel):
     tolerance_c: float = Field(ge=1.0, le=20.0, default=5.0)
     min_fan_speed: float = Field(ge=0.0, le=100.0, default=20.0)
     enabled: bool = True
+    pid_mode: bool = False
+    pid_kp: float = Field(ge=0.0, le=100.0, default=5.0)
+    pid_ki: float = Field(ge=0.0, le=10.0, default=0.05)
+    pid_kd: float = Field(ge=0.0, le=100.0, default=1.0)
 
 
 class TemperatureTargetCreate(BaseModel):
@@ -26,6 +30,10 @@ class TemperatureTargetCreate(BaseModel):
     target_temp_c: float = Field(ge=20.0, le=85.0)
     tolerance_c: float = Field(ge=1.0, le=20.0, default=5.0)
     min_fan_speed: float = Field(ge=0.0, le=100.0, default=20.0)
+    pid_mode: bool = False
+    pid_kp: float = Field(ge=0.0, le=100.0, default=5.0)
+    pid_ki: float = Field(ge=0.0, le=10.0, default=0.05)
+    pid_kd: float = Field(ge=0.0, le=100.0, default=1.0)
 
 
 class TemperatureTargetUpdate(BaseModel):
@@ -37,6 +45,10 @@ class TemperatureTargetUpdate(BaseModel):
     target_temp_c: float = Field(ge=20.0, le=85.0)
     tolerance_c: float = Field(ge=1.0, le=20.0, default=5.0)
     min_fan_speed: float = Field(ge=0.0, le=100.0, default=20.0)
+    pid_mode: bool = False
+    pid_kp: float = Field(ge=0.0, le=100.0, default=5.0)
+    pid_ki: float = Field(ge=0.0, le=10.0, default=0.05)
+    pid_kd: float = Field(ge=0.0, le=100.0, default=1.0)
 
 
 class TemperatureTargetToggle(BaseModel):

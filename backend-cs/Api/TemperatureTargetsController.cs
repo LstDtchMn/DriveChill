@@ -50,6 +50,10 @@ public sealed partial class TemperatureTargetsController : ControllerBase
             TargetTempC = req.TargetTempC,
             ToleranceC = req.ToleranceC,
             MinFanSpeed = req.MinFanSpeed,
+            PidMode = req.PidMode,
+            PidKp = req.PidKp,
+            PidKi = req.PidKi,
+            PidKd = req.PidKd,
         };
         var created = await _svc.AddAsync(target);
         return StatusCode(201, created);
@@ -80,7 +84,8 @@ public sealed partial class TemperatureTargetsController : ControllerBase
 
         var updated = await _svc.UpdateAsync(
             targetId, req.Name, req.DriveId, req.SensorId, req.FanIds,
-            req.TargetTempC, req.ToleranceC, req.MinFanSpeed);
+            req.TargetTempC, req.ToleranceC, req.MinFanSpeed,
+            req.PidMode, req.PidKp, req.PidKi, req.PidKd);
         return updated is not null ? Ok(updated) : NotFound(new { detail = "Not found" });
     }
 

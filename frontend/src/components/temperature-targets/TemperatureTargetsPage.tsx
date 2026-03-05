@@ -7,6 +7,9 @@ import { api } from '@/lib/api';
 import { cToF, fToC } from '@/lib/tempUnit';
 import type { TemperatureTarget, SensorReading } from '@/lib/types';
 import { Plus, Trash2, Edit3, ToggleLeft, ToggleRight, Thermometer, Fan, Map, List } from 'lucide-react';
+import { useConfirm } from '@/components/ui/ConfirmDialog';
+import { useCanWrite } from '@/hooks/useCanWrite';
+import { ViewerBanner } from '@/components/ui/ViewerBanner';
 
 // Temperature unit helpers (wraps raw converters for convenience)
 const toDisplay = (celsius: number, unit: string) => unit === 'F' ? cToF(celsius) : celsius;
@@ -67,6 +70,11 @@ function TargetForm({ initial, drives, fans, onSave, onCancel }: TargetFormProps
     initial ? toDisplayDelta(initial.tolerance_c, tempUnit) : toDisplayDelta(5, tempUnit)
   );
   const [minSpeed, setMinSpeed] = useState(initial?.min_fan_speed ?? 20);
+  const [pidMode, setPidMode] = useState(initial?.pid_mode ?? false);
+  const [pidKp, setPidKp] = useState(initial?.pid_kp ?? 5.0);
+  const [pidKi, setPidKi] = useState(initial?.pid_ki ?? 0.05);
+  const [pidKd, setPidKd] = useState(initial?.pid_kd ?? 1.0);
+  const [showPid, setShowPid] = useState(initial?.pid_mode ?? false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -86,6 +94,10 @@ function TargetForm({ initial, drives, fans, onSave, onCancel }: TargetFormProps
         target_temp_c: toC(targetTemp, tempUnit),
         tolerance_c: toCDelta(tolerance, tempUnit),
         min_fan_speed: minSpeed,
+        pid_mode: pidMode,
+        pid_kp: pidKp,
+        pid_ki: pidKi,
+        pid_kd: pidKd,
       });
     } catch (e: any) {
       const body = e?.detail;
@@ -196,6 +208,76 @@ function TargetForm({ initial, drives, fans, onSave, onCancel }: TargetFormProps
             style={{ background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)' }}
           />
         </div>
+      </div>
+
+      {/* Advanced PID gains — collapsed by default */}
+      <div>
+        <button
+          type="button"
+          onClick={() => setShowPid(v => !v)}
+          className="text-xs font-medium flex items-center gap-1"
+          style={{ color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+        >
+          {showPid ? '▾' : '▸'} Advanced: PID Controller
+          {pidMode && <span className="badge badge-success ml-1">On</span>}
+        </button>
+        {showPid && (
+          <div className="mt-3 p-3 rounded-lg space-y-3" style={{ background: 'var(--bg)', border: '1px solid var(--border)' }}>
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium" style={{ color: 'var(--text)' }}>Enable PID controller</span>
+              <button
+                type="button"
+                onClick={() => setPidMode(v => !v)}
+                className="text-xs px-3 py-1 rounded-full font-medium transition-colors"
+                style={pidMode
+                  ? { background: 'var(--accent)', color: 'white' }
+                  : { background: 'var(--surface-200)', color: 'var(--text-secondary)' }}
+              >
+                {pidMode ? 'Enabled' : 'Disabled'}
+              </button>
+            </div>
+            {pidMode && (
+              <>
+                <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                  PID replaces the tolerance band with continuous control.
+                  Kp=proportional, Ki=integral (windup clamped), Kd=derivative.
+                </p>
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-secondary)' }}>Kp (%/°C)</label>
+                    <input
+                      type="number" step="0.1" min="0" max="100"
+                      value={pidKp}
+                      onChange={e => setPidKp(Number(e.target.value))}
+                      className="w-full px-3 py-2 rounded-lg text-sm"
+                      style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', color: 'var(--text)' }}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-secondary)' }}>Ki (%/°C·s)</label>
+                    <input
+                      type="number" step="0.01" min="0" max="10"
+                      value={pidKi}
+                      onChange={e => setPidKi(Number(e.target.value))}
+                      className="w-full px-3 py-2 rounded-lg text-sm"
+                      style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', color: 'var(--text)' }}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-secondary)' }}>Kd (%·s/°C)</label>
+                    <input
+                      type="number" step="0.1" min="0" max="100"
+                      value={pidKd}
+                      onChange={e => setPidKd(Number(e.target.value))}
+                      className="w-full px-3 py-2 rounded-lg text-sm"
+                      style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', color: 'var(--text)' }}
+                    />
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        )}
       </div>
 
       {error && <p className="text-xs" style={{ color: 'var(--danger)' }}>{error}</p>}
@@ -330,6 +412,7 @@ function TargetList({
   onToggle: (t: TemperatureTarget) => void;
   onDelete: (t: TemperatureTarget) => void;
 }) {
+  const canWrite = useCanWrite();
   const { tempUnit } = useSettingsStore();
 
   if (targets.length === 0) {
@@ -380,8 +463,9 @@ function TargetList({
               </div>
               <div className="flex gap-1.5 shrink-0">
                 <button
-                  onClick={() => onToggle(t)}
-                  className="p-1.5 rounded-lg hover:bg-surface-200 transition-colors"
+                  onClick={() => canWrite && onToggle(t)}
+                  disabled={!canWrite}
+                  className="p-1.5 rounded-lg hover:bg-surface-200 transition-colors disabled:opacity-40"
                   title={t.enabled ? 'Disable' : 'Enable'}
                 >
                   {t.enabled
@@ -389,15 +473,17 @@ function TargetList({
                     : <ToggleLeft size={18} style={{ color: 'var(--text-secondary)' }} />}
                 </button>
                 <button
-                  onClick={() => onEdit(t)}
-                  className="p-1.5 rounded-lg hover:bg-surface-200 transition-colors"
+                  onClick={() => canWrite && onEdit(t)}
+                  disabled={!canWrite}
+                  className="p-1.5 rounded-lg hover:bg-surface-200 transition-colors disabled:opacity-40"
                   title="Edit"
                 >
                   <Edit3 size={16} style={{ color: 'var(--text-secondary)' }} />
                 </button>
                 <button
-                  onClick={() => onDelete(t)}
-                  className="p-1.5 rounded-lg hover:bg-surface-200 transition-colors"
+                  onClick={() => canWrite && onDelete(t)}
+                  disabled={!canWrite}
+                  className="p-1.5 rounded-lg hover:bg-surface-200 transition-colors disabled:opacity-40"
                   title="Delete"
                 >
                   <Trash2 size={16} style={{ color: 'var(--danger)' }} />
@@ -414,6 +500,8 @@ function TargetList({
 // ── Main page ────────────────────────────────────────────────────────────────
 
 export function TemperatureTargetsPage() {
+  const confirm = useConfirm();
+  const canWrite = useCanWrite();
   const readings = useAppStore(s => s.readings);
   const [targets, setTargets] = useState<TemperatureTarget[]>([]);
   const [view, setView] = useState<'map' | 'list'>('list');
@@ -458,7 +546,7 @@ export function TemperatureTargetsPage() {
   };
 
   const handleDelete = async (t: TemperatureTarget) => {
-    if (!confirm(`Delete target "${t.name || t.sensor_id}"?`)) return;
+    if (!(await confirm(`Delete target "${t.name || t.sensor_id}"?`))) return;
     await api.temperatureTargets.delete(t.id);
     load();
   };
@@ -469,6 +557,7 @@ export function TemperatureTargetsPage() {
 
   return (
     <div className="space-y-4 max-w-4xl mx-auto animate-fade-in">
+      <ViewerBanner />
       {/* Header bar */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
@@ -493,7 +582,8 @@ export function TemperatureTargetsPage() {
         </div>
         <button
           onClick={() => { setCreating(true); setEditing(null); }}
-          className="btn-primary px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1"
+          disabled={!canWrite}
+          className="btn-primary px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1 disabled:opacity-50"
           style={{ background: 'var(--accent)', color: 'white' }}
         >
           <Plus size={14} /> Add Target
@@ -526,9 +616,9 @@ export function TemperatureTargetsPage() {
           drives={drives}
           fans={fans}
           sensorMap={sensorMap}
-          onEdit={t => { setEditing(t); setCreating(false); }}
-          onToggle={handleToggle}
-          onDelete={handleDelete}
+          onEdit={t => { if (canWrite) { setEditing(t); setCreating(false); } }}
+          onToggle={canWrite ? handleToggle : () => {}}
+          onDelete={canWrite ? handleDelete : () => {}}
         />
       ) : (
         <TargetList
