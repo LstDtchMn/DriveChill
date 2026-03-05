@@ -48,3 +48,10 @@ obj/
 # Logs
 *.log
 logs/
+
+# Playwright MCP artifacts
+.playwright-mcp/
+
+# Dev screenshots (not used in docs)
+/drivechill-running.png
+/temp-targets-map.png
