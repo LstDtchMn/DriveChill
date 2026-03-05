@@ -494,3 +494,177 @@ class TestInternalTokenBypass:
             assert s.internal_token != "attacker-controlled-value"
         finally:
             del os.environ["DRIVECHILL_INTERNAL_TOKEN"]
+
+
+# ---------------------------------------------------------------------------
+# RBAC — role propagation, viewer write-block, logout exemption, session
+# invalidation on user deletion
+# ---------------------------------------------------------------------------
+
+
+class TestRBAC:
+
+    def test_viewer_session_carries_viewer_role(self, db_and_service) -> None:
+        """validate_session returns role='viewer' for a viewer user."""
+        db, svc = db_and_service
+
+        async def run():
+            await svc.create_user("admin", "AdminPass1!")
+            await svc.create_user("viewer1", "ViewPass1!", role="viewer")
+            token, _ = await svc.login("viewer1", "ViewPass1!", "127.0.0.1")
+            session = await svc.validate_session(token)
+            assert session is not None
+            assert session["role"] == "viewer"
+
+        asyncio.run(run())
+
+    def test_admin_session_carries_admin_role(self, db_and_service) -> None:
+        """validate_session returns role='admin' for an admin user."""
+        db, svc = db_and_service
+
+        async def run():
+            await svc.create_user("admin", "AdminPass1!")
+            token, _ = await svc.login("admin", "AdminPass1!", "127.0.0.1")
+            session = await svc.validate_session(token)
+            assert session is not None
+            assert session["role"] == "admin"
+
+        asyncio.run(run())
+
+    def test_require_csrf_blocks_viewer_write(self, db_and_service) -> None:
+        """require_csrf raises 403 when viewer tries a write endpoint."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from fastapi import HTTPException
+        from app.api.dependencies.auth import require_csrf
+
+        db, svc = db_and_service
+
+        async def run():
+            await svc.create_user("admin", "AdminPass1!")
+            await svc.create_user("viewer1", "ViewPass1!", role="viewer")
+            token, csrf = await svc.login("viewer1", "ViewPass1!", "127.0.0.1")
+
+            request = MagicMock()
+            request.state = MagicMock(spec=[])  # no auth_info yet
+            request.headers = {}
+            request.url.path = "/api/settings"
+
+            with patch("app.api.dependencies.auth._auth_enabled", return_value=True), \
+                 patch("app.api.dependencies.auth._is_internal_request", return_value=False), \
+                 patch("app.api.dependencies.auth._extract_api_key", return_value=None):
+                request.app = MagicMock()
+                request.app.state.auth_service = svc
+                with pytest.raises(HTTPException) as exc_info:
+                    await require_csrf(request, drivechill_session=token, x_csrf_token=csrf)
+                assert exc_info.value.status_code == 403
+                assert "admin" in exc_info.value.detail.lower()
+
+        asyncio.run(run())
+
+    def test_require_csrf_allows_viewer_logout(self, db_and_service) -> None:
+        """require_csrf does NOT block viewers on /api/auth/logout."""
+        from unittest.mock import MagicMock, patch
+        from app.api.dependencies.auth import require_csrf
+
+        db, svc = db_and_service
+
+        async def run():
+            await svc.create_user("admin", "AdminPass1!")
+            await svc.create_user("viewer1", "ViewPass1!", role="viewer")
+            token, csrf = await svc.login("viewer1", "ViewPass1!", "127.0.0.1")
+
+            request = MagicMock()
+            request.state = MagicMock(spec=[])
+            request.headers = {}
+            request.url.path = "/api/auth/logout"
+
+            with patch("app.api.dependencies.auth._auth_enabled", return_value=True), \
+                 patch("app.api.dependencies.auth._is_internal_request", return_value=False), \
+                 patch("app.api.dependencies.auth._extract_api_key", return_value=None):
+                request.app = MagicMock()
+                request.app.state.auth_service = svc
+                # Should not raise
+                await require_csrf(request, drivechill_session=token, x_csrf_token=csrf)
+
+        asyncio.run(run())
+
+    def test_delete_user_invalidates_sessions(self, db_and_service) -> None:
+        """Deleting a user destroys their active sessions."""
+        db, svc = db_and_service
+
+        async def run():
+            admin_id = await svc.create_user("admin", "AdminPass1!")
+            viewer_id = await svc.create_user("viewer1", "ViewPass1!", role="viewer")
+
+            token, _ = await svc.login("viewer1", "ViewPass1!", "127.0.0.1")
+            assert await svc.validate_session(token) is not None
+
+            deleted = await svc.delete_user(viewer_id)
+            assert deleted
+
+            # Session must now be invalid
+            assert await svc.validate_session(token) is None
+
+        asyncio.run(run())
+
+    def test_validate_session_fails_after_user_deleted(self, db_and_service) -> None:
+        """validate_session returns None when the user row has been deleted."""
+        db, svc = db_and_service
+
+        async def run():
+            await svc.create_user("admin", "AdminPass1!")
+            extra_id = await svc.create_user("extra", "ExtraPass1!", role="admin")
+            token, _ = await svc.login("extra", "ExtraPass1!", "127.0.0.1")
+
+            await svc.delete_user(extra_id)
+
+            result = await svc.validate_session(token)
+            assert result is None
+
+        asyncio.run(run())
+
+    def test_set_user_role_blocks_last_admin_demotion(self, db_and_service) -> None:
+        """set_user_role raises ValueError when demoting the last admin."""
+        db, svc = db_and_service
+
+        async def run():
+            admin_id = await svc.create_user("admin", "AdminPass1!")
+            with pytest.raises(ValueError, match="last admin"):
+                await svc.set_user_role(admin_id, "viewer")
+
+            # Role must remain admin
+            session_token, _ = await svc.login("admin", "AdminPass1!", "127.0.0.1")
+            session = await svc.validate_session(session_token)
+            assert session is not None
+            assert session["role"] == "admin"
+
+        asyncio.run(run())
+
+    def test_set_user_role_allows_demotion_when_multiple_admins(self, db_and_service) -> None:
+        """set_user_role succeeds when another admin exists."""
+        db, svc = db_and_service
+
+        async def run():
+            await svc.create_user("admin1", "AdminPass1!")
+            admin2_id = await svc.create_user("admin2", "AdminPass2!", role="admin")
+
+            result = await svc.set_user_role(admin2_id, "viewer")
+            assert result is True
+
+            token, _ = await svc.login("admin2", "AdminPass2!", "127.0.0.1")
+            session = await svc.validate_session(token)
+            assert session is not None
+            assert session["role"] == "viewer"
+
+        asyncio.run(run())
+
+    def test_delete_user_blocks_last_admin(self, db_and_service) -> None:
+        """delete_user raises ValueError when removing the only admin."""
+        db, svc = db_and_service
+
+        async def run():
+            admin_id = await svc.create_user("admin", "AdminPass1!")
+            with pytest.raises(ValueError, match="last admin"):
+                await svc.delete_user(admin_id)
+
+        asyncio.run(run())

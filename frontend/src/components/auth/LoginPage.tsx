@@ -20,7 +20,9 @@ export function LoginPage() {
 
     try {
       const result = await authApi.login(username, password);
-      setAuth(true, true, result.username);
+      // Re-fetch session to get role
+      const session = await authApi.checkSession().catch(() => null);
+      setAuth(true, true, result.username, session?.role ?? 'viewer');
     } catch (err) {
       if (err instanceof APIError) {
         if (err.status === 429) {

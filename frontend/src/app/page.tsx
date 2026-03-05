@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useCallback } from 'react';
 import { useAppStore } from '@/stores/appStore';
 import { useAuthStore } from '@/stores/authStore';
 import { useSettingsStore } from '@/stores/settingsStore';
@@ -17,6 +17,8 @@ import { DrivesPage } from '@/components/drives/DrivesPage';
 import { TemperatureTargetsPage } from '@/components/temperature-targets/TemperatureTargetsPage';
 import { LoginPage } from '@/components/auth/LoginPage';
 import { ChangelogBanner } from '@/components/layout/ChangelogBanner';
+import { ConfirmDialogProvider } from '@/components/ui/ConfirmDialog';
+import { ToastProvider, useToast } from '@/components/ui/ToastProvider';
 import { api, authApi } from '@/lib/api';
 import type { TempUnit } from '@/lib/tempUnit';
 
@@ -73,10 +75,11 @@ function PageContent() {
   }
 }
 
-export default function Home() {
+function HomeInner() {
   const { setBackendName, setSafeMode, setUpdateCheck } = useAppStore();
   const { authRequired, authenticated, checking, setAuth, logout } = useAuthStore();
   const { setTempUnit, setSensorLabels } = useSettingsStore();
+  const toast = useToast();
 
   // Connect WebSocket only after auth check resolves and user is allowed in
   const wsEnabled = !checking && (!authRequired || authenticated);
@@ -88,7 +91,7 @@ export default function Home() {
     const checkAuth = async () => {
       try {
         const session = await authApi.checkSession();
-        setAuth(session.auth_required, session.authenticated, session.username);
+        setAuth(session.auth_required, session.authenticated, session.username, session.role);
       } catch {
         // Backend unreachable — assume no auth required so the dashboard
         // still renders and shows "Disconnected" rather than a login wall.
@@ -104,6 +107,15 @@ export default function Home() {
     window.addEventListener('drivechill:auth-expired', handler);
     return () => window.removeEventListener('drivechill:auth-expired', handler);
   }, [logout]);
+
+  // Listen for 403 events (write attempt by viewer role)
+  const handleForbidden = useCallback(() => {
+    toast('Permission denied. Admin role required for this action.', 'error');
+  }, [toast]);
+  useEffect(() => {
+    window.addEventListener('drivechill:forbidden', handleForbidden);
+    return () => window.removeEventListener('drivechill:forbidden', handleForbidden);
+  }, [handleForbidden]);
 
   // Fetch initial data (only when authenticated)
   useEffect(() => {
@@ -195,5 +207,15 @@ export default function Home() {
         <MobileNav />
       </div>
     </div>
+  );
+}
+
+export default function Home() {
+  return (
+    <ConfirmDialogProvider>
+      <ToastProvider>
+        <HomeInner />
+      </ToastProvider>
+    </ConfirmDialogProvider>
   );
 }

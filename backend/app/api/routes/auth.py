@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
-from app.api.dependencies.auth import require_auth, require_csrf
+from app.api.dependencies.auth import require_admin, require_auth, require_csrf
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -17,6 +17,20 @@ class LoginRequest(BaseModel):
 
 class SetupRequest(BaseModel):
     username: str = Field(min_length=1, max_length=128)
+    password: str = Field(min_length=8, max_length=256)
+
+
+class CreateUserRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=128)
+    password: str = Field(min_length=8, max_length=256)
+    role: str = Field(default="admin", pattern="^(admin|viewer)$")
+
+
+class SetRoleRequest(BaseModel):
+    role: str = Field(pattern="^(admin|viewer)$")
+
+
+class ChangePasswordRequest(BaseModel):
     password: str = Field(min_length=8, max_length=256)
 
 
@@ -114,13 +128,14 @@ async def check_session(
 
     auth_service = request.app.state.auth_service
     session = await auth_service.validate_session(drivechill_session)
-    if session is None:
+    if not session:
         return {"auth_required": True, "authenticated": False}
 
     return {
         "auth_required": True,
         "authenticated": True,
         "username": session["username"],
+        "role": session.get("role", "admin"),
     }
 
 
@@ -199,5 +214,89 @@ async def revoke_api_key(key_id: str, request: Request):
     await auth_service._log_auth_event(
         "api_key_revoked", ip, None, "success",
         f"key_id={key_id}",
+    )
+    return {"success": True}
+
+
+# ── User management (admin only) ────────────────────────────────────────────
+
+@router.get("/users", dependencies=[Depends(require_auth), Depends(require_admin)])
+async def list_users(request: Request):
+    """List all users. Requires admin role."""
+    auth_service = request.app.state.auth_service
+    users = await auth_service.list_users()
+    return {"users": users}
+
+
+@router.post("/users", dependencies=[Depends(require_auth), Depends(require_admin), Depends(require_csrf)])
+async def create_user(body: CreateUserRequest, request: Request):
+    """Create a new user. Requires admin role."""
+    auth_service = request.app.state.auth_service
+    ip = request.client.host if request.client else "unknown"
+    try:
+        user_id = await auth_service.create_user(body.username, body.password, role=body.role)
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await auth_service._log_auth_event(
+        "user_created", ip, body.username, "success",
+        f"user_id={user_id} role={body.role}",
+    )
+    return {"success": True, "user_id": user_id, "username": body.username, "role": body.role}
+
+
+@router.put("/users/{user_id}/role", dependencies=[Depends(require_auth), Depends(require_admin), Depends(require_csrf)])
+async def set_user_role(user_id: int, body: SetRoleRequest, request: Request):
+    """Change a user's role. Requires admin role."""
+    auth_service = request.app.state.auth_service
+    try:
+        updated = await auth_service.set_user_role(user_id, body.role)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not updated:
+        raise HTTPException(status_code=404, detail="User not found")
+    ip = request.client.host if request.client else "unknown"
+    await auth_service._log_auth_event(
+        "user_role_changed", ip, None, "success",
+        f"user_id={user_id} role={body.role}",
+    )
+    return {"success": True}
+
+
+@router.put("/users/{user_id}/password", dependencies=[Depends(require_auth), Depends(require_admin), Depends(require_csrf)])
+async def change_user_password(user_id: int, body: ChangePasswordRequest, request: Request):
+    """Change a user's password. Requires admin role."""
+    auth_service = request.app.state.auth_service
+    user = await auth_service.get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    pw_hash = auth_service.hash_password(body.password)
+    await auth_service._db.execute(
+        "UPDATE users SET password_hash = ?, updated_at = datetime('now') WHERE id = ?",
+        (pw_hash, user_id),
+    )
+    await auth_service._db.commit()
+    ip = request.client.host if request.client else "unknown"
+    await auth_service._log_auth_event(
+        "password_changed", ip, user["username"], "success", f"user_id={user_id}",
+    )
+    return {"success": True}
+
+
+@router.delete("/users/{user_id}", dependencies=[Depends(require_auth), Depends(require_admin), Depends(require_csrf)])
+async def delete_user(user_id: int, request: Request):
+    """Delete a user. Requires admin role. Cannot delete the last admin."""
+    auth_service = request.app.state.auth_service
+    user = await auth_service.get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    try:
+        deleted = await auth_service.delete_user(user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="User not found")
+    ip = request.client.host if request.client else "unknown"
+    await auth_service._log_auth_event(
+        "user_deleted", ip, user["username"], "success", f"user_id={user_id}",
     )
     return {"success": True}

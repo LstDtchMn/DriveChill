@@ -212,3 +212,89 @@ async def require_csrf(
     csrf_token = session["csrf_token"]
     if not x_csrf_token or not hmac.compare_digest(str(x_csrf_token), str(csrf_token)):
         raise HTTPException(status_code=403, detail="CSRF token invalid or missing")
+
+    # Viewer-role sessions cannot perform write operations.
+    # Logout is exempt so viewers can always end their session.
+    assert session is not None
+    path = request.url.path.rstrip("/")
+    if path != "/api/auth/logout":
+        role = session.get("role", "admin")
+        if role != "admin":
+            raise HTTPException(status_code=403, detail="Write access requires admin role")
+
+
+async def require_admin(
+    request: Request,
+    drivechill_session: str | None = Cookie(None),
+) -> None:
+    """Enforce that the authenticated user has the 'admin' role.
+
+    Must be used alongside require_auth (or after it). API-key auth is not
+    allowed for admin user-management endpoints.
+    """
+    if not _auth_enabled():
+        return
+
+    if _is_internal_request(request):
+        return
+
+    # API keys cannot be used for user-management endpoints
+    api_key = _extract_api_key(request)
+    if api_key:
+        raise HTTPException(status_code=403, detail="User management requires session auth")
+
+    if not drivechill_session:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    existing = getattr(request.state, "auth_info", None)
+    session = None
+    if existing and existing.get("auth_type") == "session":
+        session = existing.get("session")
+    if session is None:
+        auth_service = request.app.state.auth_service
+        session = await auth_service.validate_session(drivechill_session)
+        if session is None:
+            raise HTTPException(status_code=401, detail="Session expired or invalid")
+
+    assert session is not None
+    role = session.get("role", "admin")
+    if role != "admin":
+        raise HTTPException(status_code=403, detail="Admin role required")
+
+
+async def require_write_role(
+    request: Request,
+    drivechill_session: str | None = Cookie(None),
+) -> None:
+    """Block viewer-role sessions from write (non-GET) requests.
+
+    Applied as a dependency on all state-changing routes. API-key requests and
+    internal requests are not affected (they have their own scope enforcement).
+    """
+    if not _auth_enabled():
+        return
+
+    if _is_internal_request(request):
+        return
+
+    api_key = _extract_api_key(request)
+    if api_key:
+        return  # API keys use scope enforcement instead
+
+    if not drivechill_session:
+        return  # require_auth/require_csrf will catch missing sessions
+
+    existing = getattr(request.state, "auth_info", None)
+    session = None
+    if existing and existing.get("auth_type") == "session":
+        session = existing.get("session")
+    if session is None:
+        auth_service = request.app.state.auth_service
+        session = await auth_service.validate_session(drivechill_session)
+        if session is None:
+            return  # require_auth will reject before we get here
+
+    assert session is not None
+    role = session.get("role", "admin")
+    if role != "admin":
+        raise HTTPException(status_code=403, detail="Write access requires admin role")

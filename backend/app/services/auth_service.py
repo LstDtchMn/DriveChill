@@ -26,10 +26,12 @@ _LOCKOUT_DURATION = timedelta(minutes=15)
 
 _API_KEY_SCOPE_DOMAINS = (
     "alerts",
+    "analytics",
     "auth",
     "drives",
     "fans",
     "machines",
+    "notifications",
     "profiles",
     "quiet_hours",
     "sensors",
@@ -126,7 +128,8 @@ class AuthService:
 
     async def get_user(self, username: str) -> dict | None:
         cursor = await self._db.execute(
-            "SELECT id, username, password_hash, locked_until, failed_attempts "
+            "SELECT id, username, password_hash, locked_until, failed_attempts, "
+            "COALESCE(role, 'admin') "
             "FROM users WHERE username = ?",
             (username,),
         )
@@ -135,22 +138,95 @@ class AuthService:
             return None
         return {
             "id": row[0], "username": row[1], "password_hash": row[2],
-            "locked_until": row[3], "failed_attempts": row[4],
+            "locked_until": row[3], "failed_attempts": row[4], "role": row[5],
         }
+
+    async def get_user_by_id(self, user_id: int) -> dict | None:
+        cursor = await self._db.execute(
+            "SELECT id, username, COALESCE(role, 'admin') FROM users WHERE id = ?",
+            (user_id,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        return {"id": row[0], "username": row[1], "role": row[2]}
+
+    async def list_users(self) -> list[dict]:
+        cursor = await self._db.execute(
+            "SELECT id, username, COALESCE(role, 'admin'), created_at FROM users ORDER BY id"
+        )
+        rows = await cursor.fetchall()
+        return [
+            {"id": r[0], "username": r[1], "role": r[2], "created_at": r[3]}
+            for r in rows
+        ]
 
     async def user_exists(self) -> bool:
         cursor = await self._db.execute("SELECT COUNT(*) FROM users")
         row = await cursor.fetchone()
         return row[0] > 0
 
-    async def create_user(self, username: str, password: str) -> int:
+    async def create_user(self, username: str, password: str, role: str = "admin") -> int:
+        if role not in ("admin", "viewer"):
+            raise ValueError(f"Invalid role: {role}")
         pw_hash = self.hash_password(password)
         cursor = await self._db.execute(
-            "INSERT INTO users (username, password_hash) VALUES (?, ?)",
-            (username, pw_hash),
+            "INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
+            (username, pw_hash, role),
         )
         await self._db.commit()
         return cursor.lastrowid
+
+    async def set_user_role(self, user_id: int, role: str) -> bool:
+        if role not in ("admin", "viewer"):
+            raise ValueError(f"Invalid role: {role}")
+        # Prevent demoting the last admin to viewer — same lockout risk as deletion.
+        if role == "viewer":
+            cur = await self._db.execute(
+                "SELECT COALESCE(role, 'admin') FROM users WHERE id = ?", (user_id,)
+            )
+            target = await cur.fetchone()
+            if target and target[0] == "admin":
+                count_cur = await self._db.execute(
+                    "SELECT COUNT(*) FROM users WHERE COALESCE(role, 'admin') = 'admin'"
+                )
+                count_row = await count_cur.fetchone()
+                if count_row[0] <= 1:
+                    raise ValueError("Cannot demote the last admin user")
+        cursor = await self._db.execute(
+            "UPDATE users SET role = ?, updated_at = datetime('now') WHERE id = ?",
+            (role, user_id),
+        )
+        await self._db.commit()
+        return cursor.rowcount > 0
+
+    async def delete_user(self, user_id: int) -> bool:
+        # Prevent deleting the last admin
+        cursor = await self._db.execute(
+            "SELECT COUNT(*) FROM users WHERE COALESCE(role, 'admin') = 'admin'"
+        )
+        row = await cursor.fetchone()
+        admin_count = row[0]
+
+        # Check if target is an admin and resolve username for session invalidation
+        cursor2 = await self._db.execute(
+            "SELECT COALESCE(role, 'admin'), username FROM users WHERE id = ?", (user_id,)
+        )
+        target = await cursor2.fetchone()
+        if not target:
+            return False
+        if target[0] == "admin" and admin_count <= 1:
+            raise ValueError("Cannot delete the last admin user")
+
+        cursor3 = await self._db.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        await self._db.commit()
+        if cursor3.rowcount > 0:
+            # Invalidate all active sessions belonging to the deleted user
+            # (defense-in-depth alongside ON DELETE CASCADE).
+            await self._db.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+            await self._db.commit()
+            return True
+        return False
 
     # --- API keys ---
 
@@ -329,7 +405,7 @@ class AuthService:
         """Return session dict if valid, or None. Updates last_active (sliding window)."""
         cursor = await self._db.execute(
             "SELECT s.token, s.user_id, s.csrf_token, s.expires_at, "
-            "s.last_active, u.username "
+            "s.last_active, u.username, u.role "
             "FROM sessions s JOIN users u ON s.user_id = u.id "
             "WHERE s.token = ?",
             (token,),
@@ -361,7 +437,7 @@ class AuthService:
 
         return {
             "token": row[0], "user_id": row[1], "csrf_token": row[2],
-            "expires_at": new_expires.isoformat(), "username": row[5],
+            "expires_at": new_expires.isoformat(), "username": row[5], "role": row[6],
         }
 
     # --- Logout ---

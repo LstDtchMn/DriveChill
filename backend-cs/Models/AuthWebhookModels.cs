@@ -1,5 +1,24 @@
 namespace DriveChill.Models;
 
+public sealed record UserRecord(long Id, string Username, string Role, string CreatedAt);
+
+public sealed class CreateUserRequest
+{
+    public string Username { get; set; } = "";
+    public string Password { get; set; } = "";
+    public string Role     { get; set; } = "admin";
+}
+
+public sealed class SetRoleRequest
+{
+    public string Role { get; set; } = "admin";
+}
+
+public sealed class ChangePasswordRequest
+{
+    public string Password { get; set; } = "";
+}
+
 public sealed class ApiKeyRecord
 {
     public string Id { get; set; } = Guid.NewGuid().ToString("N")[..16];

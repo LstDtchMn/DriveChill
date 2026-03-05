@@ -295,6 +295,15 @@ internal static class Program
                     await Reject(context, 403, "CSRF token invalid or missing");
                     return;
                 }
+
+                // Viewer-role sessions are read-only.
+                // Logout is exempt so viewers can always end their own session.
+                var requestPath = context.Request.Path.Value ?? "";
+                if (session.Value.Role != "admin" && requestPath != "/api/auth/logout")
+                {
+                    await Reject(context, 403, "Write access requires admin role");
+                    return;
+                }
             }
 
             await next();
