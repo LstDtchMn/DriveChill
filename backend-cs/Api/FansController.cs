@@ -25,15 +25,17 @@ public sealed class FansController : ControllerBase
         return Ok(status);
     }
 
-    /// <summary>POST /api/fans/{fanId}/speed — set manual speed percent.</summary>
-    [HttpPost("{fanId}/speed")]
-    public IActionResult SetSpeed(string fanId, [FromBody] SetSpeedRequest req)
+    /// <summary>POST /api/fans/speed — set manual speed percent (fan_id in body).</summary>
+    [HttpPost("speed")]
+    public IActionResult SetSpeed([FromBody] SetSpeedRequest req)
     {
+        if (string.IsNullOrWhiteSpace(req.FanId))
+            return BadRequest(new { detail = "fan_id is required" });
         if (req.Speed < 0 || req.Speed > 100)
-            return BadRequest(new { error = "speed must be 0–100" });
+            return BadRequest(new { detail = "speed must be 0–100" });
 
-        var ok = _fans.SetSpeed(fanId, req.Speed);
-        return ok ? Ok(new { ok = true }) : NotFound(new { error = $"Fan '{fanId}' not found" });
+        var ok = _fans.SetSpeed(req.FanId, req.Speed);
+        return ok ? Ok(new { ok = true }) : NotFound(new { detail = $"Fan '{req.FanId}' not found" });
     }
 
     /// <summary>POST /api/fans/{fanId}/auto — return fan to motherboard control.</summary>
@@ -41,7 +43,7 @@ public sealed class FansController : ControllerBase
     public IActionResult SetAuto(string fanId)
     {
         var ok = _fans.SetAuto(fanId);
-        return ok ? Ok(new { ok = true }) : NotFound(new { error = $"Fan '{fanId}' not found" });
+        return ok ? Ok(new { ok = true }) : NotFound(new { detail = $"Fan '{fanId}' not found" });
     }
 
     // -----------------------------------------------------------------------
@@ -57,9 +59,9 @@ public sealed class FansController : ControllerBase
     public IActionResult SetCurve([FromBody] FanCurve curve)
     {
         if (string.IsNullOrWhiteSpace(curve.FanId))
-            return BadRequest(new { error = "fan_id is required" });
+            return BadRequest(new { detail = "fan_id is required" });
         if (curve.Points.Count < 2)
-            return BadRequest(new { error = "at least 2 curve points required" });
+            return BadRequest(new { detail = "at least 2 curve points required" });
 
         _fans.SetCurve(curve);
         return Ok(new { ok = true });
@@ -90,7 +92,7 @@ public sealed class FansController : ControllerBase
     public IActionResult ResumeFanControl()
     {
         if (!_fans.Resume(out var profile))
-            return Conflict(new { error = "No active profile to resume. Activate a profile first." });
+            return Conflict(new { detail = "No active profile to resume. Activate a profile first." });
         return Ok(new { success = true, active_profile = profile });
     }
 

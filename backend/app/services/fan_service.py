@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -13,6 +14,7 @@ if TYPE_CHECKING:
     from app.services.sensor_service import SensorService
     from app.services.alert_service import AlertService
     from app.services.webhook_service import WebhookService
+    from app.services.temperature_target_service import TemperatureTargetService
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +71,8 @@ class FanService:
         panic_cpu_temp: float = 95.0,
         panic_gpu_temp: float = 90.0,
         panic_hysteresis: float = 5.0,
+        ramp_rate_pct_per_sec: float = 0.0,
+        temp_target_service: TemperatureTargetService | None = None,
     ) -> None:
         self._backend = backend
         self._curves: list[FanCurve] = []
@@ -85,7 +89,6 @@ class FanService:
         self._sensor_service: SensorService | None = None
         self._alert_service: AlertService | None = None
         self._webhook_service: WebhookService | None = None
-        self._push_svc = None  # PushNotificationService | None
         self._queue: asyncio.Queue | None = None
 
         # Safe-mode state
@@ -100,6 +103,17 @@ class FanService:
         # Per-fan settings (min speed floor, zero-RPM capability)
         # Keyed by fan_id. Populated by load_fan_settings() on startup.
         self._fan_settings: dict[str, dict] = {}
+
+        # Ramp rate limiting: max %/sec speed change (0 = unlimited/disabled)
+        self._ramp_rate: float = max(0.0, ramp_rate_pct_per_sec)
+        self._ramp_state: dict[str, float] = {}  # fan_id -> last applied speed
+        self._last_tick_time: float = time.monotonic()
+
+        # Anchor fire-and-forget webhook tasks to prevent GC mid-execution.
+        self._pending_webhook_tasks: set[asyncio.Task] = set()
+
+        # Temperature target service (optional — injected at startup)
+        self._temp_target_svc = temp_target_service
 
     # ------------------------------------------------------------------
     # Fan settings (min speed floor, zero-RPM)
@@ -131,6 +145,14 @@ class FanService:
         self._panic_cpu_temp = cpu_temp
         self._panic_gpu_temp = gpu_temp
         self._panic_hysteresis = hysteresis
+
+    def configure_ramp_rate(self, pct_per_sec: float) -> None:
+        """Update ramp rate limit (hot-reloadable). 0 = disabled."""
+        self._ramp_rate = max(0.0, pct_per_sec)
+
+    @property
+    def ramp_rate(self) -> float:
+        return self._ramp_rate
 
     # ------------------------------------------------------------------
     # Curve management
@@ -214,12 +236,11 @@ class FanService:
     # Independent control loop
     # ------------------------------------------------------------------
 
-    async def start(self, sensor_service, alert_service=None, webhook_service=None, push_notification_service=None) -> None:
+    async def start(self, sensor_service, alert_service=None, webhook_service=None) -> None:
         """Start the fan control loop, subscribing to sensor updates."""
         self._sensor_service = sensor_service
         self._alert_service = alert_service
         self._webhook_service = webhook_service
-        self._push_svc = push_notification_service
         self._queue = sensor_service.subscribe()
         self._task = asyncio.create_task(self._control_loop())
 
@@ -298,19 +319,14 @@ class FanService:
                     if new_events:
                         if self._webhook_service:
                             # Non-blocking dispatch keeps fan loop responsive.
+                            # Task is anchored in _pending_webhook_tasks to prevent
+                            # silent GC mid-execution under CPython.
                             payload = [e.model_dump(mode="json") for e in new_events]
-                            asyncio.create_task(
+                            t = asyncio.create_task(
                                 self._webhook_service.dispatch_alert_events(payload)
                             )
-                        if self._push_svc:
-                            for event in new_events:
-                                asyncio.create_task(
-                                    self._push_svc.send_alert(
-                                        sensor_name=event.sensor_name,
-                                        value=event.actual_value,
-                                        threshold=event.threshold,
-                                    )
-                                )
+                            self._pending_webhook_tasks.add(t)
+                            t.add_done_callback(self._pending_webhook_tasks.discard)
 
             except asyncio.CancelledError:
                 raise
@@ -481,7 +497,8 @@ class FanService:
             if r.sensor_type in TEMP_SENSOR_TYPES:
                 sensor_values[r.id] = r.value
 
-        applied: dict[str, float] = {}
+        # 1. Build curve-based speeds
+        curve_speeds: dict[str, float] = {}
 
         for curve in self._curves:
             if curve.fan_id in self._test_locked_fans:
@@ -496,10 +513,27 @@ class FanService:
 
             speed = self._apply_hysteresis(curve.fan_id, curve.sensor_id, temp, speed)
 
-            if curve.fan_id in applied:
-                applied[curve.fan_id] = max(applied[curve.fan_id], speed)
+            if curve.fan_id in curve_speeds:
+                curve_speeds[curve.fan_id] = max(curve_speeds[curve.fan_id], speed)
             else:
-                applied[curve.fan_id] = speed
+                curve_speeds[curve.fan_id] = speed
+
+        # 2. Build temp-target speeds (union merge — fans with a target but
+        #    no active curve must still be controlled)
+        tt_speeds: dict[str, float] = {}
+        if self._temp_target_svc is not None:
+            tt_speeds = self._temp_target_svc.evaluate(sensor_values)
+
+        # 3. Merge over union of fan IDs
+        all_fan_ids = set(curve_speeds) | set(tt_speeds)
+        applied: dict[str, float] = {}
+        for fan_id in all_fan_ids:
+            if fan_id in self._test_locked_fans:
+                continue
+            applied[fan_id] = max(
+                curve_speeds.get(fan_id, 0.0),
+                tt_speeds.get(fan_id, 0.0),
+            )
 
         # Enforce per-fan minimum speed floor (zero-RPM fans exempt)
         for fan_id in applied:
@@ -508,6 +542,26 @@ class FanService:
                 if applied[fan_id] == 0 and fs["zero_rpm_capable"]:
                     continue  # allow true 0% on zero-RPM fans
                 applied[fan_id] = max(applied[fan_id], fs["min_speed_pct"])
+
+        # Apply ramp rate limiting: clamp speed change per tick.
+        # Panic mode bypasses ramp rate (emergency fans called directly).
+        now = time.monotonic()
+        elapsed = now - self._last_tick_time
+        self._last_tick_time = now
+        if self._ramp_rate > 0 and elapsed > 0:
+            max_delta = self._ramp_rate * elapsed
+            for fan_id in applied:
+                prev = self._ramp_state.get(fan_id)
+                if prev is not None:
+                    target = applied[fan_id]
+                    if target > prev:
+                        applied[fan_id] = min(target, prev + max_delta)
+                    elif target < prev:
+                        applied[fan_id] = max(target, prev - max_delta)
+
+        # Track ramp state for next tick
+        for fan_id, speed in applied.items():
+            self._ramp_state[fan_id] = speed
 
         for fan_id, speed in applied.items():
             await self._backend.set_fan_speed(fan_id, speed)

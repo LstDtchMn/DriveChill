@@ -26,7 +26,7 @@ public sealed class ProfilesController : ControllerBase
     public IActionResult CreateProfile([FromBody] CreateProfileRequest req)
     {
         if (string.IsNullOrWhiteSpace(req.Name))
-            return BadRequest(new { error = "name is required" });
+            return BadRequest(new { detail = "name is required" });
 
         var profile = new Profile
         {
@@ -47,7 +47,7 @@ public sealed class ProfilesController : ControllerBase
     {
         var profiles = _store.LoadProfiles().ToList();
         var idx = profiles.FindIndex(p => p.Id == id);
-        if (idx < 0) return NotFound();
+        if (idx < 0) return NotFound(new { detail = "Profile not found" });
 
         updated.Id        = id;
         updated.CreatedAt = profiles[idx].CreatedAt;
@@ -63,7 +63,7 @@ public sealed class ProfilesController : ControllerBase
     {
         var profiles = _store.LoadProfiles().ToList();
         var profile  = profiles.FirstOrDefault(p => p.Id == id);
-        if (profile == null) return NotFound();
+        if (profile == null) return NotFound(new { detail = "Profile not found" });
 
         profiles.Remove(profile);
         _store.SaveProfiles(profiles);
@@ -76,7 +76,7 @@ public sealed class ProfilesController : ControllerBase
     {
         var profiles = _store.LoadProfiles().ToList();
         var profile  = profiles.FirstOrDefault(p => p.Id == id);
-        if (profile == null) return NotFound();
+        if (profile == null) return NotFound(new { detail = "Profile not found" });
 
         // Mark active flag
         foreach (var p in profiles) p.IsActive = p.Id == id;

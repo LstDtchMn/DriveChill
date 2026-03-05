@@ -30,12 +30,12 @@ public sealed partial class QuietHoursController : ControllerBase
     public async Task<IActionResult> CreateRule([FromBody] QuietHoursRule rule, CancellationToken ct = default)
     {
         var error = ValidateRule(rule);
-        if (error != null) return UnprocessableEntity(new { error });
+        if (error != null) return UnprocessableEntity(new { detail = error });
 
         // Verify profile exists
         var profiles = _store.LoadProfiles();
         if (!profiles.Any(p => p.Id == rule.ProfileId))
-            return NotFound(new { error = $"Profile '{rule.ProfileId}' not found" });
+            return NotFound(new { detail = $"Profile '{rule.ProfileId}' not found" });
 
         var id = await _db.CreateQuietHoursAsync(rule, ct);
         return Ok(new { success = true, id });
@@ -47,14 +47,14 @@ public sealed partial class QuietHoursController : ControllerBase
         CancellationToken ct = default)
     {
         var error = ValidateRule(rule);
-        if (error != null) return UnprocessableEntity(new { error });
+        if (error != null) return UnprocessableEntity(new { detail = error });
 
         var profiles = _store.LoadProfiles();
         if (!profiles.Any(p => p.Id == rule.ProfileId))
-            return NotFound(new { error = $"Profile '{rule.ProfileId}' not found" });
+            return NotFound(new { detail = $"Profile '{rule.ProfileId}' not found" });
 
         var updated = await _db.UpdateQuietHoursAsync(ruleId, rule, ct);
-        return updated ? Ok(new { success = true }) : NotFound(new { error = "Rule not found" });
+        return updated ? Ok(new { success = true }) : NotFound(new { detail = "Rule not found" });
     }
 
     /// <summary>DELETE /api/quiet-hours/{ruleId} — delete a rule.</summary>
@@ -62,7 +62,7 @@ public sealed partial class QuietHoursController : ControllerBase
     public async Task<IActionResult> DeleteRule(int ruleId, CancellationToken ct = default)
     {
         var deleted = await _db.DeleteQuietHoursAsync(ruleId, ct);
-        return deleted ? Ok(new { success = true }) : NotFound(new { error = "Rule not found" });
+        return deleted ? Ok(new { success = true }) : NotFound(new { detail = "Rule not found" });
     }
 
     // -----------------------------------------------------------------------

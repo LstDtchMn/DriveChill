@@ -28,9 +28,12 @@ public sealed class FanCurve
     public bool Enabled { get; set; } = true;
 }
 
-/// <summary>Request body for POST /api/fans/{id}/speed.</summary>
+/// <summary>Request body for POST /api/fans/speed.</summary>
 public sealed class SetSpeedRequest
 {
+    [JsonPropertyName("fan_id")]
+    public string FanId { get; set; } = "";
+
     [JsonPropertyName("speed")]
     public double Speed { get; set; }
 }

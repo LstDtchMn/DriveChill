@@ -52,9 +52,9 @@ public sealed class WebhooksController : ControllerBase
             var updated = _webhooks.UpdateConfig(cfg);
             return Ok(new { success = true, config = WebhookConfigView.FromConfig(updated) });
         }
-        catch (ArgumentException ex)
+        catch (ArgumentException)
         {
-            return BadRequest(new { error = ex.Message });
+            return BadRequest(new { detail = "Invalid webhook configuration." });
         }
     }
 

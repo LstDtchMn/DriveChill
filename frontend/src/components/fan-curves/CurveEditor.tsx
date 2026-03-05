@@ -64,10 +64,12 @@ export function CurveEditor({
     const speed = Math.round(yToSpeed(y));
 
     const newPoints = [...points];
-    newPoints[dragging] = { temp, speed };
-    const sorted = newPoints.sort((a, b) => a.temp - b.temp);
-    // Track the dragged point's new index after sort
-    const newIdx = sorted.findIndex((p) => p.temp === temp && p.speed === speed);
+    const dragTarget = { temp, speed };
+    newPoints[dragging] = dragTarget;
+    const sorted = [...newPoints].sort((a, b) => a.temp - b.temp);
+    // Use reference equality to find the dragged point after sort (avoids
+    // mis-identifying a duplicate {temp,speed} pair as the dragged point).
+    const newIdx = sorted.indexOf(dragTarget);
     setDragging(newIdx >= 0 ? newIdx : dragging);
     setSelectedPoint(newIdx >= 0 ? newIdx : dragging);
     onChange(sorted);

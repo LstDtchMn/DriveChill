@@ -76,8 +76,9 @@ public static class CredentialEncryption
             aes.Decrypt(nonce, ct, tag, pt, Aad);
             return Encoding.UTF8.GetString(pt);
         }
-        catch
+        catch (CryptographicException)
         {
+            // Wrong key or tampered ciphertext — caller gets empty string.
             return string.Empty;
         }
     }

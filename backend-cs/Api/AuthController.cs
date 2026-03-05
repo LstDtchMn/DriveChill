@@ -142,13 +142,26 @@ public sealed class AuthController : ControllerBase
     // Helpers
     // -----------------------------------------------------------------------
 
+    private bool IsSecureRequest()
+    {
+        // Match Python _is_secure_request(): also honour X-Forwarded-Proto
+        // so that cookies get the Secure flag behind a TLS-terminating proxy.
+        if (Request.IsHttps)
+            return true;
+        return string.Equals(
+            Request.Headers["X-Forwarded-Proto"].FirstOrDefault(),
+            "https",
+            StringComparison.OrdinalIgnoreCase);
+    }
+
     private void SetSessionCookies(string sessionToken, string csrfToken)
     {
+        var secure = IsSecureRequest();
         var options = new CookieOptions
         {
             HttpOnly = true,
             SameSite = SameSiteMode.Strict,
-            Secure   = Request.IsHttps,
+            Secure   = secure,
             Path     = "/",
         };
         Response.Cookies.Append(SessionCookieName, sessionToken, options);
@@ -157,7 +170,7 @@ public sealed class AuthController : ControllerBase
         {
             HttpOnly = false,
             SameSite = SameSiteMode.Strict,
-            Secure   = Request.IsHttps,
+            Secure   = secure,
             Path     = "/",
         });
     }

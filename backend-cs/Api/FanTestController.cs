@@ -28,18 +28,18 @@ public sealed class FanTestController : ControllerBase
     public IActionResult StartTest(string fanId, [FromBody] FanTestOptions? options)
     {
         if (!_hw.GetFanIds().Contains(fanId))
-            return NotFound(new { error = $"Fan '{fanId}' not found" });
+            return NotFound(new { detail = $"Fan '{fanId}' not found" });
 
         options ??= new FanTestOptions();
 
         if (options.Steps is < 2 or > 20)
-            return BadRequest(new { error = "steps must be between 2 and 20" });
+            return BadRequest(new { detail = "steps must be between 2 and 20" });
 
         if (options.SettleMs is < 500 or > 10_000)
-            return BadRequest(new { error = "settle_ms must be between 500 and 10000" });
+            return BadRequest(new { detail = "settle_ms must be between 500 and 10000" });
 
         if (!_fanTest.TryStart(fanId, options, out var error))
-            return Conflict(new { error });
+            return Conflict(new { detail = error });
 
         var estimatedSeconds = (options.Steps + 1) * (options.SettleMs / 1000.0);
         return Accepted(new
@@ -59,7 +59,7 @@ public sealed class FanTestController : ControllerBase
     {
         var result = _fanTest.GetResult(fanId);
         return result == null
-            ? NotFound(new { error = $"No test result for fan '{fanId}'" })
+            ? NotFound(new { detail = $"No test result for fan '{fanId}'" })
             : Ok(result);
     }
 
@@ -72,6 +72,6 @@ public sealed class FanTestController : ControllerBase
     {
         return _fanTest.Cancel(fanId)
             ? Ok(new { ok = true })
-            : NotFound(new { error = $"No running test for fan '{fanId}'" });
+            : NotFound(new { detail = $"No running test for fan '{fanId}'" });
     }
 }

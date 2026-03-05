@@ -25,8 +25,6 @@ if TYPE_CHECKING:
     from app.services.push_notification_service import PushNotificationService
     from app.services.email_notification_service import EmailNotificationService
 
-logger = logging.getLogger(__name__)
-
 TEMP_SENSOR_TYPES = {SensorType.CPU_TEMP, SensorType.GPU_TEMP, SensorType.HDD_TEMP, SensorType.CASE_TEMP}
 
 
@@ -67,6 +65,7 @@ class AlertService:
         self._active_alerts: set[str] = set()  # rule IDs currently triggered
         self._last_triggered: dict[str, datetime] = {}  # per-rule cooldown tracking
         self._max_events = 500
+        self._pending_tasks: set[asyncio.Task] = set()  # keeps fire-and-forget tasks alive
 
     async def load_rules(self) -> None:
         """Load alert rules from the database on startup."""
@@ -118,9 +117,13 @@ class AlertService:
         return list(self._active_alerts)
 
     async def add_rule(self, rule: AlertRule) -> None:
-        self._rules = [r for r in self._rules if r.id != rule.id]
-        self._rules.append(rule)
         await self._persist_rule(rule)
+        # Only mutate in-memory state after the DB write succeeds.
+        self._rules = [r for r in self._rules if r.id != rule.id]
+        # Clear stale tracking so a replaced rule can fire immediately.
+        self._active_alerts.discard(rule.id)
+        self._last_triggered.pop(rule.id, None)
+        self._rules.append(rule)
 
     async def remove_rule(self, rule_id: str) -> bool:
         """Remove a rule by ID. Returns True if the rule existed, False otherwise."""
@@ -134,6 +137,13 @@ class AlertService:
 
     def set_rules(self, rules: list[AlertRule]) -> None:
         self._rules = list(rules)
+
+    def _spawn(self, coro) -> None:
+        """Create a fire-and-forget task anchored in _pending_tasks to prevent GC."""
+        t = asyncio.create_task(coro)
+        self._pending_tasks.add(t)
+        t.add_done_callback(self._pending_tasks.discard)
+        t.add_done_callback(_log_task_exception)
 
     def check(self, readings: list[SensorReading]) -> list[AlertEvent]:
         """Check readings against rules. Returns list of newly triggered alerts.
@@ -189,20 +199,18 @@ class AlertService:
                         self._events = self._events[-self._max_events:]
                     # Fire-and-forget: push notification
                     if self._push_svc:
-                        t = asyncio.create_task(
+                        self._spawn(
                             self._push_svc.send_alert(
                                 reading.name, reading.value, rule.threshold
                             )
                         )
-                        t.add_done_callback(_log_task_exception)
                     # Fire-and-forget: email notification
                     if self._email_svc:
-                        t = asyncio.create_task(
+                        self._spawn(
                             self._email_svc.send_alert(
                                 reading.name, reading.value, rule.threshold
                             )
                         )
-                        t.add_done_callback(_log_task_exception)
             else:
                 # Clear alert when condition no longer met
                 self._active_alerts.discard(rule.id)

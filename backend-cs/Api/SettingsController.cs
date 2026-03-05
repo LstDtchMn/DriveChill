@@ -16,23 +16,48 @@ public sealed class SettingsController : ControllerBase
         _appSettings = appSettings;
     }
 
-    /// <summary>GET /api/settings</summary>
+    /// <summary>GET /api/settings — returns same field names as Python backend.</summary>
     [HttpGet]
-    public IActionResult GetSettings() => Ok(_store.GetAll());
+    public IActionResult GetSettings() => Ok(new
+    {
+        sensor_poll_interval      = _store.PollIntervalMs / 1000.0,
+        history_retention_hours   = _store.RetentionDays * 24,
+        temp_unit                 = _store.TempUnit,
+        hardware_backend          = "lhm",
+        backend_name              = _appSettings.AppName,
+        fan_ramp_rate_pct_per_sec = _store.FanRampRatePctPerSec,
+    });
 
-    /// <summary>PUT /api/settings — only accepts safe runtime settings, not security-sensitive data.</summary>
+    /// <summary>PUT /api/settings — accepts same field names as Python backend.</summary>
     [HttpPut]
     public IActionResult UpdateSettings([FromBody] SettingsUpdateRequest req)
     {
-        var pollMs = Math.Clamp(req.PollIntervalMs, 200, 30_000);
-        var retention = Math.Clamp(req.RetentionDays, 1, 365);
-        var unit = (req.TempUnit == "C" || req.TempUnit == "F") ? req.TempUnit : "C";
+        if (req.SensorPollInterval.HasValue)
+        {
+            var intervalSec = Math.Clamp(req.SensorPollInterval.Value, 0.5, 30.0);
+            _store.PollIntervalMs = (int)(intervalSec * 1000);
+        }
+        if (req.HistoryRetentionHours.HasValue)
+        {
+            var retentionHours = Math.Clamp(req.HistoryRetentionHours.Value, 1, 8760);
+            _store.RetentionDays = Math.Max(1, retentionHours / 24);
+        }
+        if (req.TempUnit is "C" or "F")
+            _store.TempUnit = req.TempUnit;
+        if (req.FanRampRatePctPerSec.HasValue)
+            _store.FanRampRatePctPerSec = Math.Clamp(req.FanRampRatePctPerSec.Value, 0.1, 100.0);
 
-        _store.PollIntervalMs = pollMs;
-        _store.RetentionDays  = retention;
-        _store.TempUnit       = unit;
-
-        return Ok(new { poll_interval_ms = pollMs, retention_days = retention, temp_unit = unit });
+        return Ok(new
+        {
+            success = true,
+            settings = new
+            {
+                sensor_poll_interval      = _store.PollIntervalMs / 1000.0,
+                history_retention_hours   = _store.RetentionDays * 24,
+                temp_unit                 = _store.TempUnit,
+                fan_ramp_rate_pct_per_sec = _store.FanRampRatePctPerSec,
+            },
+        });
     }
 
     /// <summary>GET /api/settings/info — app version and build info.</summary>
@@ -47,10 +72,11 @@ public sealed class SettingsController : ControllerBase
     });
 }
 
-/// <summary>Request body for PUT /api/settings — only safe runtime settings.</summary>
+/// <summary>Request body for PUT /api/settings — uses same field names as Python backend.</summary>
 public sealed class SettingsUpdateRequest
 {
-    public int    PollIntervalMs { get; set; } = 1000;
-    public int    RetentionDays  { get; set; } = 30;
-    public string TempUnit       { get; set; } = "C";
+    public double? SensorPollInterval    { get; set; }
+    public int?    HistoryRetentionHours { get; set; }
+    public string  TempUnit              { get; set; } = "C";
+    public double? FanRampRatePctPerSec  { get; set; }
 }

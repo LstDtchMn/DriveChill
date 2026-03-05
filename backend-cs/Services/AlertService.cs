@@ -73,6 +73,11 @@ public sealed class AlertService
         lock (_lock) return _events.Where(e => _active.Contains(e.RuleId) && !e.Cleared).ToList();
     }
 
+    public void ClearEvents()
+    {
+        lock (_lock) { _events.Clear(); _active.Clear(); }
+    }
+
     // -----------------------------------------------------------------------
     // Evaluation — called by SensorWorker on every tick
     // -----------------------------------------------------------------------

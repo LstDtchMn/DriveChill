@@ -8,6 +8,11 @@ namespace DriveChill.Services;
 /// Sends alert notification emails via SMTP.
 /// Settings (host, port, credentials, recipients) are read from the DB at send time,
 /// so runtime changes take effect on the next alert without a restart.
+///
+/// NOTE: System.Net.Mail.SmtpClient is used for simplicity but is obsolete.
+/// It supports STARTTLS (port 587) via EnableSsl but does NOT support implicit
+/// SSL/TLS (port 465).  Use port 587 with STARTTLS for encrypted SMTP.
+/// A future version should migrate to MailKit for full port 465 support.
 /// </summary>
 public sealed class EmailNotificationService
 {

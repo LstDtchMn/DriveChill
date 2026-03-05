@@ -47,6 +47,9 @@ public sealed class HealthController : ControllerBase
     [HttpGet("/metrics")]
     public IActionResult GetMetrics()
     {
+        if (!_appSettings.PrometheusEnabled)
+            return NotFound(new { error = "Prometheus metrics are disabled. Set DRIVECHILL_PROMETHEUS_ENABLED=true to enable." });
+
         var snap = _sensors.Latest;
         var sb = new StringBuilder();
         sb.AppendLine("# HELP drivechill_temperature_c Temperature reading in Celsius");

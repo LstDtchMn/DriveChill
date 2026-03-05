@@ -68,10 +68,19 @@ public sealed class MachinesController : ControllerBase
         var existing = await _db.GetMachineAsync(machineId, ct);
         if (existing is null) return NotFound(new { detail = "Machine not found" });
 
+        string newBaseUrl = existing.BaseUrl;
+        if (body.TryGetProperty("base_url", out var u))
+        {
+            newBaseUrl = (u.GetString() ?? "").Trim().TrimEnd('/');
+            if (!Uri.TryCreate(newBaseUrl, UriKind.Absolute, out var parsedUri) ||
+                (parsedUri.Scheme != "http" && parsedUri.Scheme != "https"))
+                return BadRequest(new { detail = "base_url must be a valid http(s) URL" });
+        }
+
         var patch = new MachineRecord
         {
             Name                = body.TryGetProperty("name",    out var n) ? n.GetString() ?? existing.Name   : existing.Name,
-            BaseUrl             = body.TryGetProperty("base_url", out var u) ? u.GetString() ?? existing.BaseUrl : existing.BaseUrl,
+            BaseUrl             = newBaseUrl,
             ApiKeyHash          = body.TryGetProperty("api_key", out var k) ? k.GetString() : existing.ApiKeyHash,
             Enabled             = body.TryGetProperty("enabled", out var e) ? (e.ValueKind == JsonValueKind.True) : existing.Enabled,
             PollIntervalSeconds = body.TryGetProperty("poll_interval_seconds", out var p) ? (p.TryGetDouble(out var pd) ? pd : existing.PollIntervalSeconds) : existing.PollIntervalSeconds,
@@ -327,25 +336,34 @@ public sealed class MachinesController : ControllerBase
             || (b[0] == 169 && b[1] == 254);                       // 169.254.0.0/16 link-local
     }
 
-    private static object ToView(MachineRecord m) => new
+    private static object ToView(MachineRecord m)
     {
-        id                    = m.Id,
-        name                  = m.Name,
-        base_url              = m.BaseUrl,
-        has_api_key           = m.ApiKeyHash is not null,
-        api_key_id            = (object?)null,
-        enabled               = m.Enabled,
-        poll_interval_seconds = m.PollIntervalSeconds,
-        timeout_ms            = m.TimeoutMs,
-        status                = m.Status,
-        last_seen_at          = m.LastSeenAt,
-        last_error            = m.LastError,
-        consecutive_failures  = m.ConsecutiveFailures,
-        created_at            = m.CreatedAt,
-        updated_at            = m.UpdatedAt,
-        freshness_seconds     = m.FreshnessSeconds,
-        snapshot              = (object?)null,
-        capabilities          = new string[0],
-        last_command_at       = m.LastCommandAt,
-    };
+        double? freshnessSeconds = null;
+        if (m.LastSeenAt is not null &&
+            DateTimeOffset.TryParse(m.LastSeenAt, out var lastSeen))
+        {
+            freshnessSeconds = Math.Max(0, (DateTimeOffset.UtcNow - lastSeen).TotalSeconds);
+        }
+        return new
+        {
+            id                    = m.Id,
+            name                  = m.Name,
+            base_url              = m.BaseUrl,
+            has_api_key           = m.ApiKeyHash is not null,
+            api_key_id            = (object?)null,
+            enabled               = m.Enabled,
+            poll_interval_seconds = m.PollIntervalSeconds,
+            timeout_ms            = m.TimeoutMs,
+            status                = m.Status,
+            last_seen_at          = m.LastSeenAt,
+            last_error            = m.LastError,
+            consecutive_failures  = m.ConsecutiveFailures,
+            created_at            = m.CreatedAt,
+            updated_at            = m.UpdatedAt,
+            freshness_seconds     = freshnessSeconds.HasValue ? Math.Round(freshnessSeconds.Value, 2) : (object?)null,
+            snapshot              = (object?)null,
+            capabilities          = new string[0],
+            last_command_at       = m.LastCommandAt,
+        };
+    }
 }

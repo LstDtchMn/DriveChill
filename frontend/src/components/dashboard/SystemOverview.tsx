@@ -1,16 +1,17 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Cpu, Monitor, HardDrive, Thermometer } from 'lucide-react';
+import { Cpu, Monitor, HardDrive, Thermometer, AlertTriangle } from 'lucide-react';
 import { TempGauge } from './TempGauge';
 import { FanSpeedCard } from './FanSpeedCard';
 import { TempChart } from './TempChart';
 import { MachineDrillIn } from './MachineDrillIn';
 import { useSensors } from '@/hooks/useSensors';
+import { useAppStore } from '@/stores/appStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { api } from '@/lib/api';
 import { formatTemp } from '@/lib/tempUnit';
-import type { MachineInfo } from '@/lib/types';
+import type { DriveSummary, MachineInfo } from '@/lib/types';
 
 export function SystemOverview() {
   const {
@@ -21,9 +22,16 @@ export function SystemOverview() {
   } = useSensors();
   const sensorLabels = useSettingsStore((s) => s.sensorLabels);
   const tempUnit = useSettingsStore((s) => s.tempUnit);
+  const setPage = useAppStore((s) => s.setPage);
+  const connected = useAppStore((s) => s.connected);
   const [machines, setMachines] = useState<MachineInfo[]>([]);
   const [selectedMachineId, setSelectedMachineId] = useState<string | null>(null);
   const selectedMachine = selectedMachineId ? machines.find(m => m.id === selectedMachineId) ?? null : null;
+  const [drives, setDrives] = useState<DriveSummary[]>([]);
+
+  useEffect(() => {
+    api.drives.list().then((r) => setDrives(r.drives)).catch(() => {});
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -72,6 +80,11 @@ export function SystemOverview() {
 
   return (
     <div className="space-y-6 animate-fade-in">
+      {!connected && (
+        <div className="px-3 py-2 rounded text-xs" style={{ background: 'var(--warning)', color: '#000', opacity: 0.85 }}>
+          Sensor data may be stale — reconnecting to backend…
+        </div>
+      )}
       {machines.length > 0 && (
         <div>
           <h3 className="section-title mb-3 px-1">Machines</h3>
@@ -129,6 +142,52 @@ export function SystemOverview() {
           </div>
         </div>
       )}
+
+      {/* Storage summary */}
+      {drives.length > 0 && (() => {
+        const critical = drives.filter((d) => d.health_status === 'critical').length;
+        const warning  = drives.filter((d) => d.health_status === 'warning').length;
+        const hottest  = drives.reduce<DriveSummary | null>(
+          (best, d) => (d.temperature_c != null && (best === null || d.temperature_c > (best.temperature_c ?? -Infinity))) ? d : best,
+          null,
+        );
+        const hasProblem = critical > 0 || warning > 0;
+        return (
+          <div>
+            <h3 className="section-title mb-3 px-1">Storage</h3>
+            <div
+              className="card flex items-center justify-between gap-4 cursor-pointer hover:opacity-90 transition-opacity"
+              onClick={() => setPage('drives')}
+            >
+              <div className="flex items-center gap-3">
+                <div
+                  className="w-10 h-10 rounded-lg flex items-center justify-center shrink-0"
+                  style={{ background: 'var(--accent-muted)' }}
+                >
+                  <HardDrive size={20} style={{ color: hasProblem ? 'var(--warning)' : 'var(--accent)' }} />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
+                    {drives.length} drive{drives.length !== 1 ? 's' : ''} detected
+                  </p>
+                  <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                    {critical > 0
+                      ? `${critical} critical`
+                      : warning > 0
+                      ? `${warning} warning`
+                      : 'All healthy'}
+                    {hottest?.temperature_c != null && ` · hottest ${formatTemp(hottest.temperature_c, tempUnit)}`}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                {hasProblem && <AlertTriangle size={16} style={{ color: critical > 0 ? 'var(--danger)' : 'var(--warning)' }} />}
+                <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>View →</span>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Temperature Gauges */}
       <div>

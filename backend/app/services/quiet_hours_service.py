@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, time
+from datetime import datetime, time, timezone
 
 import aiosqlite
 
@@ -63,7 +63,7 @@ class QuietHoursService:
         if self._activate_profile_fn is None:
             return
 
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         dow = now.weekday()  # 0=Monday
         current_time = now.strftime("%H:%M")
 

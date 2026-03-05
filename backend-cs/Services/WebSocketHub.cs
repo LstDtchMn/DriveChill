@@ -83,7 +83,7 @@ public sealed class WebSocketHub
         finally
         {
             _sensors.Unsubscribe(channel);
-            if (ws.State == WebSocketState.Open)
+            if (ws.State == WebSocketState.Open || ws.State == WebSocketState.CloseReceived)
                 await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "Server closing",
                     CancellationToken.None);
             _log.LogDebug("WebSocket disconnected");

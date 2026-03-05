@@ -52,6 +52,12 @@ public sealed class SettingsStore
         set { lock (_lock) { _data.TempUnit = value; Save(); } }
     }
 
+    public double FanRampRatePctPerSec
+    {
+        get { lock (_lock) return _data.FanRampRatePctPerSec; }
+        set { lock (_lock) { _data.FanRampRatePctPerSec = value; Save(); } }
+    }
+
     public StoredData GetAll() { lock (_lock) return Clone(_data); }
     public void SetAll(StoredData d) { lock (_lock) { _data = d; Save(); } }
 
@@ -95,16 +101,33 @@ public sealed class SettingsStore
 
     private StoredData Load()
     {
+        StoredData data;
         try
         {
-            if (File.Exists(_path))
-            {
-                var json = File.ReadAllText(_path);
-                return JsonSerializer.Deserialize<StoredData>(json, _json) ?? new StoredData();
-            }
+            data = File.Exists(_path)
+                ? JsonSerializer.Deserialize<StoredData>(File.ReadAllText(_path), _json) ?? new StoredData()
+                : new StoredData();
         }
-        catch { /* corrupt file — fall back to defaults */ }
-        return new StoredData();
+        catch { data = new StoredData(); }
+
+        // Retention migration: old default was 1 day; upgrade to 30 on first run after update.
+        if (data.RetentionMigrationVersion < 1)
+        {
+            if (data.RetentionDays == 1)
+                data.RetentionDays = 30;
+            data.RetentionMigrationVersion = 1;
+
+            // Persist immediately so a restart does not re-apply the migration.
+            try
+            {
+                var tmp = _path + ".tmp";
+                File.WriteAllText(tmp, JsonSerializer.Serialize(data, _json));
+                File.Move(tmp, _path, overwrite: true);
+            }
+            catch { /* best-effort; will retry on next write */ }
+        }
+
+        return data;
     }
 
     private void Save()
@@ -123,9 +146,11 @@ public sealed class SettingsStore
 /// <summary>Root object persisted to settings.json.</summary>
 public sealed class StoredData
 {
-    public int    PollIntervalMs { get; set; } = 1000;
-    public int    RetentionDays  { get; set; } = 30;
-    public string TempUnit       { get; set; } = "C";
+    public int    PollIntervalMs            { get; set; } = 1000;
+    public int    RetentionDays             { get; set; } = 30;
+    public int    RetentionMigrationVersion { get; set; } = 0;
+    public string TempUnit                  { get; set; } = "C";
+    public double FanRampRatePctPerSec      { get; set; } = 5.0;
 
     public List<FanCurve>  Curves   { get; set; } = [];
     public List<AlertRule> Alerts   { get; set; } = [];

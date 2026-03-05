@@ -1,13 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from app.api.dependencies.auth import require_csrf
+from app.api.dependencies.auth import require_auth, require_csrf
 
 from app.services.alert_service import AlertRule
 
 router = APIRouter(prefix="/api/alerts", tags=["alerts"])
 
 
-@router.get("")
+@router.get("", dependencies=[Depends(require_auth)])
 async def get_alerts(request: Request):
     """Get alert rules and recent events."""
     alert_service = request.app.state.alert_service

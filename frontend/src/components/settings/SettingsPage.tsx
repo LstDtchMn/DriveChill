@@ -7,8 +7,8 @@ import { useSettingsStore } from '@/stores/settingsStore';
 import { useSensors } from '@/hooks/useSensors';
 import type { TempUnit } from '@/lib/tempUnit';
 import { requestNotificationPermission } from '@/hooks/useNotifications';
-import type { ApiKeyInfo, MachineInfo, WebhookConfig, WebhookDelivery, PushSubscription, EmailNotificationSettings } from '@/lib/types';
-import { Save, RefreshCw, Download, Info, Pencil, X, Check, Bell, BellOff } from 'lucide-react';
+import type { ApiKeyInfo, DriveSettings, MachineInfo, WebhookConfig, WebhookDelivery, PushSubscription, EmailNotificationSettings } from '@/lib/types';
+import { Save, RefreshCw, Download, Info, Pencil, X, Check, Bell, BellOff, HardDrive, ArrowUpCircle } from 'lucide-react';
 
 interface AppSettings {
   sensor_poll_interval: number;
@@ -16,6 +16,7 @@ interface AppSettings {
   temp_unit: string;
   hardware_backend: string;
   backend_name: string;
+  fan_ramp_rate_pct_per_sec: number;
 }
 
 function isValidHttpUrl(value: string): boolean {
@@ -29,7 +30,7 @@ function isValidHttpUrl(value: string): boolean {
 
 export function SettingsPage() {
   const webhookPageSize = 10;
-  const { backendName } = useAppStore();
+  const { backendName, updateCheck, setUpdateCheck } = useAppStore();
   const { setTempUnit, sensorLabels, setSensorLabels, setSensorLabel, removeSensorLabel, notificationsEnabled, setNotificationsEnabled } = useSettingsStore();
   const { all: allReadings } = useSensors();
   const [settings, setSettings] = useState<AppSettings | null>(null);
@@ -61,6 +62,25 @@ export function SettingsPage() {
   const [emailPasswordInput, setEmailPasswordInput] = useState('');
   const [emailSaving, setEmailSaving] = useState(false);
   const [emailTestResult, setEmailTestResult] = useState<string | null>(null);
+  const [driveSettings, setDriveSettings] = useState<DriveSettings | null>(null);
+  const [driveSaving, setDriveSaving] = useState(false);
+  const [updateApplying, setUpdateApplying] = useState(false);
+  const [updateMessage, setUpdateMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.drives.getSettings().then(setDriveSettings).catch(() => {});
+  }, []);
+
+  async function handleSaveDriveSettings() {
+    if (!driveSettings) return;
+    setDriveSaving(true);
+    try {
+      const updated = await api.drives.updateSettings(driveSettings);
+      setDriveSettings(updated);
+    } finally {
+      setDriveSaving(false);
+    }
+  }
 
   useEffect(() => {
     api.health().then((h) => setAppVersion(h.version || '?')).catch(() => setAppVersion('?'));
@@ -94,15 +114,17 @@ export function SettingsPage() {
       } catch {
         setSettings({
           sensor_poll_interval: 1.0,
-          history_retention_hours: 24,
+          history_retention_hours: 720,
           temp_unit: 'C',
           hardware_backend: 'auto',
           backend_name: backendName || 'Unknown',
+          fan_ramp_rate_pct_per_sec: 0,
         });
       }
     };
     fetchSettings();
-  }, [backendName]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     const fetchLabels = async () => {
@@ -186,6 +208,7 @@ export function SettingsPage() {
         sensor_poll_interval: settings.sensor_poll_interval,
         history_retention_hours: settings.history_retention_hours,
         temp_unit: settings.temp_unit,
+        fan_ramp_rate_pct_per_sec: settings.fan_ramp_rate_pct_per_sec,
       });
       setTempUnit(settings.temp_unit as TempUnit);
       setSaved(true);
@@ -405,7 +428,20 @@ export function SettingsPage() {
     try {
       await navigator.clipboard.writeText(issuedApiKey);
     } catch {
-      // no-op
+      // Fallback for non-HTTPS contexts where Clipboard API is unavailable
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = issuedApiKey;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      } catch {
+        // Key is still visible in the panel above — user can select it manually
+      }
     }
   };
 
@@ -465,9 +501,8 @@ export function SettingsPage() {
                 <button
                   key={unit}
                   onClick={() => setSettings({ ...settings, temp_unit: unit })}
-                  className={`px-4 py-2 rounded-lg text-sm font-medium border transition-all ${
-                    settings.temp_unit === unit ? 'ring-2' : ''
-                  }`}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium border transition-all ${settings.temp_unit === unit ? 'ring-2' : ''
+                    }`}
                   style={settings.temp_unit === unit
                     ? { borderColor: 'var(--accent)', background: 'var(--accent-muted)', color: 'var(--accent)' }
                     : { borderColor: 'var(--border)', color: 'var(--text-secondary)' }
@@ -477,6 +512,29 @@ export function SettingsPage() {
                 </button>
               ))}
             </div>
+          </div>
+
+          <div>
+            <label className="text-sm font-medium mb-1.5 block" style={{ color: 'var(--text)' }}>
+              Fan Speed Ramp Rate
+            </label>
+            <div className="flex items-center gap-3">
+              <input
+                type="range"
+                min={0}
+                max={50}
+                step={1}
+                value={settings.fan_ramp_rate_pct_per_sec}
+                onChange={(e) => setSettings({ ...settings, fan_ramp_rate_pct_per_sec: Number(e.target.value) })}
+                className="flex-1 accent-blue-500"
+              />
+              <span className="text-sm font-mono w-16 text-right" style={{ color: 'var(--text)' }}>
+                {settings.fan_ramp_rate_pct_per_sec === 0 ? 'Off' : `${settings.fan_ramp_rate_pct_per_sec}%/s`}
+              </span>
+            </div>
+            <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
+              Limit how fast fan speeds change (0 = instant). Smooths transitions to reduce noise.
+            </p>
           </div>
 
           <div>
@@ -1082,6 +1140,201 @@ export function SettingsPage() {
             <span className="font-mono text-xs" style={{ color: 'var(--text)' }}>{appVersion}</span>
           </div>
         </div>
+      </div>
+
+      {/* Storage Monitoring */}
+      <div className="card p-6 animate-card-enter">
+        <div className="flex items-center gap-2 mb-1">
+          <HardDrive size={16} style={{ color: 'var(--accent)' }} />
+          <h3 className="text-base font-semibold" style={{ color: 'var(--text)' }}>Storage Monitoring</h3>
+        </div>
+        <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
+          Drive health, temperature, and SMART monitoring via smartmontools.
+        </p>
+        {driveSettings ? (
+          <div className="space-y-4">
+            <label className="flex items-center gap-2 text-sm" style={{ color: 'var(--text)' }}>
+              <input
+                type="checkbox"
+                checked={driveSettings.enabled}
+                onChange={(e) => setDriveSettings({ ...driveSettings, enabled: e.target.checked })}
+              />
+              Enable drive monitoring
+            </label>
+            <label className="flex items-center gap-2 text-sm" style={{ color: 'var(--text)' }}>
+              <input
+                type="checkbox"
+                checked={driveSettings.smartctl_provider_enabled}
+                onChange={(e) => setDriveSettings({ ...driveSettings, smartctl_provider_enabled: e.target.checked })}
+              />
+              Use smartctl (recommended)
+            </label>
+            <div>
+              <label className="block text-xs mb-1" style={{ color: 'var(--text-secondary)' }}>smartctl path</label>
+              <input
+                type="text"
+                value={driveSettings.smartctl_path}
+                onChange={(e) => setDriveSettings({ ...driveSettings, smartctl_path: e.target.value })}
+                className="w-full px-3 py-2 rounded-lg text-sm border outline-none"
+                style={{ background: 'var(--bg)', borderColor: 'var(--border)', color: 'var(--text)' }}
+                placeholder="smartctl"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              {([
+                ['HDD warn °C', 'hdd_temp_warning_c'],
+                ['HDD crit °C', 'hdd_temp_critical_c'],
+                ['SSD warn °C', 'ssd_temp_warning_c'],
+                ['SSD crit °C', 'ssd_temp_critical_c'],
+                ['NVMe warn °C', 'nvme_temp_warning_c'],
+                ['NVMe crit °C', 'nvme_temp_critical_c'],
+              ] as [string, keyof DriveSettings][]).map(([label, key]) => (
+                <div key={key}>
+                  <label className="block text-xs mb-1" style={{ color: 'var(--text-secondary)' }}>{label}</label>
+                  <input
+                    type="number"
+                    value={driveSettings[key] as number}
+                    onChange={(e) => setDriveSettings({ ...driveSettings, [key]: Number(e.target.value) })}
+                    className="w-full px-3 py-2 rounded-lg text-sm border outline-none"
+                    style={{ background: 'var(--bg)', borderColor: 'var(--border)', color: 'var(--text)' }}
+                  />
+                </div>
+              ))}
+            </div>
+            <button
+              onClick={handleSaveDriveSettings}
+              disabled={driveSaving}
+              className="btn-primary flex items-center gap-2"
+            >
+              <Save size={14} />
+              {driveSaving ? 'Saving…' : 'Save Drive Settings'}
+            </button>
+          </div>
+        ) : (
+          <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>Loading…</p>
+        )}
+      </div>
+
+      {/* Updates */}
+      <div className="card p-5 animate-card-enter">
+        <h3 className="section-title mb-4 flex items-center gap-2">
+          <ArrowUpCircle size={16} />
+          Updates
+        </h3>
+        {updateCheck ? (
+          <div className="space-y-3">
+            <div className="flex flex-wrap gap-4 text-sm">
+              <span style={{ color: 'var(--text-secondary)' }}>
+                Current: <strong style={{ color: 'var(--text)' }}>v{updateCheck.current}</strong>
+              </span>
+              <span style={{ color: 'var(--text-secondary)' }}>
+                Latest:{' '}
+                {isValidHttpUrl(updateCheck.release_url ?? '') ? (
+                  <a
+                    href={updateCheck.release_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ color: 'var(--accent)' }}
+                  >
+                    v{updateCheck.latest}
+                  </a>
+                ) : (
+                  <strong style={{ color: 'var(--accent)' }}>v{updateCheck.latest}</strong>
+                )}
+              </span>
+              <span>
+                {updateCheck.update_available ? (
+                  <span className="badge badge-warning">Update available</span>
+                ) : (
+                  <span className="badge badge-success">Up to date</span>
+                )}
+              </span>
+            </div>
+
+            {updateMessage && (
+              <div
+                className="p-3 rounded-lg text-xs font-mono whitespace-pre-wrap"
+                style={{ background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text-secondary)' }}
+              >
+                {updateMessage}
+              </div>
+            )}
+
+            {updateCheck.update_available && (
+              updateCheck.deployment === 'docker' ? (
+                <div className="space-y-2">
+                  <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                    Pull the new image and restart your container:
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <code
+                      className="flex-1 px-3 py-2 rounded-lg text-xs font-mono"
+                      style={{ background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)' }}
+                    >
+                      docker compose pull &amp;&amp; docker compose up -d
+                    </code>
+                    <button
+                      className="btn-secondary text-xs px-3 py-2"
+                      onClick={() => {
+                        navigator.clipboard.writeText('docker compose pull && docker compose up -d');
+                        setUpdateMessage('Copied to clipboard.');
+                        setTimeout(() => setUpdateMessage(null), 2000);
+                      }}
+                    >
+                      Copy
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  className="btn-primary flex items-center gap-2"
+                  disabled={updateApplying}
+                  onClick={async () => {
+                    if (!confirm(`Update DriveChill to v${updateCheck.latest}?\n\nThe service will stop and restart automatically. You will need to reconnect in ~30 seconds.`)) return;
+                    setUpdateApplying(true);
+                    setUpdateMessage(null);
+                    try {
+                      const result = await api.update.apply();
+                      setUpdateMessage(result.message ?? 'Update started.');
+                      if (result.status === 'update_started') {
+                        setUpdateCheck({ ...updateCheck, update_available: false });
+                      }
+                    } catch (e: any) {
+                      const body = e?.detail;
+                      const msg = (body && typeof body === 'object' && typeof body.detail === 'string')
+                        ? body.detail
+                        : e?.message ?? 'Unknown error';
+                      setUpdateMessage(`Error: ${msg}`);
+                    } finally {
+                      setUpdateApplying(false);
+                    }
+                  }}
+                >
+                  <ArrowUpCircle size={14} />
+                  {updateApplying ? 'Starting update…' : `Update to v${updateCheck.latest}`}
+                </button>
+              )
+            )}
+          </div>
+        ) : (
+          <div className="flex items-center gap-3">
+            <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+              Checking for updates…
+            </p>
+            <button
+              className="btn-secondary text-xs px-3 py-1.5 flex items-center gap-1.5"
+              onClick={async () => {
+                try {
+                  const info = await api.update.check();
+                  setUpdateCheck(info);
+                } catch { /* ignore */ }
+              }}
+            >
+              <RefreshCw size={12} />
+              Retry
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Help */}
