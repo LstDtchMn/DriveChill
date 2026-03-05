@@ -4,13 +4,14 @@ import { useState, useEffect, useCallback } from 'react';
 import { api } from '@/lib/api';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { displayTemp, tempUnitSymbol } from '@/lib/tempUnit';
-import type { AnalyticsStat, AnalyticsAnomaly, AnalyticsBucket } from '@/lib/types';
+import type { AnalyticsStat, AnalyticsAnomaly, AnalyticsBucket, ThermalRegression, AnalyticsCorrelationSample } from '@/lib/types';
 
 const TIME_OPTIONS = [
-  { label: '1h', hours: 1 },
-  { label: '6h', hours: 6 },
+  { label: '1h',  hours: 1 },
+  { label: '6h',  hours: 6 },
   { label: '24h', hours: 24 },
-  { label: '7d', hours: 168 },
+  { label: '7d',  hours: 168 },
+  { label: '30d', hours: 720 },
 ];
 
 type FmtFn = (v: number, unit: string) => string;
@@ -60,45 +61,117 @@ function StatCard({ s, accentColor, fmt }: { s: AnalyticsStat; accentColor: stri
   );
 }
 
+function CorrelationScatter({ samples, labelX }: { samples: AnalyticsCorrelationSample[]; labelX: string; labelY: string }) {
+  const W = 200; const H = 120; const PAD = 14;
+  if (samples.length < 3) return null;
+  const xs = samples.map((s) => s.x); const ys = samples.map((s) => s.y);
+  const minX = Math.min(...xs); const maxX = Math.max(...xs); const rangeX = maxX - minX || 1;
+  const minY = Math.min(...ys); const maxY = Math.max(...ys); const rangeY = maxY - minY || 1;
+  const innerW = W - PAD * 2; const innerH = H - PAD * 2;
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ maxWidth: W * 2, display: 'block' }}>
+      <line x1={PAD} y1={PAD} x2={PAD} y2={H - PAD} stroke="var(--border)" strokeWidth="1" />
+      <line x1={PAD} y1={H - PAD} x2={W - PAD} y2={H - PAD} stroke="var(--border)" strokeWidth="1" />
+      <text x={PAD} y={H - 2} fontSize="8" fill="var(--text-secondary)">{labelX.slice(0, 16)}</text>
+      {samples.map((s, i) => {
+        const cx = PAD + ((s.x - minX) / rangeX) * innerW;
+        const cy = PAD + innerH - ((s.y - minY) / rangeY) * innerH;
+        return <circle key={i} cx={cx} cy={cy} r={2} fill="var(--accent)" opacity="0.6" />;
+      })}
+    </svg>
+  );
+}
+
 export function AnalyticsPage() {
   const [hours, setHours] = useState(24);
-  const [stats, setStats] = useState<AnalyticsStat[] | null>(null);
-  const [anomalies, setAnomalies] = useState<AnalyticsAnomaly[] | null>(null);
-  const [history, setHistory] = useState<AnalyticsBucket[] | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [customStart, setCustomStart] = useState('');
+  const [customEnd, setCustomEnd]     = useState('');
+  const [selectedSensorIds, setSelectedSensorIds] = useState<string[]>([]);
+
+  const [stats, setStats]           = useState<AnalyticsStat[] | null>(null);
+  const [anomalies, setAnomalies]   = useState<AnalyticsAnomaly[] | null>(null);
+  const [history, setHistory]       = useState<AnalyticsBucket[] | null>(null);
+  const [regressions, setRegressions] = useState<ThermalRegression[] | null>(null);
+  const [retentionLimited, setRetentionLimited] = useState(false);
+
+  const [loading, setLoading]       = useState(false);
+  const [error, setError]           = useState<string | null>(null);
+
+  // Correlation state
+  const [corrX, setCorrX]           = useState('');
+  const [corrY, setCorrY]           = useState('');
+  const [corrResult, setCorrResult] = useState<{ coeff: number; samples: AnalyticsCorrelationSample[]; count: number } | null>(null);
+  const [corrLoading, setCorrLoading] = useState(false);
 
   const { tempUnit } = useSettingsStore();
 
-  // Unit-aware formatter: converts °C values to the user's preferred unit.
   const fmt = useCallback<FmtFn>((v, unit) => {
     if (unit === '°C') return `${displayTemp(v, tempUnit).toFixed(1)} ${tempUnitSymbol(tempUnit)}`;
     return `${v.toFixed(1)} ${unit}`;
   }, [tempUnit]);
 
-  // Stdev is a delta (scale only), so the offset (+32) doesn't apply for °C→°F.
   const fmtDelta = useCallback((v: number, unit: string) => {
     if (unit === '°C' && tempUnit === 'F') return `${(v * 9 / 5).toFixed(1)} ${tempUnitSymbol(tempUnit)}`;
     if (unit === '°C') return `${v.toFixed(1)} ${tempUnitSymbol(tempUnit)}`;
     return `${v.toFixed(1)} ${unit}`;
   }, [tempUnit]);
 
+  // Build API opts from custom range + sensor filter.
+  // Custom range requires both start and end; one-sided input is ignored.
+  const buildOpts = useCallback(() => {
+    const opts: { start?: string; end?: string; sensorIds?: string[] } = {};
+    if (customStart && customEnd) {
+      opts.start = new Date(customStart).toISOString();
+      opts.end   = new Date(customEnd).toISOString();
+    }
+    if (selectedSensorIds.length > 0) opts.sensorIds = selectedSensorIds;
+    return opts;
+  }, [customStart, customEnd, selectedSensorIds]);
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true); setError(null);
-    const bs = hours <= 1 ? 30 : hours <= 6 ? 60 : hours <= 24 ? 300 : 3600;
-    Promise.all([api.analytics.getStats(hours), api.analytics.getAnomalies(hours), api.analytics.getHistory(hours, undefined, bs)])
-      .then(([sR, aR, hR]) => {
+    const opts = buildOpts();
+    // Let the backend auto-size buckets — do not send explicit bucket_seconds
+    Promise.all([
+      api.analytics.getStats(hours, undefined, opts),
+      api.analytics.getAnomalies(hours, 3.0, opts),
+      api.analytics.getHistory(hours, undefined, undefined, opts),
+      api.analytics.getRegression(30, Math.min(hours, 168), 5.0, opts),
+    ])
+      .then(([sR, aR, hR, rR]) => {
         if (cancelled) return;
-        setStats(sR.stats); setAnomalies(aR.anomalies); setHistory(hR.buckets);
+        setStats(sR.stats);
+        setAnomalies(aR.anomalies);
+        setHistory(hR.buckets);
+        setRegressions(rR.regressions);
+        setRetentionLimited(hR.retention_limited);
       })
       .catch(() => { if (!cancelled) setError('Failed to load analytics data.'); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [hours]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hours, customStart, customEnd, selectedSensorIds]);
 
-  const tempStats = stats?.filter((s) => s.sensor_type.includes('temp')) ?? [];
-  const fanStats = stats?.filter((s) => s.sensor_type === 'fan_rpm') ?? [];
+  const handleCorrelate = async () => {
+    if (!corrX || !corrY || corrX === corrY) return;
+    setCorrLoading(true); setCorrResult(null);
+    try {
+      const r = await api.analytics.getCorrelation(corrX, corrY, hours, buildOpts());
+      setCorrResult({ coeff: r.correlation_coefficient, samples: r.samples, count: r.sample_count });
+    } catch { /* ignore */ }
+    finally { setCorrLoading(false); }
+  };
+
+  const toggleSensor = (id: string) => {
+    setSelectedSensorIds((prev) =>
+      prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id]
+    );
+  };
+
+  const thermalStats = stats?.filter((s) => s.sensor_type.includes('temp') && s.sensor_type !== 'hdd_temp') ?? [];
+  const driveStats   = stats?.filter((s) => s.sensor_type === 'hdd_temp') ?? [];
+  const fanStats     = stats?.filter((s) => s.sensor_type === 'fan_rpm') ?? [];
   const sortedAnomalies = anomalies ? [...anomalies].sort((a, b) => b.z_score - a.z_score) : null;
 
   const tempBuckets: Record<string, AnalyticsBucket[]> = {};
@@ -110,17 +183,114 @@ export function AnalyticsPage() {
     }
   }
 
+  // All sensors for the correlation dropdowns and filter chips
+  const allSensorOptions = stats ?? [];
+  const corrXName = allSensorOptions.find((s) => s.sensor_id === corrX)?.sensor_name ?? corrX;
+  const corrYName = allSensorOptions.find((s) => s.sensor_id === corrY)?.sensor_name ?? corrY;
+  const coeffColor = corrResult
+    ? Math.abs(corrResult.coeff) >= 0.7 ? 'var(--success)'
+    : Math.abs(corrResult.coeff) >= 0.4 ? 'var(--warning)'
+    : 'var(--text-secondary)'
+    : 'var(--text)';
+
   return (
     <div className="space-y-6 animate-fade-in">
       {/* Time window picker */}
-      <div className="flex items-center gap-2 flex-wrap">
-        {TIME_OPTIONS.map((o) => (
-          <button key={o.hours} onClick={() => setHours(o.hours)} className={hours === o.hours ? 'btn-primary' : 'btn-secondary'} style={{ minWidth: 48 }}>
-            {o.label}
-          </button>
-        ))}
-        {loading && <span className="text-xs ml-2" style={{ color: 'var(--text-secondary)' }}>Loading...</span>}
+      <div className="space-y-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          {TIME_OPTIONS.map((o) => (
+            <button
+              key={o.hours}
+              onClick={() => { setHours(o.hours); setCustomStart(''); setCustomEnd(''); }}
+              className={hours === o.hours && !customStart && !customEnd ? 'btn-primary' : 'btn-secondary'}
+              style={{ minWidth: 44 }}
+            >
+              {o.label}
+            </button>
+          ))}
+          {loading && <span className="text-xs ml-2" style={{ color: 'var(--text-secondary)' }}>Loading...</span>}
+        </div>
+        {/* Custom date range */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>Custom:</span>
+          <input
+            type="datetime-local"
+            value={customStart}
+            onChange={(e) => setCustomStart(e.target.value)}
+            className="text-xs px-2 py-1 rounded"
+            style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', color: 'var(--text)', minHeight: 32 }}
+          />
+          <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>to</span>
+          <input
+            type="datetime-local"
+            value={customEnd}
+            onChange={(e) => setCustomEnd(e.target.value)}
+            className="text-xs px-2 py-1 rounded"
+            style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', color: 'var(--text)', minHeight: 32 }}
+          />
+          {(customStart || customEnd) && (
+            <button
+              onClick={() => { setCustomStart(''); setCustomEnd(''); }}
+              className="text-xs btn-secondary px-2 py-1"
+            >
+              Clear
+            </button>
+          )}
+          {(customStart || customEnd) && !(customStart && customEnd) && (
+            <span className="text-xs" style={{ color: 'var(--warning)' }}>
+              Both dates required for custom range
+            </span>
+          )}
+        </div>
       </div>
+
+      {/* Sensor filter chips */}
+      {allSensorOptions.length > 0 && (
+        <div className="p-3 rounded" style={{ background: 'var(--card-bg)', border: '1px solid var(--border)' }}>
+          <p className="text-xs font-medium mb-2" style={{ color: 'var(--text)' }}>
+            Sensor Filter
+            {selectedSensorIds.length > 0 && (
+              <button
+                onClick={() => setSelectedSensorIds([])}
+                className="ml-2 text-xs"
+                style={{ color: 'var(--accent)' }}
+              >
+                Clear
+              </button>
+            )}
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {allSensorOptions.map((s) => {
+              const active = selectedSensorIds.includes(s.sensor_id);
+              return (
+                <button
+                  key={s.sensor_id}
+                  onClick={() => toggleSensor(s.sensor_id)}
+                  className="text-xs px-2 py-1 rounded transition-all"
+                  style={{
+                    minHeight: 28,
+                    background: active ? 'var(--accent-muted)' : 'var(--bg)',
+                    color: active ? 'var(--accent)' : 'var(--text-secondary)',
+                    border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
+                  }}
+                >
+                  {s.sensor_name}
+                </button>
+              );
+            })}
+          </div>
+          {selectedSensorIds.length === 0 && (
+            <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>Showing all sensors. Click to filter.</p>
+          )}
+        </div>
+      )}
+
+      {/* Retention-limited banner */}
+      {retentionLimited && (
+        <div className="card p-3 text-sm" style={{ borderColor: 'var(--warning)', color: 'var(--warning)', background: 'rgba(234,179,8,0.08)' }}>
+          Data is limited by the history retention window. Older data has been pruned.
+        </div>
+      )}
 
       {error && (
         <div className="card p-4 text-sm" style={{ color: 'var(--danger)', borderColor: 'var(--danger)', background: 'rgba(239,68,68,0.08)' }}>
@@ -135,10 +305,18 @@ export function AnalyticsPage() {
           <div className="card p-6 text-center"><p className="text-sm" style={{ color: 'var(--text-secondary)' }}>No data in this time window.</p></div>
         ) : (
           <div className="space-y-4">
-            {tempStats.length > 0 && (
+            {thermalStats.length > 0 && (
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-                {tempStats.map((s) => <StatCard key={s.sensor_id} s={s} accentColor="var(--warning)" fmt={fmt} />)}
+                {thermalStats.map((s) => <StatCard key={s.sensor_id} s={s} accentColor="var(--warning)" fmt={fmt} />)}
               </div>
+            )}
+            {driveStats.length > 0 && (
+              <>
+                <p className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>Storage</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+                  {driveStats.map((s) => <StatCard key={s.sensor_id} s={s} accentColor="var(--success)" fmt={fmt} />)}
+                </div>
+              </>
             )}
             {fanStats.length > 0 && (
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
@@ -149,7 +327,54 @@ export function AnalyticsPage() {
         )}
       </div>
 
-      {/* Section 2: Anomalies */}
+      {/* Section 2: Thermal Health (Regressions) */}
+      <div>
+        <h3 className="section-title mb-3">Thermal Health</h3>
+        <div className="card overflow-hidden">
+          {!regressions || regressions.length === 0 ? (
+            <div className="p-6 text-center">
+              <p className="text-sm" style={{ color: 'var(--success)' }}>✓ All sensors within normal range.</p>
+            </div>
+          ) : (
+            <div className="space-y-2 p-4">
+              {regressions.map((r) => (
+                <div
+                  key={r.sensor_id}
+                  className="rounded-lg px-4 py-3"
+                  style={{
+                    background: r.severity === 'critical' ? 'rgba(239,68,68,0.08)' : 'rgba(234,179,8,0.08)',
+                    borderLeft: `3px solid ${r.severity === 'critical' ? 'var(--danger)' : 'var(--warning)'}`,
+                  }}
+                >
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-semibold" style={{ color: r.severity === 'critical' ? 'var(--danger)' : 'var(--warning)' }}>
+                        {r.sensor_name}
+                        <span className="ml-2 text-xs px-1.5 py-0.5 rounded" style={{
+                          background: r.severity === 'critical' ? 'rgba(239,68,68,0.15)' : 'rgba(234,179,8,0.15)',
+                        }}>
+                          {r.severity}
+                        </span>
+                      </p>
+                      <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>{r.message}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-lg font-mono font-bold" style={{ color: r.severity === 'critical' ? 'var(--danger)' : 'var(--warning)' }}>
+                        +{fmtDelta(r.delta, '°C')}
+                      </p>
+                      <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                        {fmt(r.baseline_avg, '°C')} → {fmt(r.recent_avg, '°C')}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Section 3: Anomalies */}
       <div>
         <h3 className="section-title mb-3">Anomalies (z-score &gt; 3)</h3>
         <div className="card overflow-hidden">
@@ -162,7 +387,7 @@ export function AnalyticsPage() {
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                    {['Time', 'Sensor', 'Value', 'Z-Score', 'Mean \u00b1 StDev'].map((h) => (
+                    {['Time', 'Sensor', 'Value', 'Z-Score', 'Severity', 'Mean ± StDev'].map((h) => (
                       <th key={h} style={{ padding: '8px 14px', textAlign: 'left', color: 'var(--text-secondary)', fontWeight: 600, whiteSpace: 'nowrap' }}>{h}</th>
                     ))}
                   </tr>
@@ -174,7 +399,12 @@ export function AnalyticsPage() {
                       <td style={{ padding: '8px 14px', color: 'var(--text)', fontWeight: 500 }}>{a.sensor_name}</td>
                       <td style={{ padding: '8px 14px', color: 'var(--text)', fontFamily: 'monospace' }}>{fmt(a.value, a.unit)}</td>
                       <td style={{ padding: '8px 14px', color: 'var(--danger)', fontFamily: 'monospace', fontWeight: 600 }}>{a.z_score.toFixed(1)}</td>
-                      <td style={{ padding: '8px 14px', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>{fmt(a.mean, a.unit)} &plusmn; {fmtDelta(a.stdev, a.unit)}</td>
+                      <td style={{ padding: '8px 14px' }}>
+                        <span className={`badge ${a.severity === 'critical' ? 'badge-danger' : 'badge-warning'}`}>
+                          {a.severity ?? 'warning'}
+                        </span>
+                      </td>
+                      <td style={{ padding: '8px 14px', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>{fmt(a.mean, a.unit)} ± {fmtDelta(a.stdev, a.unit)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -184,7 +414,7 @@ export function AnalyticsPage() {
         </div>
       </div>
 
-      {/* Section 3: Temperature History sparklines */}
+      {/* Section 4: Temperature History sparklines */}
       <div>
         <h3 className="section-title mb-3">Temperature History</h3>
         {Object.keys(tempBuckets).length === 0 ? (
@@ -200,6 +430,74 @@ export function AnalyticsPage() {
           </div>
         )}
       </div>
+
+      {/* Section 5: Correlation */}
+      {allSensorOptions.length >= 2 && (
+        <div>
+          <h3 className="section-title mb-3">Sensor Correlation</h3>
+          <div className="card p-4">
+            <p className="text-xs mb-3" style={{ color: 'var(--text-secondary)' }}>
+              Measure the Pearson correlation between two sensors over the selected time window.
+            </p>
+            <div className="flex items-center gap-3 flex-wrap mb-3">
+              <select
+                value={corrX}
+                onChange={(e) => { setCorrX(e.target.value); setCorrResult(null); }}
+                className="text-xs px-2 py-1 rounded"
+                style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', color: 'var(--text)', minHeight: 32, minWidth: 140 }}
+              >
+                <option value="">Sensor X</option>
+                {allSensorOptions.map((s) => (
+                  <option key={s.sensor_id} value={s.sensor_id}>{s.sensor_name}</option>
+                ))}
+              </select>
+              <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>vs</span>
+              <select
+                value={corrY}
+                onChange={(e) => { setCorrY(e.target.value); setCorrResult(null); }}
+                className="text-xs px-2 py-1 rounded"
+                style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', color: 'var(--text)', minHeight: 32, minWidth: 140 }}
+              >
+                <option value="">Sensor Y</option>
+                {allSensorOptions.map((s) => (
+                  <option key={s.sensor_id} value={s.sensor_id}>{s.sensor_name}</option>
+                ))}
+              </select>
+              <button
+                onClick={handleCorrelate}
+                disabled={!corrX || !corrY || corrX === corrY || corrLoading}
+                className="btn-primary text-xs"
+                style={{ minHeight: 32 }}
+              >
+                {corrLoading ? 'Calculating...' : 'Correlate'}
+              </button>
+            </div>
+            {corrResult && (
+              <div className="mt-3 flex gap-6 flex-wrap items-start">
+                <div>
+                  <p className="text-xs mb-1" style={{ color: 'var(--text-secondary)' }}>Pearson r</p>
+                  <p className="text-3xl font-mono font-bold" style={{ color: coeffColor }}>
+                    {corrResult.coeff.toFixed(3)}
+                  </p>
+                  <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
+                    {Math.abs(corrResult.coeff) >= 0.7 ? 'Strong'
+                    : Math.abs(corrResult.coeff) >= 0.4 ? 'Moderate'
+                    : 'Weak'}
+                    {corrResult.coeff >= 0 ? ' positive' : ' negative'} correlation
+                  </p>
+                  <p className="text-xs mt-0.5" style={{ color: 'var(--text-secondary)' }}>
+                    {corrResult.count} paired samples
+                  </p>
+                </div>
+                <div style={{ flex: 1, minWidth: 200 }}>
+                  <p className="text-xs mb-1" style={{ color: 'var(--text-secondary)' }}>Scatter plot</p>
+                  <CorrelationScatter samples={corrResult.samples} labelX={corrXName} labelY={corrYName} />
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
