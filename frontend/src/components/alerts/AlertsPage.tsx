@@ -8,8 +8,11 @@ import { api } from '@/lib/api';
 import { formatTemp, tempUnitSymbol, fToC } from '@/lib/tempUnit';
 import { Bell, Plus, Trash2, AlertTriangle, CheckCircle, X } from 'lucide-react';
 import type { AlertRule } from '@/lib/types';
+import { useCanWrite } from '@/hooks/useCanWrite';
+import { ViewerBanner } from '@/components/ui/ViewerBanner';
 
 export function AlertsPage() {
+  const canWrite = useCanWrite();
   const { alertEvents, activeAlerts, clearAlerts, addAlertEvents, setActiveAlerts } = useAppStore();
   const tempUnit = useSettingsStore((s) => s.tempUnit);
   const { cpuTemps, gpuTemps, hddTemps, caseTemps } = useSensors();
@@ -88,6 +91,7 @@ export function AlertsPage() {
 
   return (
     <div className="space-y-6 animate-fade-in">
+      <ViewerBanner />
       {/* Active alerts banner */}
       {activeAlerts.length > 0 && (
         <div className="card p-4 animate-card-enter" style={{ borderColor: 'var(--danger)', background: 'rgba(239, 68, 68, 0.08)' }}>
@@ -111,7 +115,8 @@ export function AlertsPage() {
           <h3 className="section-title">Alert Rules</h3>
           <button
             onClick={() => setShowAddForm(!showAddForm)}
-            className="btn-primary min-h-11 flex items-center gap-2 text-sm"
+            disabled={!canWrite}
+            className="btn-primary min-h-11 flex items-center gap-2 text-sm disabled:opacity-50"
           >
             <Plus size={14} />
             Add Rule
@@ -202,7 +207,8 @@ export function AlertsPage() {
                   </div>
                   <button
                     onClick={() => handleDeleteRule(rule.id)}
-                  className="min-h-11 min-w-11 p-1.5 rounded hover:bg-surface-200 transition-colors"
+                    disabled={!canWrite}
+                  className="min-h-11 min-w-11 p-1.5 rounded hover:bg-surface-200 transition-colors disabled:opacity-40"
                 >
                   <Trash2 size={14} style={{ color: 'var(--text-secondary)' }} />
                 </button>

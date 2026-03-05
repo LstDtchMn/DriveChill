@@ -9,6 +9,10 @@ import { useAppStore } from '@/stores/appStore';
 import { APIError, api } from '@/lib/api';
 import type { FanCurvePoint, FanCurve } from '@/lib/types';
 import { Plus, Save } from 'lucide-react';
+import { useConfirm } from '@/components/ui/ConfirmDialog';
+import { useToast } from '@/components/ui/ToastProvider';
+import { useCanWrite } from '@/hooks/useCanWrite';
+import { ViewerBanner } from '@/components/ui/ViewerBanner';
 
 const DEFAULT_POINTS: FanCurvePoint[] = [
   { temp: 30, speed: 20 },
@@ -36,6 +40,9 @@ function formatDangerWarnings(detail: unknown): string[] {
 }
 
 export function FanCurvesPage() {
+  const confirm = useConfirm();
+  const toast = useToast();
+  const canWrite = useCanWrite();
   const { all: allReadings, cpuTemps, gpuTemps, hddTemps, caseTemps, fanRpms, fanPcts } = useSensors();
   const appliedSpeeds = useAppStore((s) => s.appliedSpeeds);
   const preselectedSensorId = useAppStore((s) => s.preselectedCurveSensorId);
@@ -151,12 +158,12 @@ export function FanCurvesPage() {
     return () => window.removeEventListener('resize', updateEditorSize);
   }, []);
 
-  const handleSelectCurve = (id: string) => {
+  const handleSelectCurve = async (id: string) => {
     if (selectedCurve) {
       const current = curves.find((c) => c.id === selectedCurve);
       const hasUnsaved = current &&
         JSON.stringify(current.points) !== JSON.stringify(editingPoints);
-      if (hasUnsaved && !window.confirm('You have unsaved changes. Discard and switch curve?')) return;
+      if (hasUnsaved && !(await confirm('You have unsaved changes. Discard and switch curve?'))) return;
     }
     const curve = curves.find((c) => c.id === id);
     if (curve) {
@@ -178,20 +185,21 @@ export function FanCurvesPage() {
       if (err instanceof APIError && err.status === 409) {
         const warnings = formatDangerWarnings(err.detail);
         const warningText = warnings.length > 0 ? `\n\n${warnings.join('\n')}` : '';
-        const confirmOverride = window.confirm(
-          `This curve has dangerous speed settings at high temperatures. Apply anyway?${warningText}`
-        );
+        const confirmOverride = await confirm({
+          message: `This curve has dangerous speed settings at high temperatures. Apply anyway?${warningText}`,
+          danger: true,
+        });
         if (!confirmOverride) return;
 
         try {
           await api.updateCurve(updated, true);
           setCurves(curves.map((c) => (c.id === selectedCurve ? updated : c)));
         } catch {
-          alert('Failed to save curve.');
+          toast('Failed to save curve.', 'error');
         }
         return;
       }
-      alert('Failed to save curve. Check your connection.');
+      toast('Failed to save curve. Check your connection.', 'error');
     }
   };
 
@@ -226,18 +234,19 @@ export function FanCurvesPage() {
       setSelectedCurve(newCurve.id);
       setEditingPoints(newCurve.points);
     } catch {
-      alert('Failed to create curve. Check your connection.');
+      toast('Failed to create curve. Check your connection.', 'error');
     }
   };
 
   return (
     <div className="space-y-6 animate-fade-in">
+      <ViewerBanner />
       <PresetSelector />
 
       <div className="border-t pt-6" style={{ borderColor: 'var(--border)' }}>
         <div className="flex items-center justify-between gap-2 mb-4 flex-wrap">
           <h3 className="section-title">Custom Curves</h3>
-          <button onClick={handleNewCurve} className="btn-primary min-h-11 flex items-center gap-2 text-sm">
+          <button onClick={handleNewCurve} disabled={!canWrite} className="btn-primary min-h-11 flex items-center gap-2 text-sm disabled:opacity-50">
             <Plus size={14} />
             New Curve
           </button>
@@ -302,7 +311,8 @@ export function FanCurvesPage() {
                       {allTempSensors.map((sensor) => (
                         <button
                           key={sensor.id}
-                          onClick={() => handleToggleSensor(sensor.id)}
+                          onClick={() => canWrite && handleToggleSensor(sensor.id)}
+                          disabled={!canWrite}
                           className={`text-xs min-h-11 px-2 py-1 rounded transition-all ${
                             ids.includes(sensor.id)
                               ? 'ring-1'
@@ -334,7 +344,8 @@ export function FanCurvesPage() {
                 </div>
                 <button
                   onClick={handleSaveCurve}
-                  className="btn-primary min-h-11 flex items-center gap-2 text-sm"
+                  disabled={!canWrite}
+                  className="btn-primary min-h-11 flex items-center gap-2 text-sm disabled:opacity-50"
                 >
                   <Save size={14} />
                   Save Curve
@@ -347,7 +358,7 @@ export function FanCurvesPage() {
             <p className="text-sm mb-3" style={{ color: 'var(--text-secondary)' }}>
               No custom curves yet. Create one or activate a preset above.
             </p>
-            <button onClick={handleNewCurve} className="btn-primary min-h-11 text-sm">
+            <button onClick={handleNewCurve} disabled={!canWrite} className="btn-primary min-h-11 text-sm disabled:opacity-50">
               Create Your First Curve
             </button>
           </div>

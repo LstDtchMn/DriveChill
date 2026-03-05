@@ -4,6 +4,8 @@ import { useEffect, useState, useRef } from 'react';
 import { Volume, VolumeX, Zap, Gauge, Wind, Download, Upload, Gamepad2, Palette, Moon } from 'lucide-react';
 import { api } from '@/lib/api';
 import type { Profile } from '@/lib/types';
+import { useToast } from '@/components/ui/ToastProvider';
+import { useCanWrite } from '@/hooks/useCanWrite';
 
 interface PresetSelectorProps {
   onProfileChange?: () => void;
@@ -32,6 +34,8 @@ const PRESET_DESCRIPTIONS: Record<string, string> = {
 };
 
 export function PresetSelector({ onProfileChange }: PresetSelectorProps) {
+  const toast = useToast();
+  const canWrite = useCanWrite();
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -57,7 +61,7 @@ export function PresetSelector({ onProfileChange }: PresetSelectorProps) {
       await fetchProfiles();
       onProfileChange?.();
     } catch {
-      alert('Failed to activate profile.');
+      toast('Failed to activate profile.', 'error');
     }
   };
 
@@ -74,7 +78,7 @@ export function PresetSelector({ onProfileChange }: PresetSelectorProps) {
       a.click();
       URL.revokeObjectURL(url);
     } catch {
-      alert('Failed to export profile.');
+      toast('Failed to export profile.', 'error');
     }
   };
 
@@ -90,7 +94,7 @@ export function PresetSelector({ onProfileChange }: PresetSelectorProps) {
       await fetchProfiles();
       onProfileChange?.();
     } catch {
-      alert('Failed to import profile. Check that the file is valid JSON.');
+      toast('Failed to import profile. Check that the file is valid JSON.', 'error');
     }
     // Reset file input so re-selecting the same file works
     if (fileInputRef.current) fileInputRef.current.value = '';
@@ -118,7 +122,8 @@ export function PresetSelector({ onProfileChange }: PresetSelectorProps) {
           />
           <button
             onClick={() => fileInputRef.current?.click()}
-            className="btn-secondary min-h-11 flex items-center gap-1.5 text-xs"
+            disabled={!canWrite}
+            className="btn-secondary min-h-11 flex items-center gap-1.5 text-xs disabled:opacity-50"
           >
             <Upload size={13} />
             Import
@@ -142,8 +147,9 @@ export function PresetSelector({ onProfileChange }: PresetSelectorProps) {
               } : {}}
             >
               <button
-                onClick={() => handleActivate(profile.id)}
-                className="w-full text-left"
+                onClick={() => canWrite && handleActivate(profile.id)}
+                disabled={!canWrite}
+                className="w-full text-left disabled:cursor-not-allowed"
               >
                 <div className="flex items-center gap-2 mb-2">
                   <div

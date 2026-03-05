@@ -7,6 +7,7 @@ import { RefreshCw, HardDrive, Thermometer, ChevronLeft, Activity, AlertTriangle
 import { useAppStore } from '@/stores/appStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { formatTemp } from '@/lib/tempUnit';
+import { useCanWrite } from '@/hooks/useCanWrite';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -230,6 +231,7 @@ function DriveDetailPanel({
   onBack: () => void;
   onRefresh: () => void;
 }) {
+  const canWrite = useCanWrite();
   const tempUnit = useSettingsStore((s) => s.tempUnit);
   const setPage = useAppStore((s) => s.setPage);
   const setPreselectedCurveSensorId = useAppStore((s) => s.setPreselectedCurveSensorId);
@@ -390,8 +392,8 @@ function DriveDetailPanel({
               {!runningTest && drive.supports_self_test && (
                 <button
                   onClick={startShortTest}
-                  disabled={testRunning}
-                  className="btn-primary text-xs px-2 py-1"
+                  disabled={testRunning || !canWrite}
+                  className="btn-primary text-xs px-2 py-1 disabled:opacity-50"
                 >
                   {testRunning ? 'Starting…' : 'Short Test'}
                 </button>

@@ -5,6 +5,7 @@ import { useAppStore } from '@/stores/appStore';
 import { api } from '@/lib/api';
 import type { FanTestProgress, FanTestResult, FanTestStep, FanSettings } from '@/lib/types';
 import { Play, Square, RotateCcw, Wind } from 'lucide-react';
+import { useCanWrite } from '@/hooks/useCanWrite';
 
 interface Props {
   fanId: string;
@@ -80,6 +81,7 @@ function StepTable({ steps }: { steps: FanTestStep[] }) {
 // ─── Main panel ───────────────────────────────────────────────────────────────
 
 export function FanTestPanel({ fanId, fanName }: Props) {
+  const canWrite = useCanWrite();
   const fanTestProgress = useAppStore((s) => s.fanTestProgress);
   const [result, setResult] = useState<FanTestResult | null>(null);
   const [busy, setBusy] = useState(false);
@@ -165,8 +167,8 @@ export function FanTestPanel({ fanId, fanName }: Props) {
         )}
         <button
           onClick={handleStart}
-          disabled={busy}
-          className="btn-primary flex items-center gap-2 text-xs"
+          disabled={busy || !canWrite}
+          className="btn-primary flex items-center gap-2 text-xs disabled:opacity-50"
         >
           <Play size={12} />
           Run Benchmark
@@ -313,8 +315,9 @@ export function FanTestPanel({ fanId, fanName }: Props) {
                   step={1}
                   value={fanSettings.min_speed_pct}
                   onChange={(e) =>
-                    setFanSettings({ ...fanSettings, min_speed_pct: Number(e.target.value) })
+                    canWrite && setFanSettings({ ...fanSettings, min_speed_pct: Number(e.target.value) })
                   }
+                  disabled={!canWrite}
                   className="flex-1"
                 />
                 <span className="w-8 text-right">{fanSettings.min_speed_pct}%</span>
@@ -323,14 +326,15 @@ export function FanTestPanel({ fanId, fanName }: Props) {
                 <input
                   type="checkbox"
                   checked={fanSettings.zero_rpm_capable}
+                  disabled={!canWrite}
                   onChange={(e) =>
-                    setFanSettings({ ...fanSettings, zero_rpm_capable: e.target.checked })
+                    canWrite && setFanSettings({ ...fanSettings, zero_rpm_capable: e.target.checked })
                   }
                 />
                 Zero-RPM capable (allow 0% speed)
               </label>
               <button
-                disabled={settingsSaving}
+                disabled={settingsSaving || !canWrite}
                 onClick={async () => {
                   setSettingsSaving(true);
                   try {

@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '@/lib/api';
 import type { MachineInfo, MachineRemoteState, RemoteProfile, RemoteFan, SensorReading } from '@/lib/types';
+import { useCanWrite } from '@/hooks/useCanWrite';
 
 interface Props {
   machine: MachineInfo;
@@ -21,6 +22,7 @@ const statusBadgeClass: Record<string, string> = {
 const warmSensorTypes = new Set(['cpu_temp', 'gpu_temp']);
 
 export function MachineDrillIn({ machine, onClose }: Props) {
+  const canWrite = useCanWrite();
   const [state, setState] = useState<MachineRemoteState | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -202,9 +204,9 @@ export function MachineDrillIn({ machine, onClose }: Props) {
                     )}
                     <button
                       className={profile.is_active ? 'btn-secondary' : 'btn-primary'}
-                      disabled={profile.is_active || busy}
+                      disabled={profile.is_active || busy || !canWrite}
                       onClick={() => handleActivate(profile)}
-                      style={{ fontSize: '0.8rem', flexShrink: 0, opacity: profile.is_active ? 0.5 : 1 }}
+                      style={{ fontSize: '0.8rem', flexShrink: 0, opacity: (profile.is_active || !canWrite) ? 0.5 : 1 }}
                     >
                       {profile.is_active ? 'Active' : 'Activate'}
                     </button>
@@ -242,9 +244,9 @@ export function MachineDrillIn({ machine, onClose }: Props) {
               <div className="flex items-center gap-3">
                 <button
                   className="btn-secondary"
-                  disabled={busy}
+                  disabled={busy || !canWrite}
                   onClick={handleRelease}
-                  style={{ fontSize: '0.85rem' }}
+                  style={{ fontSize: '0.85rem', opacity: canWrite ? 1 : 0.5 }}
                 >
                   Release Fan Control
                 </button>

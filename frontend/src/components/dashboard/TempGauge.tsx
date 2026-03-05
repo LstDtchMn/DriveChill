@@ -31,17 +31,18 @@ export function TempGauge({ label, value, maxValue = 100, unit: _unit, icon, siz
   const circumference = 2 * Math.PI * radius;
 
   const { offset, color } = useMemo(() => {
-    // Color thresholds always computed against raw Celsius values
-    const clamped = Math.max(0, Math.min(value, maxValue));
-    const ratio = clamped / maxValue;
+    // Use display-unit values so the arc and color thresholds respect the
+    // user's °C/°F preference (e.g., 90°F stays in the "cool" zone, not danger).
+    const clamped = Math.max(0, Math.min(displayValue, displayMax));
+    const ratio = displayMax > 0 ? clamped / displayMax : 0;
     // Use 270 degrees of the circle (3/4)
     const arcLength = circumference * 0.75;
     const filled = arcLength * ratio;
     return {
       offset: arcLength - filled,
-      color: getColor(value, maxValue),
+      color: getColor(displayValue, displayMax),
     };
-  }, [value, maxValue, circumference]);
+  }, [displayValue, displayMax, circumference]);
 
   const arcLength = circumference * 0.75;
 

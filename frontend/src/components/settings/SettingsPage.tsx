@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { api, getApiBaseUrl } from '@/lib/api';
+import { api, authApi, getApiBaseUrl } from '@/lib/api';
+import { useAuthStore } from '@/stores/authStore';
 import { useAppStore } from '@/stores/appStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useSensors } from '@/hooks/useSensors';
@@ -9,6 +10,9 @@ import type { TempUnit } from '@/lib/tempUnit';
 import { requestNotificationPermission } from '@/hooks/useNotifications';
 import type { ApiKeyInfo, DriveSettings, MachineInfo, WebhookConfig, WebhookDelivery, PushSubscription, EmailNotificationSettings } from '@/lib/types';
 import { Save, RefreshCw, Download, Info, Pencil, X, Check, Bell, BellOff, HardDrive, ArrowUpCircle } from 'lucide-react';
+import { useConfirm } from '@/components/ui/ConfirmDialog';
+import { useToast } from '@/components/ui/ToastProvider';
+import { ViewerBanner } from '@/components/ui/ViewerBanner';
 
 interface AppSettings {
   sensor_poll_interval: number;
@@ -29,7 +33,11 @@ function isValidHttpUrl(value: string): boolean {
 }
 
 export function SettingsPage() {
+  const confirm = useConfirm();
+  const toast = useToast();
   const webhookPageSize = 10;
+  const { role: currentRole } = useAuthStore();
+  const isAdmin = currentRole === 'admin';
   const { backendName, updateCheck, setUpdateCheck } = useAppStore();
   const { setTempUnit, sensorLabels, setSensorLabels, setSensorLabel, removeSensorLabel, notificationsEnabled, setNotificationsEnabled } = useSettingsStore();
   const { all: allReadings } = useSensors();
@@ -48,6 +56,10 @@ export function SettingsPage() {
   const [apiKeys, setApiKeys] = useState<ApiKeyInfo[]>([]);
   const [newApiKeyName, setNewApiKeyName] = useState('');
   const [issuedApiKey, setIssuedApiKey] = useState<string | null>(null);
+  const [users, setUsers] = useState<Array<{ id: number; username: string; role: string; created_at: string }>>([]);
+  const [newUserName, setNewUserName] = useState('');
+  const [newUserPassword, setNewUserPassword] = useState('');
+  const [newUserRole, setNewUserRole] = useState<'admin' | 'viewer'>('viewer');
   const [webhook, setWebhook] = useState<WebhookConfig | null>(null);
   const [webhookSaving, setWebhookSaving] = useState(false);
   const [webhookSecretInput, setWebhookSecretInput] = useState('');
@@ -154,6 +166,15 @@ export function SettingsPage() {
     }
   };
 
+  const fetchUsers = async () => {
+    try {
+      const data = await authApi.listUsers();
+      setUsers(data.users);
+    } catch {
+      setUsers([]);
+    }
+  };
+
   const fetchWebhook = async () => {
     try {
       const data = await api.getWebhookConfig();
@@ -194,6 +215,7 @@ export function SettingsPage() {
   useEffect(() => {
     fetchMachines();
     fetchApiKeys();
+    if (isAdmin) fetchUsers();
     fetchWebhook();
     fetchWebhookDeliveries(0);
     fetchPushSubs();
@@ -214,7 +236,7 @@ export function SettingsPage() {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch {
-      alert('Failed to save settings.');
+      toast('Failed to save settings.', 'error');
     } finally {
       setSaving(false);
     }
@@ -240,7 +262,7 @@ export function SettingsPage() {
       a.click();
       URL.revokeObjectURL(url);
     } catch {
-      alert('Failed to export sensor data. Check your connection.');
+      toast('Failed to export sensor data. Check your connection.', 'error');
     }
   };
 
@@ -252,7 +274,7 @@ export function SettingsPage() {
       setSensorLabel(sensorId, trimmed);
       setEditingSensor(null);
     } catch {
-      alert('Failed to save sensor label.');
+      toast('Failed to save sensor label.', 'error');
     }
   };
 
@@ -262,7 +284,7 @@ export function SettingsPage() {
       removeSensorLabel(sensorId);
       setEditingSensor(null);
     } catch {
-      alert('Failed to reset sensor label.');
+      toast('Failed to reset sensor label.', 'error');
     }
   };
 
@@ -271,7 +293,7 @@ export function SettingsPage() {
     const baseUrl = machineUrl.trim();
     if (!name || !baseUrl) return;
     if (!isValidHttpUrl(baseUrl)) {
-      alert('Machine URL must be a valid http(s) URL.');
+      toast('Machine URL must be a valid http(s) URL.', 'error');
       return;
     }
     setMachineAddBusy(true);
@@ -286,20 +308,20 @@ export function SettingsPage() {
       setMachineApiKey('');
       await fetchMachines();
     } catch {
-      alert('Failed to add machine. Check URL and connectivity.');
+      toast('Failed to add machine. Check URL and connectivity.', 'error');
     } finally {
       setMachineAddBusy(false);
     }
   };
 
   const handleDeleteMachine = async (machineId: string) => {
-    if (!window.confirm('Remove this machine from registry?')) return;
+    if (!(await confirm('Remove this machine from registry?'))) return;
     setBusyMachineIds((prev) => new Set(prev).add(machineId));
     try {
       await api.deleteMachine(machineId);
       await fetchMachines();
     } catch {
-      alert('Failed to remove machine.');
+      toast('Failed to remove machine.', 'error');
     } finally {
       setBusyMachineIds((prev) => {
         const next = new Set(prev);
@@ -315,7 +337,7 @@ export function SettingsPage() {
       await api.verifyMachine(machineId);
       await fetchMachines();
     } catch {
-      alert('Machine verification failed.');
+      toast('Machine verification failed.', 'error');
     } finally {
       setBusyMachineIds((prev) => {
         const next = new Set(prev);
@@ -334,24 +356,59 @@ export function SettingsPage() {
       setNewApiKeyName('');
       await fetchApiKeys();
     } catch {
-      alert('Failed to create API key.');
+      toast('Failed to create API key.', 'error');
     }
   };
 
   const handleRevokeApiKey = async (keyId: string) => {
-    if (!window.confirm('Revoke this API key? This cannot be undone.')) return;
+    if (!(await confirm({ message: 'Revoke this API key? This cannot be undone.', danger: true }))) return;
     try {
       await api.revokeApiKey(keyId);
       await fetchApiKeys();
     } catch {
-      alert('Failed to revoke API key.');
+      toast('Failed to revoke API key.', 'error');
+    }
+  };
+
+  const handleCreateUser = async () => {
+    const name = newUserName.trim();
+    if (!name || !newUserPassword) return;
+    try {
+      await authApi.createUser(name, newUserPassword, newUserRole);
+      setNewUserName('');
+      setNewUserPassword('');
+      await fetchUsers();
+      toast(`User "${name}" created.`, 'success');
+    } catch {
+      toast('Failed to create user.', 'error');
+    }
+  };
+
+  const handleSetUserRole = async (userId: number, role: string) => {
+    try {
+      await authApi.setUserRole(userId, role);
+      await fetchUsers();
+    } catch {
+      toast('Failed to update role.', 'error');
+    }
+  };
+
+  const handleDeleteUser = async (userId: number, username: string) => {
+    if (!(await confirm({ message: `Delete user "${username}"? This cannot be undone.`, danger: true }))) return;
+    try {
+      await authApi.deleteUser(userId);
+      await fetchUsers();
+      toast(`User "${username}" deleted.`, 'success');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to delete user.';
+      toast(msg, 'error');
     }
   };
 
   const handleSaveWebhook = async () => {
     if (!webhook) return;
     if (webhook.target_url && !isValidHttpUrl(webhook.target_url)) {
-      alert('Webhook target URL must be a valid http(s) URL.');
+      toast('Webhook target URL must be a valid http(s) URL.', 'error');
       return;
     }
     setWebhookSaving(true);
@@ -364,7 +421,7 @@ export function SettingsPage() {
       setWebhook(data.config);
       setWebhookSecretInput('');
     } catch {
-      alert('Failed to save webhook settings.');
+      toast('Failed to save webhook settings.', 'error');
     } finally {
       setWebhookSaving(false);
     }
@@ -375,7 +432,7 @@ export function SettingsPage() {
     try {
       await api.notifications.deletePushSubscription(id);
       await fetchPushSubs();
-    } catch { alert('Failed to remove subscription.'); }
+    } catch { toast('Failed to remove subscription.', 'error'); }
     finally {
       setPushSubsBusy((prev) => { const n = new Set(prev); n.delete(id); return n; });
     }
@@ -384,9 +441,9 @@ export function SettingsPage() {
   const handleTestPushSub = async (id: string) => {
     try {
       const r = await api.notifications.testPushSubscription(id);
-      if (!r.success) alert('Test push failed — check server logs.');
-      else alert('Test push sent!');
-    } catch { alert('Test push failed.'); }
+      if (!r.success) toast('Test push failed — check server logs.', 'error');
+      else toast('Test push sent!', 'success');
+    } catch { toast('Test push failed.', 'error'); }
   };
 
   const handleSaveEmailSettings = async () => {
@@ -411,7 +468,7 @@ export function SettingsPage() {
       const data = await api.notifications.updateEmailSettings(payload);
       setEmailSettings(data.settings);
       setEmailPasswordInput('');
-    } catch { alert('Failed to save email settings.'); }
+    } catch { toast('Failed to save email settings.', 'error'); }
     finally { setEmailSaving(false); }
   };
 
@@ -464,6 +521,7 @@ export function SettingsPage() {
 
   return (
     <div className="space-y-6 animate-fade-in max-w-none md:max-w-2xl">
+      <ViewerBanner />
       {/* General settings */}
       <div className="card p-6 animate-card-enter">
         <h3 className="text-base font-semibold mb-4" style={{ color: 'var(--text)' }}>General</h3>
@@ -563,8 +621,8 @@ export function SettingsPage() {
         <div className="mt-6 flex items-center gap-3">
           <button
             onClick={handleSave}
-            disabled={saving}
-            className="btn-primary flex items-center gap-2 text-sm"
+            disabled={saving || !isAdmin}
+            className="btn-primary flex items-center gap-2 text-sm disabled:opacity-50"
           >
             <Save size={14} />
             {saving ? 'Saving...' : saved ? 'Saved!' : 'Save Settings'}
@@ -775,8 +833,8 @@ export function SettingsPage() {
             <div className="flex items-center gap-3 pt-1">
               <button
                 onClick={handleSaveEmailSettings}
-                disabled={emailSaving}
-                className="btn-primary text-sm px-4"
+                disabled={emailSaving || !isAdmin}
+                className="btn-primary text-sm px-4 disabled:opacity-50"
               >
                 {emailSaving ? 'Saving...' : 'Save Email Settings'}
               </button>
@@ -909,8 +967,8 @@ export function SettingsPage() {
           <div className="flex justify-end">
             <button
               onClick={handleAddMachine}
-              disabled={machineAddBusy || !machineName.trim() || !machineUrl.trim()}
-              className="btn-primary text-sm px-4"
+              disabled={machineAddBusy || !machineName.trim() || !machineUrl.trim() || !isAdmin}
+              className="btn-primary text-sm px-4 disabled:opacity-50"
             >
               {machineAddBusy ? 'Saving...' : 'Add Machine'}
             </button>
@@ -943,15 +1001,15 @@ export function SettingsPage() {
                 </div>
                 <button
                   onClick={() => handleVerifyMachine(machine.id)}
-                  disabled={busyMachineIds.has(machine.id)}
-                  className="btn-secondary text-xs px-3"
+                  disabled={busyMachineIds.has(machine.id) || !isAdmin}
+                  className="btn-secondary text-xs px-3 disabled:opacity-50"
                 >
                   Verify
                 </button>
                 <button
                   onClick={() => handleDeleteMachine(machine.id)}
-                  disabled={busyMachineIds.has(machine.id)}
-                  className="btn-secondary text-xs px-3"
+                  disabled={busyMachineIds.has(machine.id) || !isAdmin}
+                  className="btn-secondary text-xs px-3 disabled:opacity-50"
                 >
                   Remove
                 </button>
@@ -961,8 +1019,8 @@ export function SettingsPage() {
         )}
       </div>
 
-      {/* API keys */}
-      <div className="card p-6 animate-card-enter">
+      {/* API keys — admin only */}
+      {isAdmin && <div className="card p-6 animate-card-enter">
         <h3 className="text-base font-semibold mb-2" style={{ color: 'var(--text)' }}>API Keys</h3>
         <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
           Generate keys for hub-to-agent machine authentication. New keys default to
@@ -1005,10 +1063,78 @@ export function SettingsPage() {
             </div>
           ))}
         </div>
-      </div>
+      </div>}
 
-      {/* Webhooks */}
-      <div className="card p-6 animate-card-enter">
+      {/* User Management (admin only) */}
+      {isAdmin && (
+        <div className="card p-6 animate-card-enter">
+          <h3 className="text-base font-semibold mb-1" style={{ color: 'var(--text)' }}>User Management</h3>
+          <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
+            Create and manage users. Viewers have read-only access.
+          </p>
+          <div className="space-y-2 mb-4">
+            {users.length === 0 ? (
+              <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>No users found.</p>
+            ) : users.map((u) => (
+              <div key={u.id} className="flex items-center justify-between rounded-lg px-3 py-2" style={{ background: 'var(--bg)', border: '1px solid var(--border)' }}>
+                <div className="min-w-0 flex items-center gap-2">
+                  <p className="text-sm truncate" style={{ color: 'var(--text)' }}>{u.username}</p>
+                  <span className={`badge ${u.role === 'admin' ? 'badge-success' : ''}`} style={u.role !== 'admin' ? { background: 'var(--surface-200)', color: 'var(--text-secondary)' } : undefined}>
+                    {u.role}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <select
+                    value={u.role}
+                    onChange={(e) => handleSetUserRole(u.id, e.target.value)}
+                    className="text-xs rounded border px-1 py-1 outline-none"
+                    style={{ background: 'var(--bg)', borderColor: 'var(--border)', color: 'var(--text)' }}
+                  >
+                    <option value="admin">admin</option>
+                    <option value="viewer">viewer</option>
+                  </select>
+                  <button onClick={() => handleDeleteUser(u.id, u.username)} className="btn-secondary text-xs px-2 py-1" style={{ color: 'var(--danger)' }}>
+                    Delete
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="flex flex-col sm:flex-row gap-2">
+            <input
+              type="text"
+              value={newUserName}
+              onChange={(e) => setNewUserName(e.target.value)}
+              placeholder="Username"
+              className="flex-1 px-3 py-2 rounded-lg text-sm border outline-none"
+              style={{ background: 'var(--bg)', borderColor: 'var(--border)', color: 'var(--text)' }}
+            />
+            <input
+              type="password"
+              value={newUserPassword}
+              onChange={(e) => setNewUserPassword(e.target.value)}
+              placeholder="Password (min 8 chars)"
+              className="flex-1 px-3 py-2 rounded-lg text-sm border outline-none"
+              style={{ background: 'var(--bg)', borderColor: 'var(--border)', color: 'var(--text)' }}
+            />
+            <select
+              value={newUserRole}
+              onChange={(e) => setNewUserRole(e.target.value as 'admin' | 'viewer')}
+              className="px-3 py-2 rounded-lg text-sm border outline-none"
+              style={{ background: 'var(--bg)', borderColor: 'var(--border)', color: 'var(--text)' }}
+            >
+              <option value="admin">admin</option>
+              <option value="viewer">viewer</option>
+            </select>
+            <button onClick={handleCreateUser} disabled={!newUserName.trim() || newUserPassword.length < 8} className="btn-primary text-sm px-4 disabled:opacity-50">
+              Create User
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Webhooks — admin only */}
+      {isAdmin && <div className="card p-6 animate-card-enter">
         <h3 className="text-base font-semibold mb-2" style={{ color: 'var(--text)' }}>Webhooks</h3>
         <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
           Send alert events to external systems (Slack/Discord/Home Assistant relay).
@@ -1109,7 +1235,7 @@ export function SettingsPage() {
             </div>
           </div>
         )}
-      </div>
+      </div>}
 
       {/* Data export */}
       <div className="card p-6 animate-card-enter">
@@ -1203,8 +1329,8 @@ export function SettingsPage() {
             </div>
             <button
               onClick={handleSaveDriveSettings}
-              disabled={driveSaving}
-              className="btn-primary flex items-center gap-2"
+              disabled={driveSaving || !isAdmin}
+              className="btn-primary flex items-center gap-2 disabled:opacity-50"
             >
               <Save size={14} />
               {driveSaving ? 'Saving…' : 'Save Drive Settings'}
@@ -1287,10 +1413,10 @@ export function SettingsPage() {
                 </div>
               ) : (
                 <button
-                  className="btn-primary flex items-center gap-2"
-                  disabled={updateApplying}
+                  className="btn-primary flex items-center gap-2 disabled:opacity-50"
+                  disabled={updateApplying || !isAdmin}
                   onClick={async () => {
-                    if (!confirm(`Update DriveChill to v${updateCheck.latest}?\n\nThe service will stop and restart automatically. You will need to reconnect in ~30 seconds.`)) return;
+                    if (!(await confirm(`Update DriveChill to v${updateCheck.latest}?\n\nThe service will stop and restart automatically. You will need to reconnect in ~30 seconds.`))) return;
                     setUpdateApplying(true);
                     setUpdateMessage(null);
                     try {
