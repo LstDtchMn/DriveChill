@@ -1,5 +1,12 @@
-const DEFAULT_API_BASE = 'http://localhost:8085';
-const DEFAULT_WS_URL = 'ws://localhost:8085/api/ws';
+// In production the static export is served by the backend itself, so
+// window.location.origin is the correct API base.  The hardcoded localhost
+// fallback only applies during SSR/build (where window is unavailable).
+const DEFAULT_API_BASE =
+  typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8085';
+const DEFAULT_WS_URL =
+  typeof window !== 'undefined'
+    ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/api/ws`
+    : 'ws://localhost:8085/api/ws';
 
 function normalizeLoopbackHost(value: string): string {
   // Guard against malformed loopback forms like 127.0.01 or 127.0.1.
@@ -160,7 +167,7 @@ export const api = {
   resumeFanControl: () => fetchAPI<{ success: boolean; active_profile: any }>('/api/fans/resume', { method: 'POST' }),
   getCurves: () => fetchAPI<{ curves: any[] }>('/api/fans/curves'),
   updateCurve: (curve: any, allowDangerous = false) =>
-    fetchAPI('/api/fans/curves', {
+    fetchAPI<{ success: boolean; id?: string; curve?: any }>('/api/fans/curves', {
       method: 'PUT',
       body: JSON.stringify({ curve, allow_dangerous: allowDangerous }),
     }),
@@ -346,27 +353,188 @@ export const api = {
       `/api/webhooks/deliveries?limit=${Math.max(1, Math.min(500, limit))}&offset=${Math.max(0, offset)}`
     ),
 
+  // Drives
+  drives: {
+    list: () =>
+      fetchAPI<{ drives: import('./types').DriveSummary[]; smartctl_available: boolean; total: number }>('/api/drives'),
+    rescan: () =>
+      fetchAPI<{ drives_found: number }>('/api/drives/rescan', { method: 'POST' }),
+    getSettings: () =>
+      fetchAPI<import('./types').DriveSettings>('/api/drives/settings'),
+    updateSettings: (s: Partial<import('./types').DriveSettings>) =>
+      fetchAPI<import('./types').DriveSettings>('/api/drives/settings', { method: 'PUT', body: JSON.stringify(s) }),
+    get: (id: string) =>
+      fetchAPI<import('./types').DriveDetail>(`/api/drives/${encodeURIComponent(id)}`),
+    getAttributes: (id: string) =>
+      fetchAPI<{ drive_id: string; attributes: import('./types').DriveRawAttribute[] }>(`/api/drives/${encodeURIComponent(id)}/attributes`),
+    getHistory: (id: string, hours = 168) =>
+      fetchAPI<{ drive_id: string; history: any[]; retention_limited: boolean }>(`/api/drives/${encodeURIComponent(id)}/history?hours=${hours}`),
+    refresh: (id: string) =>
+      fetchAPI<import('./types').DriveSummary>(`/api/drives/${encodeURIComponent(id)}/refresh`, { method: 'POST' }),
+    startSelfTest: (id: string, type: 'short' | 'extended' | 'conveyance') =>
+      fetchAPI<import('./types').DriveSelfTestRun>(`/api/drives/${encodeURIComponent(id)}/self-tests`, { method: 'POST', body: JSON.stringify({ type }) }),
+    listSelfTests: (id: string) =>
+      fetchAPI<{ drive_id: string; runs: import('./types').DriveSelfTestRun[] }>(`/api/drives/${encodeURIComponent(id)}/self-tests`),
+    abortSelfTest: (id: string, runId: string) =>
+      fetchAPI<{ success: boolean }>(`/api/drives/${encodeURIComponent(id)}/self-tests/${encodeURIComponent(runId)}/abort`, { method: 'POST' }),
+    getDriveSettings: (id: string) =>
+      fetchAPI<import('./types').DriveSettingsOverride>(`/api/drives/${encodeURIComponent(id)}/settings`),
+    updateDriveSettings: (id: string, s: Partial<import('./types').DriveSettingsOverride>) =>
+      fetchAPI<import('./types').DriveSettingsOverride>(`/api/drives/${encodeURIComponent(id)}/settings`, { method: 'PUT', body: JSON.stringify(s) }),
+  },
+
+  // Temperature targets
+  temperatureTargets: {
+    list: () =>
+      fetchAPI<{ targets: import('./types').TemperatureTarget[] }>('/api/temperature-targets'),
+    create: (target: {
+      name: string; drive_id?: string | null; sensor_id: string;
+      fan_ids: string[]; target_temp_c: number;
+      tolerance_c?: number; min_fan_speed?: number;
+    }) =>
+      fetchAPI<import('./types').TemperatureTarget>('/api/temperature-targets', {
+        method: 'POST', body: JSON.stringify(target),
+      }),
+    get: (id: string) =>
+      fetchAPI<import('./types').TemperatureTarget>(`/api/temperature-targets/${encodeURIComponent(id)}`),
+    update: (id: string, target: {
+      name: string; drive_id?: string | null; sensor_id: string;
+      fan_ids: string[]; target_temp_c: number;
+      tolerance_c: number; min_fan_speed: number;
+    }) =>
+      fetchAPI<import('./types').TemperatureTarget>(`/api/temperature-targets/${encodeURIComponent(id)}`, {
+        method: 'PUT', body: JSON.stringify(target),
+      }),
+    delete: (id: string) =>
+      fetchAPI<{ success: boolean }>(`/api/temperature-targets/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    toggle: (id: string, enabled: boolean) =>
+      fetchAPI<import('./types').TemperatureTarget>(`/api/temperature-targets/${encodeURIComponent(id)}/enabled`, {
+        method: 'PATCH', body: JSON.stringify({ enabled }),
+      }),
+  },
+
   // Analytics
   analytics: {
-    getHistory: (hours = 1.0, sensorId?: string, bucketSeconds = 60) =>
-      fetchAPI<{ buckets: import('./types').AnalyticsBucket[] }>(
-        `/api/analytics/history?hours=${hours}&bucket_seconds=${bucketSeconds}${sensorId ? `&sensor_id=${encodeURIComponent(sensorId)}` : ''}`
-      ),
-    getStats: (hours = 24.0, sensorId?: string) =>
-      fetchAPI<{ stats: import('./types').AnalyticsStat[] }>(
-        `/api/analytics/stats?hours=${hours}${sensorId ? `&sensor_id=${encodeURIComponent(sensorId)}` : ''}`
-      ),
-    getAnomalies: (hours = 24.0, zScoreThreshold = 3.0) =>
-      fetchAPI<{ anomalies: import('./types').AnalyticsAnomaly[] }>(
-        `/api/analytics/anomalies?hours=${hours}&z_score_threshold=${zScoreThreshold}`
-      ),
-    getReport: (hours = 24.0) =>
-      fetchAPI<{
+    getHistory: (
+      hours = 24.0,
+      sensorId?: string,
+      bucketSeconds?: number,
+      opts?: { start?: string; end?: string; sensorIds?: string[] },
+    ) => {
+      const p = new URLSearchParams({ hours: String(hours) });
+      if (bucketSeconds) p.set('bucket_seconds', String(bucketSeconds));
+      if (sensorId) p.set('sensor_id', sensorId);
+      if (opts?.start) p.set('start', opts.start);
+      if (opts?.end)   p.set('end',   opts.end);
+      if (opts?.sensorIds?.length) p.set('sensor_ids', opts.sensorIds.join(','));
+      return fetchAPI<{
+        buckets: import('./types').AnalyticsBucket[];
+        series: Record<string, { timestamp: string; avg: number; min: number; max: number; count: number }[]>;
+        bucket_seconds: number;
+        requested_range: { start: string; end: string };
+        returned_range:  { start: string; end: string };
+        retention_limited: boolean;
+      }>(`/api/analytics/history?${p}`);
+    },
+    getStats: (
+      hours = 24.0,
+      sensorId?: string,
+      opts?: { start?: string; end?: string; sensorIds?: string[] },
+    ) => {
+      const p = new URLSearchParams({ hours: String(hours) });
+      if (sensorId) p.set('sensor_id', sensorId);
+      if (opts?.start) p.set('start', opts.start);
+      if (opts?.end)   p.set('end',   opts.end);
+      if (opts?.sensorIds?.length) p.set('sensor_ids', opts.sensorIds.join(','));
+      return fetchAPI<{
+        stats: import('./types').AnalyticsStat[];
+        requested_range: { start: string; end: string };
+        returned_range:  { start: string; end: string };
+      }>(`/api/analytics/stats?${p}`);
+    },
+    getAnomalies: (
+      hours = 24.0,
+      zScoreThreshold = 3.0,
+      opts?: { start?: string; end?: string; sensorIds?: string[] },
+    ) => {
+      const p = new URLSearchParams({ hours: String(hours), z_score_threshold: String(zScoreThreshold) });
+      if (opts?.start) p.set('start', opts.start);
+      if (opts?.end)   p.set('end',   opts.end);
+      if (opts?.sensorIds?.length) p.set('sensor_ids', opts.sensorIds.join(','));
+      return fetchAPI<{
+        anomalies: import('./types').AnalyticsAnomaly[];
+        z_score_threshold: number;
+        requested_range: { start: string; end: string };
+        returned_range: { start: string; end: string };
+      }>(`/api/analytics/anomalies?${p}`);
+    },
+    getCorrelation: (
+      sensorX: string,
+      sensorY: string,
+      hours = 24.0,
+      opts?: { start?: string; end?: string },
+    ) => {
+      const p = new URLSearchParams({
+        x_sensor_id: sensorX,
+        y_sensor_id: sensorY,
+        hours: String(hours),
+      });
+      if (opts?.start) p.set('start', opts.start);
+      if (opts?.end)   p.set('end',   opts.end);
+      return fetchAPI<{
+        x_sensor_id: string;
+        y_sensor_id: string;
+        correlation_coefficient: number;
+        sample_count: number;
+        samples: import('./types').AnalyticsCorrelationSample[];
+      }>(`/api/analytics/correlation?${p}`);
+    },
+    getReport: (
+      hours = 24.0,
+      opts?: { start?: string; end?: string; sensorIds?: string[] },
+    ) => {
+      const p = new URLSearchParams({ hours: String(hours) });
+      if (opts?.start) p.set('start', opts.start);
+      if (opts?.end)   p.set('end',   opts.end);
+      if (opts?.sensorIds?.length) p.set('sensor_ids', opts.sensorIds.join(','));
+      return fetchAPI<{
         generated_at: string;
         window_hours: number;
+        requested_range: { start: string; end: string };
+        returned_range:  { start: string; end: string };
         stats: import('./types').AnalyticsStat[];
         anomalies: import('./types').AnalyticsAnomaly[];
         top_anomalous_sensors: { sensor_id: string; sensor_name: string; count: number }[];
-      }>(`/api/analytics/report?hours=${hours}`),
+        regressions: import('./types').ThermalRegression[];
+      }>(`/api/analytics/report?${p}`);
+    },
+    getRegression: (
+      baselineDays = 30,
+      recentHours = 24,
+      thresholdDelta = 5.0,
+      opts?: { start?: string; end?: string; sensorIds?: string[] },
+    ) => {
+      const p = new URLSearchParams({
+        baseline_days: String(baselineDays),
+        recent_hours: String(recentHours),
+        threshold_delta: String(thresholdDelta),
+      });
+      if (opts?.start) p.set('start', opts.start);
+      if (opts?.end)   p.set('end',   opts.end);
+      if (opts?.sensorIds?.length) p.set('sensor_ids', opts.sensorIds.join(','));
+      return fetchAPI<{
+        regressions: import('./types').ThermalRegression[];
+        baseline_period_days: number;
+        recent_period_hours: number;
+        threshold_delta: number;
+      }>(`/api/analytics/regression?${p}`);
+    },
+  },
+
+  update: {
+    check: () =>
+      fetchAPI<import('./types').UpdateCheck>('/api/update/check'),
+    apply: () =>
+      fetchAPI<import('./types').UpdateApplyResult>('/api/update/apply', { method: 'POST' }),
   },
 };

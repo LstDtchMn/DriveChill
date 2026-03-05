@@ -33,7 +33,7 @@ public sealed class SensorsController : ControllerBase
         CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(sensorId))
-            return BadRequest(new { error = "sensor_id is required" });
+            return BadRequest(new { detail ="sensor_id is required" });
 
         var since = DateTimeOffset.UtcNow.AddHours(-hours);
         var rows  = await _db.GetHistoryAsync(sensorId, since, ct);
@@ -70,9 +70,9 @@ public sealed class SensorsController : ControllerBase
         CancellationToken ct = default)
     {
         if (sensorId.Length > 200)
-            return UnprocessableEntity(new { error = "sensor_id too long" });
+            return UnprocessableEntity(new { detail ="sensor_id too long" });
         if (string.IsNullOrWhiteSpace(req.Label) || req.Label.Length > 100)
-            return BadRequest(new { error = "label must be 1-100 characters" });
+            return BadRequest(new { detail ="label must be 1-100 characters" });
 
         await _db.SetLabelAsync(sensorId, req.Label.Trim(), ct);
         return Ok(new { success = true, sensor_id = sensorId, label = req.Label.Trim() });
@@ -85,7 +85,7 @@ public sealed class SensorsController : ControllerBase
         var deleted = await _db.DeleteLabelAsync(sensorId, ct);
         return deleted
             ? Ok(new { success = true, sensor_id = sensorId })
-            : NotFound(new { error = "No label found for this sensor" });
+            : NotFound(new { detail ="No label found for this sensor" });
     }
 }
 

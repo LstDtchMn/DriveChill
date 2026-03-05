@@ -14,12 +14,14 @@ class SettingsResponse(BaseModel):
     temp_unit: str
     hardware_backend: str
     backend_name: str
+    fan_ramp_rate_pct_per_sec: float
 
 
 class UpdateSettingsRequest(BaseModel):
     sensor_poll_interval: float | None = None
     history_retention_hours: int | None = None
     temp_unit: str | None = None
+    fan_ramp_rate_pct_per_sec: float | None = None
 
     @field_validator("sensor_poll_interval")
     @classmethod
@@ -52,10 +54,11 @@ async def get_settings(request: Request):
     repo = request.app.state.settings_repo
     return SettingsResponse(
         sensor_poll_interval=await repo.get_float("sensor_poll_interval", 1.0),
-        history_retention_hours=await repo.get_int("history_retention_hours", 24),
+        history_retention_hours=await repo.get_int("history_retention_hours", 720),
         temp_unit=(await repo.get("temp_unit")) or "C",
         hardware_backend=app_config.hardware_backend,
         backend_name=request.app.state.backend.get_backend_name(),
+        fan_ramp_rate_pct_per_sec=await repo.get_float("fan_ramp_rate_pct_per_sec", 0.0),
     ).model_dump()
 
 
@@ -71,6 +74,8 @@ async def update_settings(body: UpdateSettingsRequest, request: Request):
         updates["history_retention_hours"] = str(body.history_retention_hours)
     if body.temp_unit is not None:
         updates["temp_unit"] = body.temp_unit
+    if body.fan_ramp_rate_pct_per_sec is not None:
+        updates["fan_ramp_rate_pct_per_sec"] = str(body.fan_ramp_rate_pct_per_sec)
 
     if updates:
         await repo.set_many(updates)
@@ -81,8 +86,13 @@ async def update_settings(body: UpdateSettingsRequest, request: Request):
         sensor_svc = request.app.state.sensor_service
         sensor_svc.poll_interval = body.sensor_poll_interval
 
+    if body.fan_ramp_rate_pct_per_sec is not None:
+        fan_svc = request.app.state.fan_service
+        fan_svc.configure_ramp_rate(body.fan_ramp_rate_pct_per_sec)
+
     return {"success": True, "settings": {
         "sensor_poll_interval": await repo.get_float("sensor_poll_interval", 1.0),
-        "history_retention_hours": await repo.get_int("history_retention_hours", 24),
+        "history_retention_hours": await repo.get_int("history_retention_hours", 720),
         "temp_unit": (await repo.get("temp_unit")) or "C",
+        "fan_ramp_rate_pct_per_sec": await repo.get_float("fan_ramp_rate_pct_per_sec", 0.0),
     }}

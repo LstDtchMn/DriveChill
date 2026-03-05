@@ -39,10 +39,18 @@ from app.services.push_notification_service import PushNotificationService
 from app.services.email_notification_service import EmailNotificationService
 from app.api.routes import sensors, fans, profiles, alerts, settings as settings_route, machines, webhooks
 from app.api.routes import analytics as analytics_route
+from app.api.routes import drives as drives_route
 from app.api.routes.auth import router as auth_router
 from app.api.routes.quiet_hours import router as quiet_hours_router
 from app.api.routes.notifications import router as notifications_router
+from app.api.routes import temperature_targets as temperature_targets_route
+from app.api.routes import update as update_route
 from app.api.websocket import router as ws_router
+from app.db.repositories.drive_repo import DriveRepo
+from app.db.repositories.temperature_target_repo import TemperatureTargetRepo
+from app.services.drive_monitor_service import DriveMonitorService
+from app.services.drive_self_test_service import DriveSelfTestService
+from app.services.temperature_target_service import TemperatureTargetService
 
 logger = logging.getLogger(__name__)
 _PROM_LABEL_SAFE_RE = re.compile(r"[^a-zA-Z0-9_.-]")
@@ -98,6 +106,12 @@ async def lifespan(app: FastAPI):
     )
     app.state.sensor_service = sensor_service
 
+    # Temperature target service (proportional drive-temp → fan control)
+    temp_target_repo = TemperatureTargetRepo(db)
+    temp_target_service = TemperatureTargetService(temp_target_repo)
+    await temp_target_service.load()
+    app.state.temperature_target_service = temp_target_service
+
     panic_cpu = await settings_repo.get_float("panic_cpu_temp_c", 95.0)
     panic_gpu = await settings_repo.get_float("panic_gpu_temp_c", 90.0)
     panic_hyst = await settings_repo.get_float("panic_hysteresis_c", 5.0)
@@ -106,6 +120,7 @@ async def lifespan(app: FastAPI):
         panic_cpu_temp=panic_cpu,
         panic_gpu_temp=panic_gpu,
         panic_hysteresis=panic_hyst,
+        temp_target_service=temp_target_service,
     )
     await fan_service.load_fan_settings(fan_settings_repo)
     app.state.fan_service = fan_service
@@ -209,6 +224,23 @@ async def lifespan(app: FastAPI):
     await machine_monitor_service.start()
 
     # ------------------------------------------------------------------
+    # Drive monitoring
+    # ------------------------------------------------------------------
+    drive_monitor = DriveMonitorService(db, settings_repo)
+    drive_monitor.set_sensor_service(sensor_service)
+    app.state.drive_monitor_service = drive_monitor
+
+    drive_repo = DriveRepo(db)
+    drive_self_test_svc = DriveSelfTestService(
+        drive_repo=drive_repo,
+        monitor=drive_monitor,
+    )
+    app.state.drive_self_test_service = drive_self_test_svc
+
+    await drive_monitor.start()
+    await drive_self_test_svc.start()
+
+    # ------------------------------------------------------------------
     # Background task: log sensor data every 10 seconds
     # ------------------------------------------------------------------
     async def log_loop():
@@ -269,6 +301,9 @@ async def lifespan(app: FastAPI):
                 pruned = await logging_service.prune(retention_hours)
                 if pruned:
                     logger.info("Retention prune: deleted %d old sensor log rows", pruned)
+                pruned_health = await drive_repo.prune_health_history(retention_hours)
+                if pruned_health:
+                    logger.info("Retention prune: deleted %d old drive health snapshot rows", pruned_health)
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -352,6 +387,8 @@ async def lifespan(app: FastAPI):
     except asyncio.CancelledError:
         pass
 
+    await drive_self_test_svc.stop()
+    await drive_monitor.stop()
     await fan_service.stop()
     await fan_test_service.shutdown()
     await quiet_hours_service.stop()
@@ -387,11 +424,12 @@ class _SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        # Explicitly allow ws:// and wss:// to localhost so the WebSocket
-        # connection works even in browsers where 'self' alone does not
-        # cover the ws/wss scheme mapping.  Use the server-configured port
-        # (not the request Host header, which is attacker-controlled).
-        ws_host = f"localhost:{settings.port}"
+        # Explicitly allow ws:// and wss:// so the WebSocket connection works
+        # even in browsers where 'self' alone does not cover the ws/wss
+        # scheme mapping.  Use the request Host header so CSP works for any
+        # deployment (not just localhost).  This is safe: CSP is a browser-side
+        # directive and the Host header reflects the origin the browser used.
+        ws_host = request.headers.get("host", f"localhost:{settings.port}")
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
             # Next.js static export injects inline bootstrap scripts.
@@ -424,6 +462,9 @@ app.include_router(webhooks.router, dependencies=_auth_deps)
 app.include_router(notifications_router, dependencies=_auth_deps)
 app.include_router(quiet_hours_router, dependencies=_auth_deps)
 app.include_router(analytics_route.router, dependencies=_auth_deps)
+app.include_router(drives_route.router, dependencies=_auth_deps)
+app.include_router(temperature_targets_route.router, dependencies=_auth_deps)
+app.include_router(update_route.router, dependencies=_auth_deps)
 # WebSocket auth is handled inside the endpoint (require_ws_auth) because
 # router-level Depends(require_auth) injects Request, which fails for WS.
 app.include_router(ws_router)
@@ -451,25 +492,27 @@ async def health():
     }
 
 
-@_health_router.get("/metrics", response_class=PlainTextResponse)
-async def metrics():
-    """Prometheus text exposition for core temperatures and fan RPM."""
-    readings = []
-    if hasattr(app.state, "sensor_service"):
-        readings = app.state.sensor_service.latest
-    lines = [
-        "# HELP drivechill_temperature_c Temperature reading in Celsius",
-        "# TYPE drivechill_temperature_c gauge",
-        "# HELP drivechill_fan_rpm Fan speed in RPM",
-        "# TYPE drivechill_fan_rpm gauge",
-    ]
-    for r in readings:
-        sid = _sanitize_metric_label(r.id)
-        if r.sensor_type.value in {"cpu_temp", "gpu_temp", "hdd_temp", "case_temp"}:
-            lines.append(f'drivechill_temperature_c{{sensor_id="{sid}",sensor_type="{r.sensor_type.value}"}} {float(r.value):.3f}')
-        elif r.sensor_type.value == "fan_rpm":
-            lines.append(f'drivechill_fan_rpm{{sensor_id="{sid}"}} {float(r.value):.3f}')
-    return "\n".join(lines) + "\n"
+if settings.prometheus_enabled:
+
+    @_health_router.get("/metrics", response_class=PlainTextResponse)
+    async def metrics():
+        """Prometheus text exposition for core temperatures and fan RPM."""
+        readings = []
+        if hasattr(app.state, "sensor_service"):
+            readings = app.state.sensor_service.latest
+        lines = [
+            "# HELP drivechill_temperature_c Temperature reading in Celsius",
+            "# TYPE drivechill_temperature_c gauge",
+            "# HELP drivechill_fan_rpm Fan speed in RPM",
+            "# TYPE drivechill_fan_rpm gauge",
+        ]
+        for r in readings:
+            sid = _sanitize_metric_label(r.id)
+            if r.sensor_type.value in {"cpu_temp", "gpu_temp", "hdd_temp", "case_temp"}:
+                lines.append(f'drivechill_temperature_c{{sensor_id="{sid}",sensor_type="{r.sensor_type.value}"}} {float(r.value):.3f}')
+            elif r.sensor_type.value == "fan_rpm":
+                lines.append(f'drivechill_fan_rpm{{sensor_id="{sid}"}} {float(r.value):.3f}')
+        return "\n".join(lines) + "\n"
 
 
 app.include_router(_health_router)

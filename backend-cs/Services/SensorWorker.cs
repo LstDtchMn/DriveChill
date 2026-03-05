@@ -18,35 +18,41 @@ public sealed class SensorWorker : BackgroundService
     private readonly WebhookService              _webhooks;
     private readonly EmailNotificationService    _email;
     private readonly PushNotificationService     _push;
+    private readonly TemperatureTargetService    _tempTargets;
     private readonly DbService                   _db;
     private readonly SettingsStore               _store;
     private readonly AppSettings                 _settings;
     private readonly ILogger<SensorWorker>       _log;
 
     private DateTimeOffset _lastDbWrite = DateTimeOffset.MinValue;
+    private DateTimeOffset _lastPrune   = DateTimeOffset.MinValue;
     private const int DbIntervalSeconds = 10;
+    private const int PruneIntervalSeconds = 3600; // prune once per hour
 
     public SensorWorker(IHardwareBackend hw, SensorService sensors, FanService fans,
         AlertService alerts, WebhookService webhooks,
         EmailNotificationService email, PushNotificationService push,
+        TemperatureTargetService tempTargets,
         DbService db, SettingsStore store, AppSettings settings, ILogger<SensorWorker> log)
     {
-        _hw       = hw;
-        _sensors  = sensors;
-        _fans     = fans;
-        _alerts   = alerts;
-        _webhooks = webhooks;
-        _email    = email;
-        _push     = push;
-        _db       = db;
-        _store    = store;
-        _settings = settings;
-        _log      = log;
+        _hw          = hw;
+        _sensors     = sensors;
+        _fans        = fans;
+        _alerts      = alerts;
+        _webhooks    = webhooks;
+        _email       = email;
+        _push        = push;
+        _tempTargets = tempTargets;
+        _db          = db;
+        _store       = store;
+        _settings    = settings;
+        _log         = log;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _hw.Initialize();
+        await _tempTargets.LoadAsync(stoppingToken);
         _log.LogInformation("SensorWorker started — backend: {Backend}", _hw.GetBackendName());
 
         while (!stoppingToken.IsCancellationRequested)
@@ -100,6 +106,21 @@ public sealed class SensorWorker : BackgroundService
                 {
                     await _db.LogReadingsAsync(readings, stoppingToken);
                     _lastDbWrite = DateTimeOffset.UtcNow;
+                }
+
+                // Prune old sensor_log + drive_health_snapshots once per hour
+                if ((DateTimeOffset.UtcNow - _lastPrune).TotalSeconds >= PruneIntervalSeconds)
+                {
+                    try
+                    {
+                        var retentionDays = Math.Max(_store.RetentionDays, 1);
+                        await _db.PruneAsync(retentionDays, stoppingToken);
+                        _lastPrune = DateTimeOffset.UtcNow;
+                    }
+                    catch (Exception ex)
+                    {
+                        _log.LogWarning(ex, "Retention prune failed — will retry next cycle");
+                    }
                 }
             }
             catch (OperationCanceledException)

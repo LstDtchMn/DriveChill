@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Request, HTTPException
 from pydantic import BaseModel, Field
 
-from app.api.dependencies.auth import require_csrf
+from app.api.dependencies.auth import require_auth, require_csrf
 
 router = APIRouter(prefix="/api/sensors", tags=["sensors"])
 
@@ -16,7 +16,7 @@ async def _get_labels(request: Request) -> dict[str, str]:
     return {row[0]: row[1] for row in rows}
 
 
-@router.get("")
+@router.get("", dependencies=[Depends(require_auth)])
 async def get_sensors(request: Request):
     """Get current sensor readings with user labels applied."""
     sensor_service = request.app.state.sensor_service
@@ -34,7 +34,7 @@ async def get_sensors(request: Request):
     }
 
 
-@router.get("/labels")
+@router.get("/labels", dependencies=[Depends(require_auth)])
 async def get_labels(request: Request):
     """Get all user-defined sensor labels."""
     labels = await _get_labels(request)
@@ -74,7 +74,7 @@ async def delete_label(sensor_id: str, request: Request):
     return {"success": True, "sensor_id": sensor_id}
 
 
-@router.get("/history")
+@router.get("/history", dependencies=[Depends(require_auth)])
 async def get_history(
     request: Request,
     sensor_id: str | None = None,
@@ -87,7 +87,7 @@ async def get_history(
     return {"data": data}
 
 
-@router.get("/export")
+@router.get("/export", dependencies=[Depends(require_auth)])
 async def export_csv(
     request: Request,
     sensor_id: str | None = None,

@@ -31,6 +31,7 @@ internal static class Program
     [
         ("/api/auth/api-keys", "auth"),
         ("/api/alerts", "alerts"),
+        ("/api/drives", "drives"),
         ("/api/fans", "fans"),
         ("/api/machines", "machines"),
         ("/api/notifications", "notifications"),
@@ -39,6 +40,8 @@ internal static class Program
         ("/api/sensors", "sensors"),
         ("/api/settings", "settings"),
         ("/api/webhooks", "webhooks"),
+        ("/api/analytics", "analytics"),
+        ("/api/temperature-targets", "temperature_targets"),
     ];
     private static readonly HashSet<string> _readMethods = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -151,7 +154,12 @@ internal static class Program
 
         // Core services
         builder.Services.AddSingleton<SensorService>();
-        builder.Services.AddSingleton<FanService>();
+        builder.Services.AddSingleton<TemperatureTargetService>();
+        builder.Services.AddSingleton<FanService>(sp =>
+            new FanService(
+                sp.GetRequiredService<IHardwareBackend>(),
+                sp.GetRequiredService<SettingsStore>(),
+                sp.GetRequiredService<TemperatureTargetService>()));
         builder.Services.AddSingleton<AlertService>();
         builder.Services.AddSingleton<DbService>();
         builder.Services.AddSingleton<SettingsStore>();
@@ -161,6 +169,7 @@ internal static class Program
         builder.Services.AddSingleton<EmailNotificationService>();
         builder.Services.AddSingleton<PushNotificationService>();
         builder.Services.AddSingleton<FanTestService>();
+        builder.Services.AddSingleton<DriveMonitorService>();
         builder.Services.AddSingleton<WebSocketHub>();
         builder.Services
             .AddHttpClient("webhooks")
@@ -173,6 +182,8 @@ internal static class Program
 
         // Background worker: polls hardware, broadcasts WebSocket messages
         builder.Services.AddHostedService<SensorWorker>();
+        // Background worker: drive monitoring (polls smartctl, publishes hdd_temp sensors)
+        builder.Services.AddHostedService<DriveMonitorWorker>();
 
         // CORS for Next.js dev server.
         // AllowCredentials() is required for session cookies to be forwarded on
@@ -192,11 +203,14 @@ internal static class Program
             context.Response.Headers["X-Content-Type-Options"] = "nosniff";
             context.Response.Headers["X-Frame-Options"] = "DENY";
             context.Response.Headers["Referrer-Policy"] = "strict-origin-when-cross-origin";
-            // Explicitly allow ws:// and wss:// to localhost so the WebSocket
-            // connection works even in browsers where 'self' alone does not
-            // cover the ws/wss scheme mapping.  Use the server-configured port
-            // (not context.Request.Host, which is attacker-controlled).
-            var wsHost = $"localhost:{settings.Port}";
+            // Explicitly allow ws:// and wss:// so the WebSocket connection works
+            // even in browsers where 'self' alone does not cover the ws/wss
+            // scheme mapping.  Use the request Host so CSP works for any
+            // deployment (not just localhost).  This is safe: CSP is a browser-side
+            // directive and the Host header reflects the origin the browser used.
+            var wsHost = context.Request.Host.HasValue
+                ? context.Request.Host.ToString()
+                : $"localhost:{settings.Port}";
             context.Response.Headers["Content-Security-Policy"] =
                 "default-src 'self'; " +
                 // Next.js static export injects inline bootstrap scripts.

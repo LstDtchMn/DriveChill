@@ -181,7 +181,7 @@ class WebhookService:
         for attempt in range(1, max_retries + 2):
             # Re-validate immediately before each request attempt.
             # This narrows the DNS rebinding window between validation and connect.
-            ok, reason = validate_outbound_url_at_request_time(target_url)
+            ok, reason = await validate_outbound_url_at_request_time(target_url)
             if not ok:
                 logger.warning("Webhook target blocked at dispatch time: %s", reason)
                 return

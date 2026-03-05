@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import posixpath
+import urllib.parse
 from datetime import datetime, timezone
 from typing import Awaitable, Callable
 
@@ -27,10 +29,14 @@ _URL_USERINFO_RE = re.compile(r"://[^/\s@]+@", re.IGNORECASE)
 
 def _redact_error(exc: Exception) -> str:
     """Truncate and strip credentials from exception text."""
-    text = str(exc)[:300]
-    text = _CREDENTIAL_RE.sub(r"\1\2\3[REDACTED]", text)
+    text = str(exc)[:500]
+    # Use lambda to pick whichever capture group matched; avoids None backreference.
+    text = _CREDENTIAL_RE.sub(
+        lambda m: (m.group(1) or m.group(2) or m.group(3) or "") + "[REDACTED]",
+        text,
+    )
     text = _URL_USERINFO_RE.sub("://[REDACTED]@", text)
-    return text
+    return text[:300]
 
 
 MachineFetcher = Callable[[dict], Awaitable[dict]]
@@ -193,10 +199,10 @@ class MachineMonitorService:
                         last_error=_redact_error(exc),
                         consecutive_failures=failures,
                     )
-            if classified in {"auth_error", "version_mismatch"}:
-                backoff = self._backoff_seconds.get(machine_id, 2.0)
-                self._next_allowed_poll[machine_id] = asyncio.get_running_loop().time() + backoff
-                self._backoff_seconds[machine_id] = min(backoff * 2.0, 30.0)
+            # Apply exponential backoff for all failure types, not just auth errors.
+            backoff = self._backoff_seconds.get(machine_id, 2.0)
+            self._next_allowed_poll[machine_id] = asyncio.get_running_loop().time() + backoff
+            self._backoff_seconds[machine_id] = min(backoff * 2.0, 30.0)
 
     @staticmethod
     def _classify_failure(exc: Exception) -> str:
@@ -223,10 +229,15 @@ class MachineMonitorService:
         if not self._client:
             raise RuntimeError("Machine monitor client is not initialized")
 
+        # Normalize path to prevent traversal (e.g. /api/../etc/passwd)
+        normalized = posixpath.normpath(urllib.parse.unquote(path))
+        if not normalized.startswith("/api/"):
+            raise RuntimeError(f"Path must start with /api/: {path}")
+
         base_url = machine["base_url"].rstrip("/")
         timeout = timeout_override or (float(machine["timeout_ms"]) / 1000.0)
 
-        ok, reason = validate_outbound_url_at_request_time(
+        ok, reason = await validate_outbound_url_at_request_time(
             base_url,
             allow_private=settings.allow_private_outbound_targets,
         )
@@ -271,7 +282,7 @@ class MachineMonitorService:
             headers["Authorization"] = f"Bearer {machine['api_key']}"
 
         # Re-validate immediately before each outbound request.
-        ok, reason = validate_outbound_url_at_request_time(
+        ok, reason = await validate_outbound_url_at_request_time(
             base_url,
             allow_private=settings.allow_private_outbound_targets,
         )
@@ -283,7 +294,7 @@ class MachineMonitorService:
         health_resp.raise_for_status()
         health_json = health_resp.json()
 
-        ok, reason = validate_outbound_url_at_request_time(
+        ok, reason = await validate_outbound_url_at_request_time(
             base_url,
             allow_private=settings.allow_private_outbound_targets,
         )

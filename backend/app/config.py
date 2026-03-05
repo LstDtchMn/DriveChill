@@ -18,14 +18,19 @@ _INTERNAL_TOKEN: str = secrets.token_hex(32)
 
 class Settings(BaseSettings):
     app_name: str = "DriveChill"
-    app_version: str = "1.5.0"
+    app_version: str = "2.1.0"
     host: str = "127.0.0.1"
     port: int = 8085
-    cors_origins: list[str] = ["http://localhost:3000", "http://localhost:8085"]
+    cors_origins: list[str] = [
+        "http://localhost:3000",
+        "http://localhost:8085",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:8085",
+    ]
 
     # Polling
     sensor_poll_interval: float = 1.0  # seconds
-    history_retention_hours: int = 24
+    history_retention_hours: int = 720  # 30 days
 
     # Data - defaults to %APPDATA%\DriveChill on Windows, data/ on Linux
     data_dir: Path = _default_data_dir
@@ -57,6 +62,9 @@ class Settings(BaseSettings):
     # Generate with: python -c "import secrets; print(secrets.token_hex(32))"
     # If unset, credentials are stored in plaintext with a logged warning.
     secret_key: str = ""  # DRIVECHILL_SECRET_KEY
+
+    # Prometheus /metrics endpoint (disabled by default)
+    prometheus_enabled: bool = False  # DRIVECHILL_PROMETHEUS_ENABLED
 
     model_config = {"env_prefix": "DRIVECHILL_"}
 

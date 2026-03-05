@@ -68,6 +68,14 @@ class EmailNotificationRepo:
                 "FROM email_notification_settings WHERE id = 1"
             )
             row = await cursor.fetchone()
+        if row is None:
+            # Should never happen, but return a safe default rather than raising
+            return {
+                "enabled": False, "smtp_host": "", "smtp_port": 587,
+                "smtp_username": "", "has_password": False,
+                "sender_address": "", "recipient_list": [],
+                "use_tls": True, "use_ssl": False, "updated_at": None,
+            }
         return self._row_to_public_dict(row)
 
     async def update(self, **fields: object) -> dict:

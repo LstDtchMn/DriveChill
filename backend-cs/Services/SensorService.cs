@@ -14,6 +14,7 @@ namespace DriveChill.Services;
 public sealed class SensorService
 {
     private volatile SensorSnapshot _latest = new();
+    private volatile IReadOnlyList<SensorReading> _driveReadings = [];
 
     // All active WebSocket client channels — add/remove under _lock.
     private readonly List<Channel<SensorSnapshot>> _subscribers = [];
@@ -23,13 +24,31 @@ public sealed class SensorService
     public SensorSnapshot Latest => _latest;
 
     /// <summary>
+    /// Replace the drive temperature readings injected into each snapshot.
+    /// Called by DriveMonitorService after each temperature poll.
+    /// </summary>
+    public void UpdateDriveReadings(IReadOnlyList<SensorReading> readings)
+    {
+        _driveReadings = readings;
+    }
+
+    /// <summary>
     /// Called by SensorWorker on every poll tick.
-    /// Replaces the cached snapshot and fans it out to all WebSocket subscribers.
+    /// Merges drive readings into the snapshot before storing and broadcasting.
     /// </summary>
     public void Update(SensorSnapshot snapshot)
     {
-        _latest = snapshot;
-        BroadcastToSubscribers(snapshot);
+        var driveReadings = _driveReadings;
+        var merged = driveReadings.Count == 0
+            ? snapshot
+            : new SensorSnapshot
+            {
+                Readings = [.. snapshot.Readings, .. driveReadings],
+                Backend = snapshot.Backend,
+                Timestamp = snapshot.Timestamp,
+            };
+        _latest = merged;
+        BroadcastToSubscribers(merged);
     }
 
     /// <summary>

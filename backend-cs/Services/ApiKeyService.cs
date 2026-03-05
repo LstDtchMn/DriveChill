@@ -9,13 +9,17 @@ public sealed class ApiKeyService
     private static readonly string[] _scopeDomains =
     [
         "alerts",
+        "analytics",
         "auth",
+        "drives",
         "fans",
         "machines",
+        "notifications",
         "profiles",
         "quiet_hours",
         "sensors",
         "settings",
+        "temperature_targets",
         "webhooks",
     ];
     private static readonly HashSet<string> _allowedScopes = new(

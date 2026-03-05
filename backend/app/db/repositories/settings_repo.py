@@ -11,7 +11,7 @@ import aiosqlite
 # settings route and config module expect.
 _DEFAULTS: dict[str, str] = {
     "sensor_poll_interval": "1.0",
-    "history_retention_hours": "24",
+    "history_retention_hours": "720",  # 30 days
     "temp_unit": "C",
     "panic_cpu_temp_c": "95",
     "panic_gpu_temp_c": "90",

@@ -58,14 +58,19 @@ public sealed class NotificationsController : ControllerBase
             sslV.ValueKind != System.Text.Json.JsonValueKind.False)
             return BadRequest(new { detail = "use_ssl must be a boolean" });
 
+        // Validate recipient_list is an array before processing
+        if (body.TryGetProperty("recipient_list", out var rlCheck) &&
+            rlCheck.ValueKind != System.Text.Json.JsonValueKind.Array)
+            return BadRequest(new { detail = "recipient_list must be an array" });
+
         var s = new EmailNotificationSettingsRecord
         {
             Enabled       = body.TryGetProperty("enabled",        out var en2)  ? en2.GetBoolean()  : current.Enabled,
             SmtpHost      = body.TryGetProperty("smtp_host",      out var sh)   ? sh.GetString()!   : current.SmtpHost,
             SmtpPort      = smtpPort,
             SmtpUsername  = body.TryGetProperty("smtp_username",  out var su)   ? su.GetString()!   : current.SmtpUsername,
-            // Send empty string to preserve existing password; send actual value to update.
-            SmtpPassword  = body.TryGetProperty("smtp_password",  out var spw)  ? spw.GetString() ?? "" : "",
+            // Only update password when the field is explicitly present in the payload.
+            SmtpPassword  = body.TryGetProperty("smtp_password",  out var spw)  ? spw.GetString() ?? "" : current.SmtpPassword,
             SenderAddress = body.TryGetProperty("sender_address", out var sa)   ? sa.GetString()!   : current.SenderAddress,
             RecipientList = body.TryGetProperty("recipient_list", out var rl)   ? JsonSerializer.Serialize(rl) : current.RecipientList,
             UseTls        = body.TryGetProperty("use_tls",        out var tls)  ? tls.GetBoolean()  : current.UseTls,
@@ -151,7 +156,9 @@ public sealed class NotificationsController : ControllerBase
             return BadRequest(new { detail = "subscription_id is required" });
 
         var error = await _push.SendTestAsync(subscriptionId, ct);
-        return Ok(new { success = error is null, error });
+        if (error is not null)
+            return StatusCode(502, new { detail = "Test push delivery failed. Check server logs for details." });
+        return Ok(new { success = true });
     }
 
     // -----------------------------------------------------------------------

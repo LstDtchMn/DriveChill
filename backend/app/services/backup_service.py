@@ -107,8 +107,15 @@ async def import_backup(db_path: Path, backup_path: Path) -> dict[str, int]:
 
     Returns a summary dict with counts of imported items.
     """
+    file_size = backup_path.stat().st_size
+    if file_size > 50 * 1024 * 1024:  # 50 MB cap
+        raise ValueError(f"Backup file too large ({file_size} bytes). Maximum is 50 MB.")
+
     raw = backup_path.read_text(encoding="utf-8")
     data = json.loads(raw)
+
+    if not isinstance(data, dict):
+        raise ValueError("Invalid backup file: expected a JSON object at top level")
 
     version = data.get("backup_version")
     if version is None:

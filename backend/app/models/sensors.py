@@ -23,6 +23,10 @@ class SensorReading(BaseModel):
     min_value: float | None = None
     max_value: float | None = None
     unit: str = "°C"
+    # Additive drive metadata — only set for hdd_temp sensors from drive monitoring
+    drive_id: str | None = None
+    entity_name: str | None = None  # Human-readable drive name
+    source_kind: str | None = None  # "native" | "smartctl" | "unknown"
 
 
 class SensorSnapshot(BaseModel):

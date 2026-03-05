@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from app.api.dependencies.auth import require_csrf
+from app.api.dependencies.auth import require_auth, require_csrf
 
 router = APIRouter(prefix="/api/notifications", tags=["notifications"])
 
@@ -32,7 +32,7 @@ class UpdateEmailSettingsRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-@router.get("/email")
+@router.get("/email", dependencies=[Depends(require_auth)])
 async def get_email_settings(request: Request):
     """Return email notification settings (smtp_password is never returned)."""
     repo = request.app.state.email_notification_repo
@@ -103,7 +103,7 @@ def _redact_subscription(sub: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/push-subscriptions")
+@router.get("/push-subscriptions", dependencies=[Depends(require_auth)])
 async def list_push_subscriptions(request: Request):
     """List all push subscriptions (key material redacted)."""
     repo = request.app.state.push_subscription_repo

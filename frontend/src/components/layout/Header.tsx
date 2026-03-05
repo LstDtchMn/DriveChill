@@ -4,18 +4,21 @@ import { useState } from 'react';
 import { useAppStore } from '@/stores/appStore';
 import { useAuthStore } from '@/stores/authStore';
 import { ThemeToggle } from './ThemeToggle';
-import { Bell, ShieldOff, Play, LogOut } from 'lucide-react';
+import { Bell, ShieldOff, Play, LogOut, ArrowUpCircle } from 'lucide-react';
 import { api, authApi } from '@/lib/api';
 
 const PAGE_TITLES: Record<string, string> = {
   dashboard: 'Dashboard',
   curves: 'Fan Curves',
+  'temperature-targets': 'Temperature Targets',
   alerts: 'Alerts & Logging',
+  drives: 'Drives',
+  analytics: 'Analytics',
   settings: 'Settings',
 };
 
 export function Header() {
-  const { currentPage, backendName, activeAlerts, setPage, safeMode, setSafeMode } = useAppStore();
+  const { currentPage, backendName, activeAlerts, setPage, safeMode, setSafeMode, updateCheck } = useAppStore();
   const { authRequired, authenticated, username, logout: authLogout } = useAuthStore();
   const [releasing, setReleasing] = useState(false);
   const [resuming, setResuming] = useState(false);
@@ -107,6 +110,16 @@ export function Header() {
             <ShieldOff size={13} />
             <span className="hidden sm:inline">{releasing ? 'Releasing...' : 'Release Fans'}</span>
             <span className="sm:hidden">{releasing ? '...' : 'Release'}</span>
+          </button>
+        )}
+
+        {updateCheck?.update_available && (
+          <button
+            onClick={() => setPage('settings')}
+            className="relative min-h-11 min-w-11 p-2 rounded-lg transition-colors hover:bg-surface-200"
+            title={`Update available: v${updateCheck.latest}`}
+          >
+            <ArrowUpCircle size={18} style={{ color: 'var(--warning)' }} />
           </button>
         )}
 

@@ -17,6 +17,14 @@ const DEFAULT_POINTS: FanCurvePoint[] = [
   { temp: 85, speed: 100 },
 ];
 
+// Pre-configured points for storage drive cooling (drives are more temperature-sensitive)
+const COOLING_CURVE_POINTS: FanCurvePoint[] = [
+  { temp: 35, speed: 20 },
+  { temp: 45, speed: 40 },
+  { temp: 55, speed: 70 },
+  { temp: 65, speed: 100 },
+];
+
 function formatDangerWarnings(detail: unknown): string[] {
   if (!detail || typeof detail !== 'object') return [];
   const d = detail as { detail?: { warnings?: Array<{ temp?: number; speed?: number; message?: string }> } };
@@ -30,10 +38,15 @@ function formatDangerWarnings(detail: unknown): string[] {
 export function FanCurvesPage() {
   const { all: allReadings, cpuTemps, gpuTemps, hddTemps, caseTemps, fanRpms, fanPcts } = useSensors();
   const appliedSpeeds = useAppStore((s) => s.appliedSpeeds);
+  const preselectedSensorId = useAppStore((s) => s.preselectedCurveSensorId);
+  const setPreselectedSensorId = useAppStore((s) => s.setPreselectedCurveSensorId);
+  const createCoolingCurveSensorId = useAppStore((s) => s.createCoolingCurveSensorId);
+  const setCreateCoolingCurveSensorId = useAppStore((s) => s.setCreateCoolingCurveSensorId);
   const [curves, setCurves] = useState<FanCurve[]>([]);
   const [selectedCurve, setSelectedCurve] = useState<string | null>(null);
   const [editingPoints, setEditingPoints] = useState<FanCurvePoint[]>(DEFAULT_POINTS);
   const [editorSize, setEditorSize] = useState({ width: 500, height: 300 });
+  const [curvesLoaded, setCurvesLoaded] = useState(false);
 
   const allTempSensors = [...cpuTemps, ...gpuTemps, ...hddTemps, ...caseTemps];
   const allFans = fanRpms.map((f) => f.id.replace('_rpm', ''));
@@ -76,11 +89,52 @@ export function FanCurvesPage() {
           setEditingPoints(c[0].points);
         }
       } catch {
-        // API not available
+        // API not available — clear navigation flags so they don't linger
+        setPreselectedSensorId(null);
+        setCreateCoolingCurveSensorId(null);
+      } finally {
+        setCurvesLoaded(true);
       }
     };
     fetchCurves();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // When navigated from the Drives page via "New cooling curve", create an
+  // unsaved draft curve pre-configured for storage drive cooling.
+  useEffect(() => {
+    if (!createCoolingCurveSensorId || !curvesLoaded) return;
+    const draft: FanCurve = {
+      id: `draft_cooling_${Date.now()}`,
+      name: 'Storage Cooling',
+      sensor_id: createCoolingCurveSensorId,
+      fan_id: allFans[0] || 'fan_cpu',
+      points: [...COOLING_CURVE_POINTS],
+      enabled: true,
+      sensor_ids: [createCoolingCurveSensorId],
+    };
+    setCurves((prev) => [...prev, draft]);
+    setSelectedCurve(draft.id);
+    setEditingPoints([...COOLING_CURVE_POINTS]);
+    setCreateCoolingCurveSensorId(null);
+  // allFans is derived from live sensor data (stable after initial load)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [createCoolingCurveSensorId, curvesLoaded]);
+
+  // When navigated from the Drives page via "Use for cooling", pre-add the
+  // drive's hdd_temp sensor to the currently-selected curve's sensor_ids.
+  useEffect(() => {
+    if (!preselectedSensorId || !selectedCurve) return;
+    setCurves((prev) =>
+      prev.map((c) => {
+        if (c.id !== selectedCurve) return c;
+        const ids = c.sensor_ids ?? [];
+        if (ids.includes(preselectedSensorId)) return c;
+        return { ...c, sensor_ids: [...ids, preselectedSensorId] };
+      })
+    );
+    setPreselectedSensorId(null);
+  }, [preselectedSensorId, selectedCurve, setPreselectedSensorId]);
 
   useEffect(() => {
     const updateEditorSize = () => {
@@ -98,6 +152,12 @@ export function FanCurvesPage() {
   }, []);
 
   const handleSelectCurve = (id: string) => {
+    if (selectedCurve) {
+      const current = curves.find((c) => c.id === selectedCurve);
+      const hasUnsaved = current &&
+        JSON.stringify(current.points) !== JSON.stringify(editingPoints);
+      if (hasUnsaved && !window.confirm('You have unsaved changes. Discard and switch curve?')) return;
+    }
     const curve = curves.find((c) => c.id === id);
     if (curve) {
       setSelectedCurve(id);
@@ -148,7 +208,7 @@ export function FanCurvesPage() {
   };
 
   const handleNewCurve = async () => {
-    const newCurve: FanCurve = {
+    const draft: FanCurve = {
       id: `curve_${Date.now()}`,
       name: `Custom Curve ${curves.length + 1}`,
       sensor_id: allTempSensors[0]?.id || 'cpu_temp_0',
@@ -159,7 +219,9 @@ export function FanCurvesPage() {
     };
 
     try {
-      await api.updateCurve(newCurve);
+      const saved = await api.updateCurve(draft);
+      // Use the id the server assigned (avoids client-generated id collisions)
+      const newCurve: FanCurve = saved?.id ? { ...draft, id: saved.id } : draft;
       setCurves([...curves, newCurve]);
       setSelectedCurve(newCurve.id);
       setEditingPoints(newCurve.points);
@@ -205,6 +267,9 @@ export function FanCurvesPage() {
                     <span className={`badge ${curve.enabled ? 'badge-success' : 'badge-warning'}`}>
                       {curve.enabled ? 'Enabled' : 'Disabled'}
                     </span>
+                    {curve.id.startsWith('draft_') && (
+                      <span className="badge badge-warning">unsaved</span>
+                    )}
                     <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
                       {curve.points.length} points
                     </span>

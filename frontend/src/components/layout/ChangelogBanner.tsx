@@ -3,11 +3,29 @@
 import { useState, useEffect } from 'react';
 import { X, Sparkles } from 'lucide-react';
 
-const APP_VERSION = '1.6.0';
+const APP_VERSION = '2.1.0';
 const STORAGE_KEY = 'drivechill_changelog_dismissed';
 
 const CHANGELOG: Record<string, string[]> = {
+  '2.1.0': [
+    'Temperature Targets: set a target temp for any drive and auto-control linked fans',
+    'Relationship Map: visual SVG diagram of drive-to-fan connections with thermal-state colours',
+    'Multi-drive shared fan support: hottest drive wins when multiple targets share a fan',
+    'Proportional fan control with configurable tolerance band and floor speed',
+  ],
+  '2.0.0': [
+    'Analytics v2.0: custom date-range queries, multi-sensor filtering, and auto-sized buckets',
+    'New Correlation panel: Pearson r between any two sensors with scatter plot',
+    'Sensor filter chips and custom start/end date pickers on the Analytics page',
+    'Drive detail panel: 24-hour temperature mini-sparkline',
+    '"New cooling curve" button on Drives page creates a pre-configured storage cooling draft',
+    'History retention default raised to 30 days (was 24 hours) for all installations',
+    'Analytics anomalies now include severity badge (warning / critical)',
+  ],
   '1.6.0': [
+    'Drive monitoring: SMART health, temperature, and self-test support via smartmontools',
+    'New Drives page with health badges, temperature display, and SMART attribute drill-in',
+    'Drive temperatures injected into the fan-curve and alert pipeline as hdd_temp sensors',
     'Analytics: temperature values now respect your °C/°F preference',
     'Fan curve editor: larger touch targets for reliable mobile dragging',
     'Temp unit preference synced from backend on every startup',

@@ -27,12 +27,14 @@ _LOCKOUT_DURATION = timedelta(minutes=15)
 _API_KEY_SCOPE_DOMAINS = (
     "alerts",
     "auth",
+    "drives",
     "fans",
     "machines",
     "profiles",
     "quiet_hours",
     "sensors",
     "settings",
+    "temperature_targets",
     "webhooks",
 )
 _DEFAULT_API_KEY_SCOPES = ("read:sensors",)

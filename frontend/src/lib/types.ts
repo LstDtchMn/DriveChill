@@ -210,7 +210,125 @@ export interface WSMessage {
   safe_mode?: SafeModeStatus;
 }
 
-export type Page = 'dashboard' | 'curves' | 'alerts' | 'settings' | 'analytics';
+export type Page = 'dashboard' | 'curves' | 'alerts' | 'settings' | 'analytics' | 'drives' | 'temperature-targets';
+
+// ── Temperature targets ──────────────────────────────────────────────────────
+
+export interface TemperatureTarget {
+  id: string;
+  name: string;
+  drive_id: string | null;
+  sensor_id: string;
+  fan_ids: string[];
+  target_temp_c: number;
+  tolerance_c: number;
+  min_fan_speed: number;
+  enabled: boolean;
+}
+
+// ── Drive monitoring types ────────────────────────────────────────────────────
+
+export interface DriveCapabilitySet {
+  smart_read: boolean;
+  smart_self_test_short: boolean;
+  smart_self_test_extended: boolean;
+  smart_self_test_conveyance: boolean;
+  smart_self_test_abort: boolean;
+  temperature_source: string;
+  health_source: string;
+}
+
+export interface DriveRawAttribute {
+  key: string;
+  name: string;
+  normalized_value: number | null;
+  worst_value: number | null;
+  threshold: number | null;
+  raw_value: string;
+  status: string;
+  source_kind: string;
+}
+
+export interface DriveSelfTestRun {
+  id: string;
+  drive_id: string;
+  type: string;
+  status: string;
+  progress_percent: number | null;
+  started_at: string;
+  finished_at: string | null;
+  failure_message: string | null;
+}
+
+export type DriveHealthStatus = 'healthy' | 'warning' | 'critical' | 'unknown';
+
+export interface DriveSummary {
+  id: string;
+  name: string;
+  model: string;
+  serial_masked: string;
+  device_path_masked: string;
+  bus_type: string;
+  media_type: string;
+  capacity_bytes: number;
+  temperature_c: number | null;
+  health_status: DriveHealthStatus;
+  health_percent: number | null;
+  smart_available: boolean;
+  native_available: boolean;
+  supports_self_test: boolean;
+  supports_abort: boolean;
+  last_updated_at: string | null;
+}
+
+export interface DriveDetail extends DriveSummary {
+  serial_full: string;
+  device_path: string;
+  firmware_version: string;
+  interface_speed: string | null;
+  rotation_rate_rpm: number | null;
+  power_on_hours: number | null;
+  power_cycle_count: number | null;
+  unsafe_shutdowns: number | null;
+  wear_percent_used: number | null;
+  available_spare_percent: number | null;
+  reallocated_sectors: number | null;
+  pending_sectors: number | null;
+  uncorrectable_errors: number | null;
+  media_errors: number | null;
+  predicted_failure: boolean;
+  temperature_warning_c: number;
+  temperature_critical_c: number;
+  capabilities: DriveCapabilitySet;
+  last_self_test: DriveSelfTestRun | null;
+  raw_attributes: DriveRawAttribute[];
+}
+
+export interface DriveSettings {
+  enabled: boolean;
+  smartctl_provider_enabled: boolean;
+  native_provider_enabled: boolean;
+  smartctl_path: string;
+  fast_poll_seconds: number;
+  health_poll_seconds: number;
+  rescan_poll_seconds: number;
+  hdd_temp_warning_c: number;
+  hdd_temp_critical_c: number;
+  ssd_temp_warning_c: number;
+  ssd_temp_critical_c: number;
+  nvme_temp_warning_c: number;
+  nvme_temp_critical_c: number;
+  wear_warning_percent_used: number;
+  wear_critical_percent_used: number;
+}
+
+export interface DriveSettingsOverride {
+  drive_id: string;
+  temp_warning_c: number | null;
+  temp_critical_c: number | null;
+  alerts_enabled: boolean | null;
+  curve_picker_enabled: boolean | null;
+}
 
 export interface PushSubscription {
   id: string;
@@ -268,4 +386,36 @@ export interface AnalyticsAnomaly {
   z_score: number;
   mean: number;
   stdev: number;
+  severity?: 'warning' | 'critical';
+}
+
+export interface AnalyticsCorrelationSample {
+  epoch: number;
+  x: number;
+  y: number;
+}
+
+export interface ThermalRegression {
+  sensor_id: string;
+  sensor_name: string;
+  baseline_avg: number;
+  recent_avg: number;
+  delta: number;
+  severity: 'warning' | 'critical';
+  message: string;
+}
+
+export interface UpdateCheck {
+  current: string;
+  latest: string;
+  update_available: boolean;
+  release_url: string;
+  deployment: 'windows_service' | 'windows_standalone' | 'docker' | 'other';
+}
+
+export interface UpdateApplyResult {
+  status: 'update_started' | 'manual_required';
+  version?: string;
+  message?: string;
+  command?: string;
 }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import socket
 from urllib.parse import urlparse
@@ -24,25 +25,8 @@ def _is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address, *, allow_p
     return None
 
 
-def validate_outbound_url(
-    url: str,
-    *,
-    allow_private: bool = False,
-) -> tuple[bool, str | None]:
-    """Validate HTTP(S) outbound targets and block unsafe hosts by default."""
-    try:
-        parsed = urlparse(url)
-    except Exception:
-        return False, "Invalid URL"
-    if parsed.scheme not in {"http", "https"}:
-        return False, "URL must start with http:// or https://"
-    if not parsed.hostname:
-        return False, "URL hostname is required"
-
-    hostname = parsed.hostname.strip().lower()
-    if hostname in {"localhost"}:
-        return False, "localhost is not allowed"
-
+def _resolve_and_check(hostname: str, allow_private: bool) -> tuple[bool, str | None]:
+    """Synchronous DNS resolution + IP blocklist check."""
     try:
         infos = socket.getaddrinfo(hostname, None, type=socket.SOCK_STREAM)
     except socket.gaierror:
@@ -69,7 +53,56 @@ def validate_outbound_url(
     return True, None
 
 
-def validate_outbound_url_at_request_time(
+def _parse_and_check_scheme(url: str) -> tuple[str | None, str | None]:
+    """Parse URL and return (hostname, None) on success or (None, error) on failure."""
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return None, "Invalid URL"
+    if parsed.scheme not in {"http", "https"}:
+        return None, "URL must start with http:// or https://"
+    if not parsed.hostname:
+        return None, "URL hostname is required"
+
+    hostname = parsed.hostname.strip().lower()
+    if hostname in {"localhost"}:
+        return None, "localhost is not allowed"
+
+    return hostname, None
+
+
+def validate_outbound_url(
+    url: str,
+    *,
+    allow_private: bool = False,
+) -> tuple[bool, str | None]:
+    """Validate HTTP(S) outbound targets and block unsafe hosts by default.
+
+    This is a synchronous version used in Pydantic validators and other
+    non-async contexts. Prefer validate_outbound_url_async in async code.
+    """
+    hostname, err = _parse_and_check_scheme(url)
+    if err:
+        return False, err
+    assert hostname is not None
+    return _resolve_and_check(hostname, allow_private)
+
+
+async def validate_outbound_url_async(
+    url: str,
+    *,
+    allow_private: bool = False,
+) -> tuple[bool, str | None]:
+    """Async version of validate_outbound_url — runs DNS resolution in a
+    thread pool to avoid blocking the event loop."""
+    hostname, err = _parse_and_check_scheme(url)
+    if hostname is None:
+        return False, err or "URL hostname is required"
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _resolve_and_check, hostname, allow_private)
+
+
+async def validate_outbound_url_at_request_time(
     url: str,
     *,
     allow_private: bool = False,
@@ -78,5 +111,6 @@ def validate_outbound_url_at_request_time(
 
     This defends against DNS rebinding: a hostname that resolved to a safe IP
     at config-save time may now resolve to a loopback/private address.
+    Uses async DNS to avoid blocking the event loop.
     """
-    return validate_outbound_url(url, allow_private=allow_private)
+    return await validate_outbound_url_async(url, allow_private=allow_private)

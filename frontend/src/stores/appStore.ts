@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { SensorReading, AlertEvent, Page, Profile, FanCurve, FanTestProgress, SafeModeStatus } from '@/lib/types';
+import type { SensorReading, AlertEvent, Page, Profile, FanCurve, FanTestProgress, SafeModeStatus, UpdateCheck } from '@/lib/types';
 
 interface HistoryPoint {
   timestamp: string;
@@ -46,11 +46,23 @@ interface AppState {
   safeMode: SafeModeStatus;
   setSafeMode: (status: SafeModeStatus) => void;
 
+  // Drive → curve navigation
+  preselectedCurveSensorId: string | null;
+  setPreselectedCurveSensorId: (sensorId: string | null) => void;
+
+  // Drive → create new cooling curve
+  createCoolingCurveSensorId: string | null;
+  setCreateCoolingCurveSensorId: (sensorId: string | null) => void;
+
   // Connection
   connected: boolean;
   setConnected: (connected: boolean) => void;
   backendName: string;
   setBackendName: (name: string) => void;
+
+  // Update check
+  updateCheck: UpdateCheck | null;
+  setUpdateCheck: (info: UpdateCheck | null) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -114,9 +126,21 @@ export const useAppStore = create<AppState>((set) => ({
   safeMode: { active: false, released: false, reason: null },
   setSafeMode: (status) => set({ safeMode: status }),
 
+  // Drive → curve navigation
+  preselectedCurveSensorId: null,
+  setPreselectedCurveSensorId: (sensorId) => set({ preselectedCurveSensorId: sensorId }),
+
+  // Drive → create new cooling curve
+  createCoolingCurveSensorId: null,
+  setCreateCoolingCurveSensorId: (sensorId) => set({ createCoolingCurveSensorId: sensorId }),
+
   // Connection
   connected: false,
   setConnected: (connected) => set({ connected }),
   backendName: '',
   setBackendName: (name) => set({ backendName: name }),
+
+  // Update check
+  updateCheck: null,
+  setUpdateCheck: (info) => set({ updateCheck: info }),
 }));

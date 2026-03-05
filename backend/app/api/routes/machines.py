@@ -7,7 +7,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 
-from app.api.dependencies.auth import require_csrf
+from app.api.dependencies.auth import require_auth, require_csrf
 from app.config import settings
 from app.utils.url_security import validate_outbound_url
 
@@ -109,7 +109,7 @@ def _public_machine(machine: dict) -> dict:
     }
 
 
-@router.get("")
+@router.get("", dependencies=[Depends(require_auth)])
 async def list_machines(request: Request):
     repo = request.app.state.machine_repo
     monitor = request.app.state.machine_monitor_service
@@ -170,7 +170,7 @@ async def delete_machine(machine_id: str, request: Request):
     return {"success": True}
 
 
-@router.get("/{machine_id}/snapshot")
+@router.get("/{machine_id}/snapshot", dependencies=[Depends(require_auth)])
 async def get_machine_snapshot(machine_id: str, request: Request):
     repo = request.app.state.machine_repo
     monitor = request.app.state.machine_monitor_service
@@ -199,7 +199,7 @@ class RemoteFanSettingsRequest(BaseModel):
     zero_rpm_capable: bool | None = None
 
 
-@router.get("/{machine_id}/state")
+@router.get("/{machine_id}/state", dependencies=[Depends(require_auth)])
 async def get_machine_state(machine_id: str, request: Request):
     """Fetch full remote state: profiles, fans, sensors."""
     repo = request.app.state.machine_repo
@@ -233,7 +233,7 @@ async def activate_remote_profile(machine_id: str, profile_id: str, request: Req
     try:
         result = await monitor.send_command(
             machine,
-            "POST",
+            "PUT",
             f"/api/profiles/{profile_id}/activate",
         )
     except httpx.HTTPStatusError as exc:

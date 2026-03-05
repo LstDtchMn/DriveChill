@@ -44,6 +44,19 @@ public sealed class SensorReading
 
     [JsonPropertyName("unit")]
     public string Unit { get; init; } = "";
+
+    // Additive drive metadata — only set for hdd_temp sensors from drive monitoring
+    [JsonPropertyName("drive_id")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? DriveId { get; init; }
+
+    [JsonPropertyName("entity_name")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? EntityName { get; init; }
+
+    [JsonPropertyName("source_kind")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SourceKind { get; init; }
 }
 
 /// <summary>

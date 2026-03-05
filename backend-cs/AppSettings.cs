@@ -10,18 +10,24 @@ public sealed class AppSettings
     ];
 
     public string AppName    { get; set; } = "DriveChill";
-    public string AppVersion { get; set; } = "1.6.0";
+    public string AppVersion { get; set; } = "2.1.0";
 
     public double SensorPollInterval    { get; set; } = 1.0;
     /// <summary>Poll interval in milliseconds (derived from SensorPollInterval).</summary>
     public int    PollIntervalMs        => (int)(SensorPollInterval * 1000);
-    public int    HistoryRetentionHours { get; set; } = 24;
+    public int    HistoryRetentionHours { get; set; } = 720;
     public string TempUnit              { get; set; } = "C";
 
-    public string DataDir =>
-        Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "DriveChill");
+    public string DataDir
+    {
+        get
+        {
+            var v = Environment.GetEnvironmentVariable("DRIVECHILL_DATA_DIR")?.Trim();
+            return string.IsNullOrEmpty(v)
+                ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DriveChill")
+                : v;
+        }
+    }
 
     public string DbPath => Path.Combine(DataDir, "drivechill.db");
 
@@ -112,4 +118,11 @@ public sealed class AppSettings
 
     public string VapidContactEmail =>
         (Environment.GetEnvironmentVariable("DRIVECHILL_VAPID_CONTACT_EMAIL") ?? "admin@localhost").Trim();
+
+    public bool PrometheusEnabled =>
+        string.Equals(
+            Environment.GetEnvironmentVariable("DRIVECHILL_PROMETHEUS_ENABLED"),
+            "true",
+            StringComparison.OrdinalIgnoreCase
+        );
 }

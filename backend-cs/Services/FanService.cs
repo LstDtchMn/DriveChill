@@ -11,6 +11,7 @@ public sealed class FanService
 {
     private readonly IHardwareBackend _hw;
     private readonly SettingsStore    _store;
+    private readonly TemperatureTargetService? _tempTargetSvc;
 
     private readonly ReaderWriterLockSlim _rwl = new();
     // fanId → curve (null means auto/manual)
@@ -33,10 +34,12 @@ public sealed class FanService
     private const double PanicGpuTemp = 90.0;
     private const double PanicHysteresis = 5.0;
 
-    public FanService(IHardwareBackend hw, SettingsStore store)
+    public FanService(IHardwareBackend hw, SettingsStore store,
+        TemperatureTargetService? tempTargetSvc = null)
     {
         _hw    = hw;
         _store = store;
+        _tempTargetSvc = tempTargetSvc;
         // NOTE: GetFanIds() returns empty before Initialize() — fan IDs are
         // populated lazily on the first ApplyCurvesAsync tick (see SyncCurveSlots).
     }
@@ -261,11 +264,12 @@ public sealed class FanService
         CheckPanicThresholds(readings);
 
         // Skip curve application when released to BIOS or in panic mode
-        if (_released || _tempPanic)
+        if (_released || _tempPanic || _sensorPanic)
             return Task.CompletedTask;
 
+        // 1. Build curve-based speeds
+        var curveSpeeds = new Dictionary<string, double>();
         _rwl.EnterReadLock();
-        List<(string fanId, double speed)> toApply = [];
         try
         {
             foreach (var (fanId, curve) in _curves)
@@ -277,13 +281,40 @@ public sealed class FanService
                 if (curve == null || !curve.Enabled) continue;
                 var sensor = readings.FirstOrDefault(r => r.Id == curve.SensorId);
                 if (sensor == null) continue;
-                var target = Interpolate(curve.Points, sensor.Value);
-                _lastApplied.TryGetValue(fanId, out var last);
-                if (Math.Abs(target - last) >= 0.5) // only update on meaningful change
-                    toApply.Add((fanId, target));
+                curveSpeeds[fanId] = Interpolate(curve.Points, sensor.Value);
             }
         }
         finally { _rwl.ExitReadLock(); }
+
+        // 2. Build temperature-target speeds
+        var ttSpeeds = new Dictionary<string, double>();
+        if (_tempTargetSvc is not null)
+        {
+            var sensorMap = new Dictionary<string, double>();
+            foreach (var r in readings)
+                sensorMap[r.Id] = r.Value;
+            ttSpeeds = _tempTargetSvc.Evaluate(sensorMap);
+        }
+
+        // 3. Merge over union of fan IDs — hottest source wins
+        var allFanIds = new HashSet<string>(curveSpeeds.Keys);
+        allFanIds.UnionWith(ttSpeeds.Keys);
+
+        List<(string fanId, double speed)> toApply = [];
+        foreach (var fanId in allFanIds)
+        {
+            curveSpeeds.TryGetValue(fanId, out var curveSpeed);
+            ttSpeeds.TryGetValue(fanId, out var ttSpeed);
+            var finalSpeed = Math.Max(curveSpeed, ttSpeed);
+
+            _rwl.EnterReadLock();
+            double last;
+            try { _lastApplied.TryGetValue(fanId, out last); }
+            finally { _rwl.ExitReadLock(); }
+
+            if (Math.Abs(finalSpeed - last) >= 0.5)
+                toApply.Add((fanId, finalSpeed));
+        }
 
         // Apply speeds and record under write lock to avoid concurrent dictionary mutation
         if (toApply.Count > 0)

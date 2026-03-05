@@ -13,12 +13,16 @@ _READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _API_KEY_SCOPE_PREFIX_RULES: tuple[tuple[str, str], ...] = (
     ("/api/auth/api-keys", "auth"),
     ("/api/alerts", "alerts"),
+    ("/api/analytics", "analytics"),
+    ("/api/drives", "drives"),
     ("/api/fans", "fans"),
     ("/api/machines", "machines"),
+    ("/api/notifications", "notifications"),
     ("/api/profiles", "profiles"),
     ("/api/quiet-hours", "quiet_hours"),
     ("/api/sensors", "sensors"),
     ("/api/settings", "settings"),
+    ("/api/temperature-targets", "temperature_targets"),
     ("/api/webhooks", "webhooks"),
 )
 

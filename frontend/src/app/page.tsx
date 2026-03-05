@@ -13,6 +13,8 @@ import { FanCurvesPage } from '@/components/fan-curves/FanCurvesPage';
 import { AlertsPage } from '@/components/alerts/AlertsPage';
 import { SettingsPage } from '@/components/settings/SettingsPage';
 import { AnalyticsPage } from '@/components/analytics/AnalyticsPage';
+import { DrivesPage } from '@/components/drives/DrivesPage';
+import { TemperatureTargetsPage } from '@/components/temperature-targets/TemperatureTargetsPage';
 import { LoginPage } from '@/components/auth/LoginPage';
 import { ChangelogBanner } from '@/components/layout/ChangelogBanner';
 import { api, authApi } from '@/lib/api';
@@ -62,13 +64,17 @@ function PageContent() {
       return <SettingsPage />;
     case 'analytics':
       return <AnalyticsPage />;
+    case 'drives':
+      return <DrivesPage />;
+    case 'temperature-targets':
+      return <TemperatureTargetsPage />;
     default:
       return <SystemOverview />;
   }
 }
 
 export default function Home() {
-  const { setBackendName, setSafeMode } = useAppStore();
+  const { setBackendName, setSafeMode, setUpdateCheck } = useAppStore();
   const { authRequired, authenticated, checking, setAuth, logout } = useAuthStore();
   const { setTempUnit, setSensorLabels } = useSettingsStore();
 
@@ -134,9 +140,24 @@ export default function Home() {
         const { labels } = await api.getSensorLabels();
         setSensorLabels(labels);
       } catch { /* non-critical */ }
+
+      // Check for available updates (non-critical, cached 1 h on server)
+      try {
+        const info = await api.update.check();
+        setUpdateCheck(info);
+      } catch { /* non-critical */ }
     };
     init();
-  }, [setBackendName, setSafeMode, setTempUnit, setSensorLabels, checking, authRequired, authenticated]);
+
+    // Re-check every hour
+    const updateInterval = setInterval(async () => {
+      try {
+        const info = await api.update.check();
+        setUpdateCheck(info);
+      } catch { /* ignore */ }
+    }, 3_600_000);
+    return () => clearInterval(updateInterval);
+  }, [setBackendName, setSafeMode, setTempUnit, setSensorLabels, setUpdateCheck, checking, authRequired, authenticated]);
 
   // Show loading spinner while checking session
   if (checking) {

@@ -5,7 +5,7 @@ import { useAppStore } from '@/stores/appStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useSensors } from '@/hooks/useSensors';
 import { api } from '@/lib/api';
-import { formatTemp, tempUnitSymbol } from '@/lib/tempUnit';
+import { formatTemp, tempUnitSymbol, fToC } from '@/lib/tempUnit';
 import { Bell, Plus, Trash2, AlertTriangle, CheckCircle, X } from 'lucide-react';
 import type { AlertRule } from '@/lib/types';
 
@@ -43,10 +43,12 @@ export function AlertsPage() {
 
   const handleAddRule = async () => {
     if (!newSensorId) return;
+    // Backend stores thresholds in Celsius — convert if user entered °F
+    const thresholdC = tempUnit === 'F' ? Math.round(fToC(newThreshold)) : newThreshold;
     const rule: AlertRule = {
       id: `alert_${Date.now()}`,
       sensor_id: newSensorId,
-      threshold: newThreshold,
+      threshold: thresholdC,
       name: newName || `Alert on ${newSensorId}`,
       enabled: true,
     };
@@ -151,8 +153,8 @@ export function AlertsPage() {
                   type="number"
                   value={newThreshold}
                   onChange={(e) => setNewThreshold(Number(e.target.value))}
-                  min={20}
-                  max={110}
+                  min={tempUnit === 'F' ? 68 : 20}
+                  max={tempUnit === 'F' ? 230 : 110}
                   className="w-full px-3 py-2 rounded-lg text-sm border outline-none"
                   style={{ background: 'var(--bg)', borderColor: 'var(--border)', color: 'var(--text)' }}
                 />
@@ -228,8 +230,8 @@ export function AlertsPage() {
             </div>
           ) : (
             <div className="max-h-64 overflow-y-auto divide-y" style={{ borderColor: 'var(--border)' }}>
-              {[...alertEvents].reverse().map((event, i) => (
-                <div key={i} className="px-4 py-2.5 flex items-center justify-between">
+              {[...alertEvents].reverse().map((event) => (
+                <div key={`${event.timestamp}-${event.rule_id}`} className="px-4 py-2.5 flex items-center justify-between">
                   <div>
                     <p className="text-sm" style={{ color: 'var(--text)' }}>{event.message}</p>
                     <p className="text-xs mt-0.5" style={{ color: 'var(--text-secondary)' }}>

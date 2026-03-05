@@ -108,8 +108,11 @@ class TestMachineMonitorService:
 
             service = MachineMonitorService(repo, fetcher=failing_fetcher)
             for _ in range(3):
+                # Reset backoff and poll-interval guards so each iteration
+                # actually polls regardless of elapsed time.
+                service._next_allowed_poll.clear()
+                service._last_polled.clear()
                 await service.poll_once()
-                await asyncio.sleep(0.55)
 
             loaded = await repo.get(machine["id"])
             assert loaded is not None

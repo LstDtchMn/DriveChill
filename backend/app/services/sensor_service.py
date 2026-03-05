@@ -31,6 +31,7 @@ class SensorService:
         self._task: asyncio.Task | None = None
         self._listeners: list[asyncio.Queue] = []
         self._consecutive_failures: int = 0
+        self._drive_readings: list[SensorReading] = []
 
     @property
     def poll_interval(self) -> float:
@@ -102,14 +103,25 @@ class SensorService:
                 except asyncio.QueueFull:
                     pass
 
+    def update_drive_readings(self, readings: list[SensorReading]) -> None:
+        """Replace the drive temperature readings injected into each snapshot.
+
+        Called by DriveMonitorService after each temperature poll. These are
+        merged into the next sensor snapshot so they ride the existing
+        hdd_temp sensor channel.
+        """
+        self._drive_readings = list(readings)
+
     async def _poll_loop(self) -> None:
         while self._running:
             try:
                 readings = await self._backend.get_sensor_readings()
-                self._latest = readings
+                # Merge in drive temperature readings from the drive monitor
+                all_readings = readings + self._drive_readings
+                self._latest = all_readings
                 self._consecutive_failures = 0
 
-                snapshot = SensorSnapshot(timestamp=datetime.now(timezone.utc), readings=readings)
+                snapshot = SensorSnapshot(timestamp=datetime.now(timezone.utc), readings=all_readings)
                 self._history.append(snapshot)
                 self._notify_listeners(snapshot)
 

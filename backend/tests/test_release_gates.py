@@ -257,11 +257,11 @@ class TestQuietHoursGate:
 
             svc.set_activate_fn(activate)
 
-            # Insert a rule for the current day/time
-            now = datetime.now()
+            # Use UTC time to match QuietHoursService._check_schedule() which
+            # also uses datetime.now(timezone.utc)
+            now = datetime.now(timezone.utc)
             dow = now.weekday()
             start = now.strftime("%H:%M")
-            # End 1 hour from now
             end_hour = (now.hour + 1) % 24
             end = f"{end_hour:02d}:{now.minute:02d}"
 
@@ -272,7 +272,6 @@ class TestQuietHoursGate:
             )
             await db.commit()
 
-            # Run the schedule check
             await svc._check_schedule()
 
             await db.close()
@@ -297,7 +296,8 @@ class TestQuietHoursGate:
 
             svc.set_activate_fn(activate)
 
-            now = datetime.now()
+            # Use UTC time to match QuietHoursService._check_schedule()
+            now = datetime.now(timezone.utc)
             dow = now.weekday()
             start = now.strftime("%H:%M")
             end_hour = (now.hour + 1) % 24

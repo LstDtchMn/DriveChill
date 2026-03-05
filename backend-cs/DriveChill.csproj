@@ -8,8 +8,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>DriveChill</RootNamespace>
     <AssemblyName>DriveChill</AssemblyName>
-    <Version>1.5.0</Version>
-    <AssemblyVersion>1.5.0.0</AssemblyVersion>
+    <Version>2.1.0</Version>
+    <AssemblyVersion>2.1.0.0</AssemblyVersion>
 
     <!--
       UAC manifest — only embedded when explicitly requested (i.e. during dotnet publish).
@@ -28,6 +28,13 @@
     <None Include="..\frontend\out\**\*"
           CopyToOutputDirectory="PreserveNewest"
           Link="wwwroot\%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <!-- Exclude the test project directory from compilation -->
+  <ItemGroup>
+    <Compile Remove="Tests\**" />
+    <Content Remove="Tests\**" />
+    <None    Remove="Tests\**" />
   </ItemGroup>
 
   <ItemGroup>
