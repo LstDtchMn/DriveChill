@@ -179,6 +179,9 @@ public sealed class AuthController : ControllerBase
         if (user is null) return NotFound(new { detail = "User not found" });
         var hash = HashPasswordInternal(req.Password);
         await _db.SetUserPasswordAsync(userId, hash, ct);
+        // Invalidate all existing sessions — a stolen session cannot persist after
+        // an admin resets the password (GAP-2).
+        await _db.DeleteUserSessionsByUsernameAsync(user.Username, ct);
         var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
         _ = _db.LogAuthEventAsync("password_changed", ip, user.Username, "success", $"user_id={userId}");
         return Ok(new { success = true });
@@ -210,18 +213,34 @@ public sealed class AuthController : ControllerBase
     }
 
     [HttpPost("api-keys")]
-    public IActionResult CreateApiKey([FromBody] CreateApiKeyRequest req)
+    public async Task<IActionResult> CreateApiKey([FromBody] CreateApiKeyRequest req, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(req.Name))
             return BadRequest(new { error = "name is required" });
+
+        // Determine caller's role so the key's effective role can be capped.
+        var callerRole = "admin";
+        var callerUsername = (string?)null;
+        if (_settings.AuthRequired)
+        {
+            var token = Request.Cookies[SessionCookieName];
+            var session = await _sessions.ValidateSessionAsync(token, ct);
+            if (session is not null)
+            {
+                callerRole = session.Value.Role;
+                callerUsername = session.Value.Username;
+            }
+        }
+
         (ApiKeyRecord Metadata, string PlaintextKey) created;
         try
         {
-            created = _apiKeys.Create(req.Name, req.Scopes);
+            created = _apiKeys.Create(req.Name, req.Scopes,
+                requestingRole: callerRole, createdByUsername: callerUsername);
         }
         catch (ArgumentException ex)
         {
-            return UnprocessableEntity(new { error = ex.Message });
+            return UnprocessableEntity(new { detail = ex.Message });
         }
         return Ok(new
         {
@@ -234,7 +253,7 @@ public sealed class AuthController : ControllerBase
     public IActionResult RevokeApiKey(string keyId)
     {
         if (!_apiKeys.Revoke(keyId))
-            return NotFound(new { error = "API key not found" });
+            return NotFound(new { detail = "API key not found" });
         return Ok(new { success = true });
     }
 

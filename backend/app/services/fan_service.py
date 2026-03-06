@@ -9,16 +9,23 @@ from typing import TYPE_CHECKING
 from app.hardware.base import HardwareBackend
 from app.models.fan_curves import FanCurve
 from app.models.sensors import SensorReading, SensorType
+from app.services import prom_metrics
 
 if TYPE_CHECKING:
     from app.services.sensor_service import SensorService
     from app.services.alert_service import AlertService
     from app.services.webhook_service import WebhookService
     from app.services.temperature_target_service import TemperatureTargetService
+    from app.services.virtual_sensor_service import VirtualSensorService
 
 logger = logging.getLogger(__name__)
 
 TEMP_SENSOR_TYPES = {SensorType.CPU_TEMP, SensorType.GPU_TEMP, SensorType.HDD_TEMP, SensorType.CASE_TEMP}
+
+# Sensor types accepted as fan-curve / temperature-target inputs.
+# Load sensors (cpu_load, gpu_load) use the same 0-100 range as fan speed,
+# so existing curve interpolation works unchanged.
+CURVE_INPUT_SENSOR_TYPES = TEMP_SENSOR_TYPES | {SensorType.CPU_LOAD, SensorType.GPU_LOAD}
 
 
 def _find_temp_sensor_id(readings: list[SensorReading]) -> str:
@@ -73,6 +80,7 @@ class FanService:
         panic_hysteresis: float = 5.0,
         ramp_rate_pct_per_sec: float = 0.0,
         temp_target_service: TemperatureTargetService | None = None,
+        virtual_sensor_service: "VirtualSensorService | None" = None,
     ) -> None:
         self._backend = backend
         self._curves: list[FanCurve] = []
@@ -114,6 +122,21 @@ class FanService:
 
         # Temperature target service (optional — injected at startup)
         self._temp_target_svc = temp_target_service
+
+        # Virtual sensor service (optional — resolves computed sensors)
+        self._virtual_sensor_svc = virtual_sensor_service
+
+        # Startup safety: run fans at a safe fixed speed until curves are loaded
+        # or the safety window expires.
+        self._startup_safety_active: bool = True
+        self._startup_safety_speed: float = 50.0  # percent
+        self._startup_safety_duration: float = 15.0  # seconds
+        self._startup_safety_start: float = time.monotonic()
+
+        # Control transparency: per-fan source of the last applied speed.
+        # Sources: "startup_safety" | "panic_sensor" | "panic_temp" | "released"
+        #          | "profile" | "temperature_target" | "manual"
+        self._control_sources: dict[str, str] = {}
 
     # ------------------------------------------------------------------
     # Fan settings (min speed floor, zero-RPM)
@@ -225,6 +248,30 @@ class FanService:
             "reason": reason,
         }
 
+    @property
+    def startup_safety_active(self) -> bool:
+        return self._startup_safety_active
+
+    @property
+    def control_sources(self) -> dict[str, str]:
+        """Per-fan source of the last applied speed (B3 control transparency)."""
+        return dict(self._control_sources)
+
+    def _exit_startup_safety(self) -> None:
+        """Exit startup safety mode (curves are now loaded)."""
+        if self._startup_safety_active:
+            self._startup_safety_active = False
+            logger.info("Exiting startup safety mode — normal fan control active")
+
+    def _check_startup_safety_expired(self) -> bool:
+        """Check if the startup safety window has elapsed."""
+        if not self._startup_safety_active:
+            return False
+        if time.monotonic() - self._startup_safety_start >= self._startup_safety_duration:
+            self._exit_startup_safety()
+            return True
+        return False
+
     def lock_for_test(self, fan_id: str) -> None:
         """Prevent curve engine from touching a fan during benchmark runs."""
         self._test_locked_fans.add(fan_id)
@@ -276,7 +323,7 @@ class FanService:
                         logger.warning(
                             "Clearing released state — panic mode overrides release"
                         )
-                    await self._emergency_all_fans(100.0)
+                    await self._emergency_all_fans(100.0, source="panic_sensor")
                     continue
 
                 # Real snapshot received: clear sensor panic.
@@ -301,17 +348,32 @@ class FanService:
                         logger.warning(
                             "Clearing released state — panic mode overrides release"
                         )
-                    await self._emergency_all_fans(100.0)
+                    await self._emergency_all_fans(100.0, source="panic_temp")
                     continue
 
                 # User released fan control — don't apply any curves.
                 if self._released:
                     self._last_applied = {}
+                    self._control_sources = {}
                     continue
+
+                # Startup safety: hold fans at a safe fixed speed until
+                # curves are loaded or the safety window expires.
+                if self._startup_safety_active:
+                    self._check_startup_safety_expired()
+                    if self._startup_safety_active:
+                        await self._emergency_all_fans(
+                            self._startup_safety_speed, source="startup_safety"
+                        )
+                        continue
 
                 # Normal curve evaluation.
                 applied = await self.apply_curves(snapshot.readings)
                 self._last_applied = applied
+
+                # Update fan speed gauges
+                for fan_id, speed in applied.items():
+                    prom_metrics.fan_speed_pct.labels(fan_id).set(speed)
 
                 # Check alerts in the same loop.
                 if self._alert_service:
@@ -333,7 +395,7 @@ class FanService:
             except Exception:
                 logger.exception("Fan control loop error")
 
-    async def _emergency_all_fans(self, speed: float) -> None:
+    async def _emergency_all_fans(self, speed: float, source: str = "panic_temp") -> None:
         """Set ALL known fans to the given speed (used for panic mode)."""
         fan_ids = await self._backend.get_fan_ids()
         for fan_id in fan_ids:
@@ -342,6 +404,7 @@ class FanService:
             except Exception:
                 logger.exception("Failed to set emergency speed on fan %s", fan_id)
         self._last_applied = {fan_id: speed for fan_id in fan_ids}
+        self._control_sources = {fan_id: source for fan_id in fan_ids}
 
     # ------------------------------------------------------------------
     # Temperature panic logic
@@ -463,6 +526,7 @@ class FanService:
 
         # Applying a profile always re-enables software fan control.
         self._released = False
+        self._exit_startup_safety()
 
         if profile.preset != ProfilePreset.CUSTOM and profile.preset in PRESET_CURVES:
             fan_ids = await self._backend.get_fan_ids()
@@ -494,8 +558,12 @@ class FanService:
 
         sensor_values: dict[str, float] = {}
         for r in readings:
-            if r.sensor_type in TEMP_SENSOR_TYPES:
+            if r.sensor_type in CURVE_INPUT_SENSOR_TYPES:
                 sensor_values[r.id] = r.value
+
+        # Resolve virtual sensors so curves/targets can reference them
+        if self._virtual_sensor_svc is not None:
+            sensor_values = self._virtual_sensor_svc.resolve_all(sensor_values)
 
         # 1. Build curve-based speeds
         curve_speeds: dict[str, float] = {}
@@ -527,13 +595,19 @@ class FanService:
         # 3. Merge over union of fan IDs
         all_fan_ids = set(curve_speeds) | set(tt_speeds)
         applied: dict[str, float] = {}
+        applied_sources: dict[str, str] = {}
         for fan_id in all_fan_ids:
             if fan_id in self._test_locked_fans:
                 continue
-            applied[fan_id] = max(
-                curve_speeds.get(fan_id, 0.0),
-                tt_speeds.get(fan_id, 0.0),
-            )
+            curve_speed = curve_speeds.get(fan_id, 0.0)
+            tt_speed = tt_speeds.get(fan_id, 0.0)
+            applied[fan_id] = max(curve_speed, tt_speed)
+            # Dominant source: temperature_target wins when it provides the higher speed.
+            # tt_speed > 0 is used as a proxy for "this fan has an active temp target".
+            if tt_speed > 0.0 and tt_speed >= curve_speed:
+                applied_sources[fan_id] = "temperature_target"
+            else:
+                applied_sources[fan_id] = "profile"
 
         # Enforce per-fan minimum speed floor (zero-RPM fans exempt)
         for fan_id in applied:
@@ -566,4 +640,5 @@ class FanService:
         for fan_id, speed in applied.items():
             await self._backend.set_fan_speed(fan_id, speed)
 
+        self._control_sources = applied_sources
         return applied

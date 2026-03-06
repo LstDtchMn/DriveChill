@@ -115,6 +115,10 @@ class TemperatureTargetService:
             self._targets = targets
         logger.info("Loaded %d temperature target(s)", len(targets))
 
+    async def reload(self) -> None:
+        """Re-load all targets from DB. Called after config import."""
+        await self.load()
+
     def evaluate(self, sensor_map: dict[str, float]) -> dict[str, float]:
         """Evaluate all enabled targets and return {fan_id: required_speed}.
 

@@ -10,10 +10,12 @@ interface CurveEditorProps {
   onChange: (points: FanCurvePoint[]) => void;
   width?: number;
   height?: number;
-  /** Current temperature (°C) for the "you are here" operating point. */
+  /** Current temperature (°C) or load (%) for the "you are here" operating point. */
   currentTemp?: number;
   /** Current fan speed (%) for the "you are here" operating point. */
   currentSpeed?: number;
+  /** Override x-axis label (e.g. "Load (%)"). Defaults to temperature label. */
+  xAxisLabel?: string;
 }
 
 const PADDING = 40;
@@ -22,7 +24,7 @@ const GRID_LINES_Y = 10;
 
 export function CurveEditor({
   points, onChange, width = 500, height = 300,
-  currentTemp, currentSpeed,
+  currentTemp, currentSpeed, xAxisLabel,
 }: CurveEditorProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [dragging, setDragging] = useState<number | null>(null);
@@ -254,7 +256,7 @@ export function CurveEditor({
 
         {/* Axis titles */}
         <text x={width / 2} y={height - 0} fill="var(--text-secondary)" fontSize={11} textAnchor="middle">
-          Temperature ({tempUnitSymbol(tempUnit)})
+          {xAxisLabel || `Temperature (${tempUnitSymbol(tempUnit)})`}
         </text>
         <text x={12} y={height / 2} fill="var(--text-secondary)" fontSize={11}
           textAnchor="middle" transform={`rotate(-90, 12, ${height / 2})`}>

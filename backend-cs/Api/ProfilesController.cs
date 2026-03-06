@@ -10,11 +10,13 @@ public sealed class ProfilesController : ControllerBase
 {
     private readonly SettingsStore _store;
     private readonly FanService    _fans;
+    private readonly AlertService  _alerts;
 
-    public ProfilesController(SettingsStore store, FanService fans)
+    public ProfilesController(SettingsStore store, FanService fans, AlertService alerts)
     {
-        _store = store;
-        _fans  = fans;
+        _store  = store;
+        _fans   = fans;
+        _alerts = alerts;
     }
 
     /// <summary>GET /api/profiles</summary>
@@ -93,6 +95,10 @@ public sealed class ProfilesController : ControllerBase
         // Replace all active curves atomically so orphaned curves from the
         // previous profile don't linger.
         _fans.SetCurves(profile.Curves);
+
+        // Update alert service's pre-alert profile so future alert-triggered
+        // switches know which profile to revert to.
+        _alerts.SetPreAlertProfile(id);
 
         return Ok(profile);
     }

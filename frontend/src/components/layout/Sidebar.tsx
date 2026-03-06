@@ -1,7 +1,7 @@
 'use client';
 
 import { useAppStore } from '@/stores/appStore';
-import { LayoutDashboard, Activity, Bell, Settings, Snowflake, BarChart2, HardDrive, Thermometer } from 'lucide-react';
+import { LayoutDashboard, Activity, Bell, Settings, Snowflake, BarChart2, HardDrive, Thermometer, Moon } from 'lucide-react';
 import type { Page } from '@/lib/types';
 
 const NAV_ITEMS: { page: Page; label: string; icon: typeof LayoutDashboard }[] = [
@@ -11,6 +11,7 @@ const NAV_ITEMS: { page: Page; label: string; icon: typeof LayoutDashboard }[] =
   { page: 'alerts', label: 'Alerts', icon: Bell },
   { page: 'drives', label: 'Drives', icon: HardDrive },
   { page: 'analytics', label: 'Analytics', icon: BarChart2 },
+  { page: 'quiet-hours', label: 'Quiet Hours', icon: Moon },
   { page: 'settings', label: 'Settings', icon: Settings },
 ];
 
@@ -84,7 +85,7 @@ export function MobileNav() {
       className="fixed bottom-0 left-0 right-0 border-t px-2 py-2 z-40"
       style={{ borderColor: 'var(--border)', background: 'var(--bg-secondary)' }}
     >
-      <div className="grid grid-cols-7 gap-1">
+      <div className="grid grid-cols-4 gap-1">
         {NAV_ITEMS.map(({ page, label, icon: Icon }) => {
           const isActive = currentPage === page;
           const hasAlert = page === 'alerts' && activeAlerts.length > 0;

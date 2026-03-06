@@ -234,8 +234,14 @@ class AuthService:
         self,
         name: str,
         scopes: list[str] | None = None,
+        created_by_username: str | None = None,
+        requesting_role: str = "admin",
     ) -> tuple[dict, str]:
-        """Create an API key and return (metadata, plaintext_key_once)."""
+        """Create an API key and return (metadata, plaintext_key_once).
+
+        The key's effective role is capped to the caller's role: a viewer
+        cannot create an admin-scoped key.
+        """
         key_id = secrets.token_hex(8)
         plaintext_key = f"dc_live_{secrets.token_urlsafe(32)}"
         key_hash = hashlib.sha256(plaintext_key.encode("utf-8")).hexdigest()
@@ -243,11 +249,15 @@ class AuthService:
         now = datetime.now(timezone.utc).isoformat()
         normalized_scopes = _normalize_api_key_scopes(scopes)
         scopes_json = json.dumps(normalized_scopes, separators=(",", ":"), ensure_ascii=True)
+        # Cap role: a viewer-role caller cannot mint an admin key.
+        effective_role = "viewer" if requesting_role == "viewer" else "admin"
 
         await self._db.execute(
-            "INSERT INTO api_keys (id, name, key_prefix, key_hash, scopes_json, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (key_id, name.strip(), key_prefix, key_hash, scopes_json, now),
+            "INSERT INTO api_keys "
+            "(id, name, key_prefix, key_hash, scopes_json, created_at, created_by, role) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (key_id, name.strip(), key_prefix, key_hash, scopes_json, now,
+             created_by_username, effective_role),
         )
         await self._db.commit()
 
@@ -256,6 +266,8 @@ class AuthService:
             "name": name.strip(),
             "key_prefix": key_prefix,
             "scopes": normalized_scopes,
+            "role": effective_role,
+            "created_by": created_by_username,
             "created_at": now,
             "revoked_at": None,
             "last_used_at": None,
@@ -263,7 +275,8 @@ class AuthService:
 
     async def list_api_keys(self) -> list[dict]:
         cursor = await self._db.execute(
-            "SELECT id, name, key_prefix, scopes_json, created_at, revoked_at, last_used_at "
+            "SELECT id, name, key_prefix, scopes_json, created_at, revoked_at, last_used_at, "
+            "COALESCE(role, 'admin'), created_by "
             "FROM api_keys ORDER BY created_at DESC"
         )
         rows = await cursor.fetchall()
@@ -278,6 +291,8 @@ class AuthService:
                 "created_at": row[4],
                 "revoked_at": row[5],
                 "last_used_at": row[6],
+                "role": row[7],
+                "created_by": row[8],
             })
         return out
 
@@ -296,7 +311,8 @@ class AuthService:
             return None
         key_hash = hashlib.sha256(plaintext_key.encode("utf-8")).hexdigest()
         cursor = await self._db.execute(
-            "SELECT id, name, key_prefix, scopes_json, created_at, revoked_at "
+            "SELECT id, name, key_prefix, scopes_json, created_at, revoked_at, "
+            "COALESCE(role, 'admin') "
             "FROM api_keys WHERE key_hash = ? AND revoked_at IS NULL",
             (key_hash,),
         )
@@ -317,6 +333,7 @@ class AuthService:
             "name": row[1],
             "key_prefix": row[2],
             "scopes": scopes,
+            "role": row[6],
             "created_at": row[4],
             "revoked_at": row[5],
             "last_used_at": now,

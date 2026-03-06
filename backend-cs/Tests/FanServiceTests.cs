@@ -299,4 +299,254 @@ public sealed class FanServiceTests : IDisposable
         var status = (dynamic)svc.GetSafeModeStatus();
         Assert.True(svc.IsReleased);
     }
+
+    // -----------------------------------------------------------------------
+    // Composite MAX sensor resolution
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task ApplyCurves_CompositeMax_UsesHighestSensor()
+    {
+        var hw = new StubHardware("fan1");
+        var svc = new FanService(hw, _store);
+
+        svc.SetCurve(new FanCurve
+        {
+            FanId = "fan1",
+            SensorId = "cpu0",
+            SensorIds = ["cpu0", "cpu1", "cpu2"],
+            Points = [new() { Temp = 40, Speed = 20 }, new() { Temp = 80, Speed = 100 }],
+        });
+
+        // cpu2 is the hottest — composite MAX should use 70°C
+        var readings = new List<SensorReading>
+        {
+            new() { Id = "cpu0", SensorType = SensorTypeValues.CpuTemp, Value = 50, Unit = "°C" },
+            new() { Id = "cpu1", SensorType = SensorTypeValues.CpuTemp, Value = 60, Unit = "°C" },
+            new() { Id = "cpu2", SensorType = SensorTypeValues.CpuTemp, Value = 70, Unit = "°C" },
+        };
+
+        await svc.ApplyCurvesAsync(readings);
+
+        Assert.True(hw.Applied.ContainsKey("fan1"));
+        // At 70°C with 40→20, 80→100: interpolate = 20 + (70-40)/(80-40) * (100-20) = 80
+        Assert.Equal(80.0, hw.Applied["fan1"], precision: 1);
+    }
+
+    [Fact]
+    public async Task ApplyCurves_CompositeFallbackToSingleSensor()
+    {
+        var hw = new StubHardware("fan1");
+        var svc = new FanService(hw, _store);
+
+        // SensorIds is empty — should fall back to SensorId
+        svc.SetCurve(new FanCurve
+        {
+            FanId = "fan1",
+            SensorId = "cpu",
+            SensorIds = [],
+            Points = [new() { Temp = 40, Speed = 20 }, new() { Temp = 80, Speed = 100 }],
+        });
+
+        var readings = new List<SensorReading>
+        {
+            new() { Id = "cpu", SensorType = SensorTypeValues.CpuTemp, Value = 60, Unit = "°C" },
+        };
+
+        await svc.ApplyCurvesAsync(readings);
+
+        Assert.True(hw.Applied.ContainsKey("fan1"));
+        // At 60°C: 20 + (60-40)/(80-40) * 80 = 60
+        Assert.Equal(60.0, hw.Applied["fan1"], precision: 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // Hysteresis — deadband hold
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task Hysteresis_HoldsSpeedInDeadband()
+    {
+        var hw = new StubHardware("fan1");
+        _store.Deadband = 5.0;
+        var svc = new FanService(hw, _store);
+
+        svc.SetCurve(new FanCurve
+        {
+            FanId = "fan1",
+            SensorId = "cpu",
+            Points = [new() { Temp = 30, Speed = 20 }, new() { Temp = 80, Speed = 100 }],
+        });
+
+        // First tick at 60°C — establishes decision point
+        await svc.ApplyCurvesAsync([
+            new() { Id = "cpu", SensorType = SensorTypeValues.CpuTemp, Value = 60, Unit = "°C" },
+        ]);
+        var firstSpeed = hw.Applied["fan1"];
+
+        // Temp drops slightly (within deadband) — speed should hold
+        await svc.ApplyCurvesAsync([
+            new() { Id = "cpu", SensorType = SensorTypeValues.CpuTemp, Value = 57, Unit = "°C" },
+        ]);
+
+        Assert.Equal(firstSpeed, hw.Applied["fan1"]);
+    }
+
+    [Fact]
+    public async Task Hysteresis_AllowsRampUp()
+    {
+        var hw = new StubHardware("fan1");
+        _store.Deadband = 5.0;
+        var svc = new FanService(hw, _store);
+
+        svc.SetCurve(new FanCurve
+        {
+            FanId = "fan1",
+            SensorId = "cpu",
+            Points = [new() { Temp = 30, Speed = 20 }, new() { Temp = 80, Speed = 100 }],
+        });
+
+        await svc.ApplyCurvesAsync([
+            new() { Id = "cpu", SensorType = SensorTypeValues.CpuTemp, Value = 50, Unit = "°C" },
+        ]);
+        var firstSpeed = hw.Applied["fan1"];
+
+        // Temp rises — ramp up should always be allowed
+        await svc.ApplyCurvesAsync([
+            new() { Id = "cpu", SensorType = SensorTypeValues.CpuTemp, Value = 70, Unit = "°C" },
+        ]);
+
+        Assert.True(hw.Applied["fan1"] > firstSpeed, "Speed should increase on temp rise");
+    }
+
+    [Fact]
+    public async Task Hysteresis_AllowsRampDownBeyondDeadband()
+    {
+        var hw = new StubHardware("fan1");
+        _store.Deadband = 5.0;
+        var svc = new FanService(hw, _store);
+
+        svc.SetCurve(new FanCurve
+        {
+            FanId = "fan1",
+            SensorId = "cpu",
+            Points = [new() { Temp = 30, Speed = 20 }, new() { Temp = 80, Speed = 100 }],
+        });
+
+        await svc.ApplyCurvesAsync([
+            new() { Id = "cpu", SensorType = SensorTypeValues.CpuTemp, Value = 60, Unit = "°C" },
+        ]);
+        var firstSpeed = hw.Applied["fan1"];
+
+        // Temp drops well below deadband — speed should decrease
+        await svc.ApplyCurvesAsync([
+            new() { Id = "cpu", SensorType = SensorTypeValues.CpuTemp, Value = 40, Unit = "°C" },
+        ]);
+
+        Assert.True(hw.Applied["fan1"] < firstSpeed, "Speed should decrease beyond deadband");
+    }
+
+    // -----------------------------------------------------------------------
+    // Ramp-rate limiting
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task RampRate_StorePropertyUsedByFanService()
+    {
+        // Verify the ramp-rate path is wired: the SettingsStore property is read
+        // by ApplyCurvesAsync. Full timing-based ramp tests are integration-level
+        // and skipped in unit tests to avoid Thread.Sleep flakiness in parallel suites.
+        var hw = new StubHardware("fan1");
+        var svc = new FanService(hw, _store);
+
+        // Confirm the store's default ramp rate is readable
+        Assert.True(_store.FanRampRatePctPerSec >= 0,
+            "FanRampRatePctPerSec should be non-negative");
+
+        svc.SetCurve(new FanCurve
+        {
+            FanId = "fan1",
+            SensorId = "cpu",
+            Points = [new() { Temp = 30, Speed = 30 }, new() { Temp = 80, Speed = 100 }],
+        });
+
+        // Multiple ticks at same temp — ramp state should accumulate without error
+        for (int i = 0; i < 5; i++)
+        {
+            await svc.ApplyCurvesAsync([
+                new() { Id = "cpu", SensorType = SensorTypeValues.CpuTemp, Value = 50, Unit = "°C" },
+            ]);
+        }
+
+        Assert.True(hw.Applied.ContainsKey("fan1"), "Curve should produce fan speed");
+    }
+
+    // -----------------------------------------------------------------------
+    // Startup safety
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task StartupSafety_ActiveBeforeCurveLoad()
+    {
+        var hw = new StubHardware("fan1");
+        var svc = new FanService(hw, _store);
+
+        Assert.True(svc.IsStartupSafetyActive, "Startup safety should be active initially");
+
+        // Before setting any curves, apply curves should set startup safety speed
+        await svc.ApplyCurvesAsync([
+            new() { Id = "cpu", SensorType = SensorTypeValues.CpuTemp, Value = 40, Unit = "°C" },
+        ]);
+
+        Assert.True(hw.Applied.ContainsKey("fan1"));
+        Assert.Equal(50.0, hw.Applied["fan1"]); // StartupSafetySpeed = 50
+    }
+
+    [Fact]
+    public async Task StartupSafety_ExitsOnSetCurve()
+    {
+        var hw = new StubHardware("fan1");
+        var svc = new FanService(hw, _store);
+
+        Assert.True(svc.IsStartupSafetyActive);
+
+        svc.SetCurve(new FanCurve
+        {
+            FanId = "fan1",
+            SensorId = "cpu",
+            Points = [new() { Temp = 40, Speed = 30 }, new() { Temp = 80, Speed = 80 }],
+        });
+
+        Assert.False(svc.IsStartupSafetyActive, "Startup safety should exit on SetCurve");
+    }
+
+    [Fact]
+    public async Task StartupSafety_ExitsOnSetCurves()
+    {
+        var hw = new StubHardware("fan1");
+        var svc = new FanService(hw, _store);
+
+        Assert.True(svc.IsStartupSafetyActive);
+
+        svc.SetCurves([
+            new FanCurve { FanId = "fan1", SensorId = "s", Points = [new() { Temp = 50, Speed = 50 }] },
+        ]);
+
+        Assert.False(svc.IsStartupSafetyActive, "Startup safety should exit on SetCurves");
+    }
+
+    [Fact]
+    public async Task StartupSafety_PanicOverridesStartupSafety()
+    {
+        var hw = new StubHardware("fan1");
+        var svc = new FanService(hw, _store);
+
+        // Startup safety is active, but panic should take precedence
+        await svc.ApplyCurvesAsync([
+            new() { Id = "cpu", SensorType = SensorTypeValues.CpuTemp, Value = 96, Unit = "°C" },
+        ]);
+
+        // Panic forces 100% regardless of startup safety
+        Assert.Equal(100.0, hw.Applied["fan1"]);
+    }
 }

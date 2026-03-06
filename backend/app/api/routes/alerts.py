@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.api.dependencies.auth import require_auth, require_csrf
 
-from app.services.alert_service import AlertRule
+from app.services.alert_service import AlertRule, AlertAction
 
 router = APIRouter(prefix="/api/alerts", tags=["alerts"])
 

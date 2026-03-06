@@ -6,8 +6,8 @@ import { useSettingsStore } from '@/stores/settingsStore';
 import { useSensors } from '@/hooks/useSensors';
 import { api } from '@/lib/api';
 import { formatTemp, tempUnitSymbol, fToC } from '@/lib/tempUnit';
-import { Bell, Plus, Trash2, AlertTriangle, CheckCircle, X } from 'lucide-react';
-import type { AlertRule } from '@/lib/types';
+import { Bell, Plus, Trash2, AlertTriangle, CheckCircle, X, Zap } from 'lucide-react';
+import type { AlertRule, AlertAction, Profile } from '@/lib/types';
 import { useCanWrite } from '@/hooks/useCanWrite';
 import { ViewerBanner } from '@/components/ui/ViewerBanner';
 
@@ -21,39 +21,49 @@ export function AlertsPage() {
   const [newSensorId, setNewSensorId] = useState('');
   const [newThreshold, setNewThreshold] = useState(80);
   const [newName, setNewName] = useState('');
+  const [newActionEnabled, setNewActionEnabled] = useState(false);
+  const [newActionProfileId, setNewActionProfileId] = useState('');
+  const [newActionRevert, setNewActionRevert] = useState(true);
+  const [profiles, setProfiles] = useState<Profile[]>([]);
 
   const allTempSensors = [...cpuTemps, ...gpuTemps, ...hddTemps, ...caseTemps];
 
   useEffect(() => {
-    const fetchRules = async () => {
+    const fetchData = async () => {
       try {
-        const data = await api.getAlerts();
-        setRules(data.rules);
-        // Seed the store with existing alert events so the event log
-        // is populated on initial page load (not only via WebSocket).
-        if (data.events && data.events.length > 0) {
-          addAlertEvents(data.events);
+        const [alertData, profileData] = await Promise.all([
+          api.getAlerts(),
+          api.getProfiles(),
+        ]);
+        setRules(alertData.rules);
+        if (alertData.events && alertData.events.length > 0) {
+          addAlertEvents(alertData.events);
         }
-        if (data.active) {
-          setActiveAlerts(data.active);
+        if (alertData.active) {
+          setActiveAlerts(alertData.active);
         }
+        setProfiles(profileData.profiles || []);
       } catch {
         // API not available
       }
     };
-    fetchRules();
+    fetchData();
   }, [addAlertEvents, setActiveAlerts]);
 
   const handleAddRule = async () => {
     if (!newSensorId) return;
     // Backend stores thresholds in Celsius — convert if user entered °F
     const thresholdC = tempUnit === 'F' ? Math.round(fToC(newThreshold)) : newThreshold;
+    const action: AlertAction | null = newActionEnabled && newActionProfileId
+      ? { type: 'switch_profile', profile_id: newActionProfileId, revert_after_clear: newActionRevert }
+      : null;
     const rule: AlertRule = {
       id: `alert_${Date.now()}`,
       sensor_id: newSensorId,
       threshold: thresholdC,
       name: newName || `Alert on ${newSensorId}`,
       enabled: true,
+      action,
     };
 
     try {
@@ -66,6 +76,9 @@ export function AlertsPage() {
       setNewName('');
       setNewSensorId('');
       setNewThreshold(80);
+      setNewActionEnabled(false);
+      setNewActionProfileId('');
+      setNewActionRevert(true);
     } catch {
       // Handle error
     }
@@ -171,6 +184,46 @@ export function AlertsPage() {
                 </button>
               </div>
             </div>
+            {/* Action: profile switching */}
+            <div className="mt-3 pt-3" style={{ borderTop: '1px solid var(--border)' }}>
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={newActionEnabled}
+                  onChange={(e) => setNewActionEnabled(e.target.checked)}
+                />
+                <Zap size={14} style={{ color: 'var(--accent)' }} />
+                Switch profile when triggered
+              </label>
+              {newActionEnabled && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-2">
+                  <div>
+                    <label className="text-xs font-medium mb-1 block" style={{ color: 'var(--text-secondary)' }}>Target Profile</label>
+                    <select
+                      value={newActionProfileId}
+                      onChange={(e) => setNewActionProfileId(e.target.value)}
+                      className="w-full px-3 py-2 rounded-lg text-sm border outline-none"
+                      style={{ background: 'var(--bg)', borderColor: 'var(--border)', color: 'var(--text)' }}
+                    >
+                      <option value="">Select profile...</option>
+                      {profiles.map((p) => (
+                        <option key={p.id} value={p.id}>{p.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex items-end">
+                    <label className="flex items-center gap-2 text-sm cursor-pointer pb-2">
+                      <input
+                        type="checkbox"
+                        checked={newActionRevert}
+                        onChange={(e) => setNewActionRevert(e.target.checked)}
+                      />
+                      Revert when alert clears
+                    </label>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -202,6 +255,12 @@ export function AlertsPage() {
                       <p className="text-sm font-medium" style={{ color: 'var(--text)' }}>{rule.name}</p>
                       <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
                         {rule.sensor_id} &ge; {formatTemp(rule.threshold, tempUnit)}
+                        {rule.action?.profile_id && (
+                          <span style={{ color: 'var(--accent)' }}>
+                            {' '}· switches to {profiles.find((p) => p.id === rule.action?.profile_id)?.name || rule.action.profile_id}
+                            {rule.action.revert_after_clear ? ' (reverts)' : ''}
+                          </span>
+                        )}
                       </p>
                     </div>
                   </div>

@@ -1,5 +1,79 @@
 # Changelog
 
+## [2.3.0] - Unreleased
+
+### Features — C# Fan-Control Parity
+- **Composite sensor curves (C#)**: `FanService.ApplyCurvesAsync` now supports `SensorIds` list with MAX resolution — parity with Python `resolve_composite_temp`
+- **Hysteresis deadband (C#)**: 3°C deadband prevents fan oscillation near curve thresholds
+- **Ramp-rate limiting (C#)**: configurable `fan_ramp_rate_pct_per_sec` clamps speed changes to prevent audible jumps; stored in `SettingsStore`
+- **PID temperature control (C#)**: full PID controller with integral anti-windup and derivative EMA in `TemperatureTargetService` — parity with Python
+- **Dangerous-curve safety gate (C#)**: `PUT /api/fans/curves` returns 409 when curve has dangerously low speeds at high temps; `allow_dangerous=true` overrides
+- **Startup safety profile**: both backends run fans at 50% for 15 seconds on startup before curves load; automatically exits when a profile is applied or the safety window expires; panic mode overrides startup safety
+
+### Features — Security & Auth
+- **API key role ceiling**: migration `013_api_key_role.sql` adds `created_by` and `role` columns; viewer-role users create viewer-scoped keys only
+- **Password-change session invalidation**: both backends delete all user sessions immediately after password change
+- **WebSocket time-based revalidation**: Python and C# revalidate session every 60 seconds (replaces message-count-based)
+- **Stale auth cleanup**: removed dead `require_write_role` helper from Python auth dependencies; regression test added
+
+### Features — Infrastructure
+- **C# drive provider abstraction**: `IDriveProvider` interface with `SmartctlDriveProvider` and `MockDriveProvider` implementations; `DriveMonitorService` uses DI
+- **Prometheus metrics (both backends)**: `/metrics` endpoint gated behind `DRIVECHILL_PROMETHEUS_ENABLED=true`; C# uses `DriveChillMetrics.cs`
+- **API key scopes UI**: scope picker with domain grouping and role badge in Settings page
+- **Quiet Hours frontend**: full CRUD page with weekly schedule view
+- **Calibration auto-apply**: "Apply Calibration" button in `FanTestPanel` writes measured min speed to fan settings
+- **Config export/import**: `GET/POST /api/settings/export|import` in both backends + frontend Settings
+- **PID UI**: temperature targets page shows PID mode toggle + Kp/Ki/Kd sliders
+- **Cross-platform E2E**: `cross-env` added for Windows-compatible Playwright dev server startup
+
+### Features — Alert-Triggered Profile Switching
+- **`revert_after_clear` semantics (both backends)**: when an alert rule's action has `revert_after_clear=false`, the backend no longer reverts to the pre-alert profile on clear; prior implementation always reverted. Runtime behavior is now deterministic: any still-active suppress rule prevents revert.
+- **C# `AlertService.InjectEvent()`**: new public method allows `DriveMonitorService` (and future callers) to inject synthetic `AlertEvent` records into the in-memory event list without going through the threshold-evaluation path; list is capped at 500 entries.
+
+### Features — SMART Trend Alerting
+- **`SmartTrendAlert.ActualValue` / `Threshold`** (C#): structured alert payloads now carry the real numeric values so downstream consumers (websocket, notification channels) receive actionable context rather than empty zeros.
+- **`DriveMonitorService` → `AlertService` wiring** (C#): SMART trend alerts (reallocated-sector increase, wear crossings, power-on-hours) are now injected into the alert pipeline via `AlertService.InjectEvent` on every poll cycle; previously they were detected but never dispatched.
+
+### Features — Notification Channel Expansion
+- **`NotificationChannelService` wired into C# `SensorWorker` alert fan-out**: HTTP notification channels (ntfy, Discord, Slack, generic webhook) are now dispatched concurrently alongside webhooks, email, and push on every alert event; previously the service existed but was never called from the poll loop.
+- **SSRF hardening at save time and send time (both backends)**: `POST /api/notification-channels` and `PUT /api/notification-channels/{id}` reject private/loopback/link-local URLs in `url` and `webhook_url` config fields at controller level; the service layer re-validates before any outbound HTTP, preventing bypass via direct DB writes.
+
+### Features — Backup / Export Completeness
+- **`action_json` preserved in backup round-trips** (Python): `export_backup` and `import_backup` now include the `action_json` column on `alert_rules`, so alert-triggered profile-switch actions survive export/restore cycles.
+- **`notification_channels` preserved in backup round-trips** (Python): `export_backup` and `import_backup` include the `notification_channels` table; old backups that predate this field import cleanly with zero channel records.
+- **C# settings export/import includes notification channels**: `GET /api/settings/export` serializes all notification channels; `POST /api/settings/import` restores them, skipping duplicates.
+
+### Features — liquidctl USB Controller
+- **Duplicate-device disambiguation**: `_make_id_prefix` now incorporates `device.address` (USB bus/port path) so two identical controller models on different ports produce distinct fan IDs; all `liquidctl status` and `set` calls pass `--address` to target the correct device.
+
+### Features — Virtual Sensors (B1)
+- **Virtual sensor CRUD + evaluation (both backends)**: six types — `max`, `min`, `avg`, `weighted`, `delta`, `moving_avg`; stored in `virtual_sensors` table (migration `014_virtual_sensors.sql`); evaluated every control tick before curves and temperature targets run; frontend CRUD in Settings page
+- **Virtual sensors as curve/target inputs**: fan curves and temperature targets can reference virtual sensor IDs; virtual sensor values are resolved into the sensor value map before control evaluation
+
+### Features — Load-Based Fan Inputs (B2)
+- **CPU/GPU load as curve input (both backends)**: `cpu_load` and `gpu_load` sensor types accepted by `apply_curves` / `ApplyCurvesAsync`; frontend curve editor exposes a "Load" sensor group alongside temperature sensors; x-axis label changes to "Load (%)" when a load sensor is selected
+
+### Features — Control Transparency (B3)
+- **Per-fan control source tracking (both backends)**: `FanService` and `FanService.cs` now track the dominant source for each fan's last applied speed: `profile`, `temperature_target`, `startup_safety`, `panic_sensor`, `panic_temp`, `released`, or `manual`
+- **`GET /api/fans/status` extended**: response now includes `control_sources` (per-fan source map) and `startup_safety_active` flag; C# `GetSafeModeStatus()` extended to match
+- **Frontend control source badge**: fan curve cards show a live "▸ Profile / Temp Target / Startup Safety / ..." badge sourced from the WebSocket `control_sources` field
+
+### Features — Frontend E2E Coverage (A2.2)
+- **`quiet-hours.spec.ts`**: new Playwright spec for Quiet Hours CRUD (page load, add-rule form, day/time display)
+- **`settings.spec.ts` extended**: export and import config section visibility tests
+- **`fan-curves.spec.ts` extended**: benchmark calibration section presence and no-crash test
+- **`temperature-targets.spec.ts` extended**: PID field accessibility test and target temperature input validation
+
+### Tests
+- Python: 537 passing, 13 skipped (startup safety + control transparency tests in `test_fan_service_startup_safety.py`; virtual sensor service tests; all prior passing)
+- C#: 205 passing (startup safety FanService tests; all prior passing)
+
+### Migrations
+- `014_virtual_sensors.sql`: `virtual_sensors` table with `id`, `name`, `type`, `source_ids_json`, `weights_json`, `window_seconds`, `offset`, `enabled`, `created_at`, `updated_at`
+
+### Migrations
+- `013_api_key_role.sql`: adds `created_by TEXT`, `role TEXT NOT NULL DEFAULT 'admin'` to `api_keys`
+
 ## [2.2.0] - 2026-03-05
 
 ### Features

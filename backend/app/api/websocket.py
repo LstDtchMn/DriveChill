@@ -1,18 +1,20 @@
 import asyncio
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from http.cookies import SimpleCookie
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.api.dependencies.auth import require_ws_auth, _auth_enabled
+from app.services import prom_metrics
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# Revalidate the WS session token every ~60 messages (~1 minute at 1s polling).
-_SESSION_REVALIDATE_INTERVAL = 60
+# Revalidate the WS session token every 60 seconds (wall-clock, not message count).
+_SESSION_REVALIDATE_SECONDS = 60.0
 
 
 @router.websocket("/api/ws")
@@ -37,6 +39,7 @@ async def websocket_endpoint(websocket: WebSocket):
         return
 
     await websocket.accept()
+    prom_metrics.websocket_connections_active.inc()
 
     sensor_service = websocket.app.state.sensor_service
     alert_service = websocket.app.state.alert_service
@@ -55,7 +58,7 @@ async def websocket_endpoint(websocket: WebSocket):
         cookies = SimpleCookie(cookie_header)
         morsel = cookies.get("drivechill_session")
         ws_session_token = morsel.value if morsel else None
-    msg_count = 0
+    last_revalidate = time.monotonic()
 
     try:
         while True:
@@ -67,11 +70,9 @@ async def websocket_endpoint(websocket: WebSocket):
 
             # Periodic session revalidation: close socket if session expired
             # or was invalidated (e.g., user logged out from another tab).
-            msg_count += 1
-            if (
-                ws_session_token
-                and msg_count % _SESSION_REVALIDATE_INTERVAL == 0
-            ):
+            now = time.monotonic()
+            if ws_session_token and now - last_revalidate >= _SESSION_REVALIDATE_SECONDS:
+                last_revalidate = now
                 auth_service = websocket.app.state.auth_service
                 session = await auth_service.validate_session(ws_session_token)
                 if session is None:
@@ -136,4 +137,5 @@ async def websocket_endpoint(websocket: WebSocket):
         # M-1: log unexpected errors so they're visible in server output
         logger.exception("WebSocket error")
     finally:
+        prom_metrics.websocket_connections_active.dec()
         sensor_service.unsubscribe(queue)

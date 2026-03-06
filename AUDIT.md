@@ -1,9 +1,8 @@
-# DriveChill v1.6.0 — Feature & Security Audit Document
+# DriveChill Feature & Security Audit Document
 
-**Generated:** 2026-03-03
-**Version:** 1.6.0
+**Generated:** 2026-03-03 | **Updated:** 2026-03-06 (audit remediation: SSRF, revert_after_clear, C# fan-out wiring, backup completeness, liquidctl dedup; Milestone A+B complete: startup safety, control transparency, virtual sensors, load-based inputs, auth cleanup, Playwright fix, E2E coverage)
+**Version:** 2.3.0-dev (branch: `claude/fan-temperature-controller-kNqMx`)
 **Repo:** DriveChill-1
-**Branch:** main (`bbf6fef`)
 
 ---
 
@@ -42,7 +41,7 @@ DriveChill is a PC fan temperature controller with three independently deployabl
 | C# backend | ASP.NET Core 10 + Microsoft.Data.Sqlite | `backend-cs/Program.cs` |
 | Frontend | Next.js 14 static export + Zustand | `frontend/out/` (served by either backend) |
 
-**Database:** SQLite in WAL mode. 7 sequential migrations (`001`–`007`) applied at startup.
+**Database:** SQLite in WAL mode. 13 sequential migrations (`001`–`013`) applied at startup.
 
 **Hardware backends:**
 
@@ -362,7 +361,7 @@ frame-ancestors 'none';
 
 ### WebSocket (`/api/ws`)
 
-- **Auth:** Session token validated on connect; re-validated every ~60 messages
+- **Auth:** Session token validated on connect; re-validated every 60 seconds (time-based, both backends)
 - **Heartbeat:** 5-second interval (server pings; client timeout fallback)
 - **Message payload:**
   ```json
@@ -374,7 +373,9 @@ frame-ancestors 'none';
     "alerts": [...],
     "active_alerts": [...],
     "safe_mode": { "active": bool, "reason": str },
-    "fan_test": [...]
+    "fan_test": [...],
+    "control_sources": { "fan_id": "profile|temperature_target|startup_safety|panic_sensor|panic_temp|released|manual" },
+    "startup_safety_active": bool
   }
   ```
 - **Close codes:** `1008` on auth failure; `1000` on clean shutdown
@@ -387,18 +388,24 @@ frame-ancestors 'none';
 ### Control Loop
 
 1. Sensor service polls hardware at configurable interval (0.5–30s, default 1s)
-2. For each active curve: evaluate temperature → interpolated speed via curve points
-3. Apply maximum speed across all applicable curves per fan
-4. Hysteresis: 3°C deadband prevents oscillation near threshold points
-5. Minimum speed floor enforced per-fan (persisted in `fan_settings` table)
-6. Zero-RPM: fans flagged as `zero_rpm_capable` allowed to reach 0%
+2. **Virtual sensor resolution**: virtual sensors evaluated before control tick; composed from real sensors via max/min/avg/weighted/delta/moving_avg
+3. **Startup safety**: fans run at 50% for 15 seconds before curves load (both backends)
+4. For each active curve: evaluate temperature or load → interpolated speed via curve points (cpu_load/gpu_load supported as curve inputs)
+5. Composite sensor resolution: MAX of `sensor_ids` list (both backends)
+6. Apply maximum speed across all applicable curves per fan; temperature targets can override upward (hottest-wins)
+7. **Control transparency**: per-fan `control_source` recorded (`profile`, `temperature_target`, `startup_safety`, `panic_sensor`, `panic_temp`, `released`, `manual`); exposed via REST `/api/fans/status` and WebSocket
+8. Hysteresis: 3°C deadband prevents oscillation near threshold points (both backends)
+9. Ramp-rate limiting: configurable `fan_ramp_rate_pct_per_sec` clamps speed changes (both backends)
+10. Minimum speed floor enforced per-fan (persisted in `fan_settings` table)
+11. Zero-RPM: fans flagged as `zero_rpm_capable` allowed to reach 0%
 
 ### Safety Modes
 
 | Mode | Trigger | Behavior |
 |------|---------|----------|
-| Sensor panic | 3+ consecutive sensor read failures | All fans → 100%, overrides release |
-| Temperature panic | CPU >95°C or GPU >90°C | All fans → 100%, overrides release |
+| Startup safety | Service start (first 15s) | All fans → 50%, exits on profile load or timer expiry |
+| Sensor panic | 3+ consecutive sensor read failures | All fans → 100%, overrides release and startup safety |
+| Temperature panic | CPU >95°C or GPU >90°C | All fans → 100%, overrides release and startup safety |
 | Released | User explicitly releases control | Fans return to BIOS/firmware auto |
 
 ### Curve Presets
@@ -463,11 +470,20 @@ Hub instance polls N remote agent instances. Each agent runs its own DriveChill 
 - Test email endpoint for validation
 - Python: `aiosmtplib`; C#: `System.Net.Mail`
 
+### HTTP Notification Channels
+
+- Supported types: `ntfy`, `discord`, `slack`, `generic_webhook`
+- CRUD: `GET/POST /api/notification-channels`, `GET/PUT/DELETE /api/notification-channels/{id}`
+- SSRF protection: `url` and `webhook_url` fields validated at save time (controller) and send time (service)
+- C# backend wires `NotificationChannelService.SendAlertAllAsync` into `SensorWorker` fan-out
+- Python backend calls `send_alert_all` from `alert_service` on threshold crossing
+
 ### Alert Dispatch
 
 - Triggered by `alert_service` when rule threshold crossed
 - Fire-and-forget delivery (non-blocking `asyncio.create_task` / `Task.Run`)
 - Per-rule cooldown (default 300s) prevents spam
+- SMART trend events injected via `AlertService.InjectEvent` (C#) / `inject_event` (Python) from drive monitor
 
 ---
 
@@ -579,11 +595,12 @@ Hub instance polls N remote agent instances. Each agent runs its own DriveChill 
 
 ## 13. Test Coverage
 
-### Python Backend (334 tests)
+### Python Backend (537 passing, 13 skipped)
 
 | Test File | Tests | Coverage Area |
 |-----------|-------|---------------|
 | `test_alert_cooldown.py` | 6 | Alert cooldown, active alerts, event limit |
+| `test_alert_profile_switching.py` | 7 | Alert-triggered profile switch, `revert_after_clear` true/false, suppress-wins, multi-rule |
 | `test_analytics_contract.py` | — | Analytics API contract (history/stats/anomalies/regression/correlation/report) |
 | `test_analytics_downsampling.py` | 4 | §6.3 downsampling correctness: raw min/max preserved per bucket, no bleed-through |
 | `test_analytics_perf.py` | 7 | Analytics performance over 130k-row/30d dataset (all queries < 2 s) |
@@ -591,17 +608,20 @@ Hub instance polls N remote agent instances. Each agent runs its own DriveChill 
 | `test_api_key_scopes.py` | 4 | Scoped key filtering, wildcard matching |
 | `test_auth.py` | 19 | Login/logout/setup, rate limiting, lockout |
 | `test_auth_http.py` | 7 | HTTP auth (Bearer, X-API-Key), session revalidation |
-| `test_backup_restore.py` | 9 | Profile/curve/setting export/import, DB snapshots |
+| `test_backup_restore.py` | 12 | Profile/curve/setting export/import, DB snapshots, `action_json` round-trip, `notification_channels` round-trip, old-backup compat |
 | `test_composite_curves.py` | 3 | Composite temp resolution (CPU/GPU/HDD) |
 | `test_drive_monitoring.py` | 60 | ATA/NVMe parsing, device path validation, health normalization, self-test state, route validation, degraded mode |
 | `test_drives_parity.py` | 38 | Cross-backend contract parity for all `/api/drives/*` endpoints |
 | `test_drives_routes.py` | 30 | Drive route integration tests |
 | `test_fan_settings.py` | 4 | Per-fan min speed, zero-RPM, persistence |
+| `test_liquidctl_backend.py` | 16 | liquidctl parsing, discovery, sensor reads, fan control, duplicate-device disambiguation |
 | `test_machine_registry.py` | 13 | Machine CRUD, polling, snapshots, backoff |
 | `test_migration_backup.py` | 6 | Migration execution, backup before migration |
+| `test_notification_channel_service.py` | 6 | SSRF delivery blocking (ntfy/discord/slack/generic), safe-URL pass-through, multi-channel tracking |
 | `test_profile_import_export.py` | 8 | Profile JSON import/export, curve ID freshening |
 | `test_ramp_rate.py` | 5 | Fan ramp-rate service (gradual acceleration, deceleration) |
 | `test_release_gates.py` | 20 | Safety gates (dangerous curves, active profile deletion, quiet hours) |
+| `test_fan_service_startup_safety.py` | 14 | Startup safety active state, expiry, apply_profile exit, control loop 50%, panic override; control transparency per-fan sources |
 | `test_security_regressions.py` | 4 | Auth bypass, CSRF, credential redaction |
 | `test_sensor_labels.py` | 5 | Label CRUD, max length, collision handling |
 | `test_settings_ttl_validation.py` | 1 | Session TTL enforcement |
@@ -613,13 +633,15 @@ Hub instance polls N remote agent instances. Each agent runs its own DriveChill 
 | Type | Tool | Status |
 |------|------|--------|
 | TypeScript type-check | `npm run build` | Passing (0 errors) |
-| E2E tests | Playwright | 5 spec files (dashboard, fan-curves, alerts, settings, drives) |
+| E2E tests | Playwright | 8 spec files (dashboard, fan-curves, alerts, settings, drives, analytics, temperature-targets, quiet-hours) |
 
-### C# Backend
+### C# Backend (205 passing)
 
 | Type | Tool | Status |
 |------|------|--------|
 | Build verification | `dotnet build` | Passing (0 warnings, 0 errors) |
+| Unit tests | `dotnet test` | 205 tests passing |
+| Test files | xUnit | AlertServiceTests (profile switching, `revert_after_clear`, InjectEvent), DriveMonitorServiceTests, FanServiceTests, TemperatureTargetServiceTests, AuthLogTests, FansControllerTests, MachinesControllerTests, NotificationChannelServiceTests (SSRF save-time + send-time), QuietHoursControllerTests, SettingsControllerTests (export/import notification channels), SmartTrendServiceTests, AnalyticsControllerTests |
 
 ---
 
@@ -627,16 +649,26 @@ Hub instance polls N remote agent instances. Each agent runs its own DriveChill 
 
 | Item | Status | Notes |
 |------|--------|-------|
-| E2E tests in CI | Not configured | Playwright tests exist but no GitHub Actions workflow runs them |
-| C# backend unit tests | None | C# backend verified via build only; no test project |
-| C# drive-monitoring provider layer | Deferred | C# drive monitoring is functionally complete (uses `smartctl` via inline `DriveMonitorService`); the provider-layer abstraction described in design docs is a backlog refactor, not a functional gap |
-| `alert()` / `confirm()` dialogs | Using browser native | Not replaced with custom toast/modal system |
-| °F gauge rendering | Partial | Values converted but gauge arc/colors still based on °C thresholds |
+| ~~E2E tests in CI~~ | ✅ Resolved | GitHub Actions `e2e.yml` workflow runs Playwright specs (v2.2.0) |
+| ~~C# backend unit tests~~ | ✅ Resolved | 167+ tests in `Tests/DriveChill.Tests.csproj` |
+| ~~C# drive-monitoring provider layer~~ | ✅ Resolved | `IDriveProvider` abstraction with `SmartctlDriveProvider` + `MockDriveProvider` (v2.3) |
+| ~~`alert()` / `confirm()` dialogs~~ | ✅ Resolved | `ConfirmDialog` + `ToastProvider` components (v2.2.0) |
+| ~~°F gauge rendering~~ | ✅ Resolved | Gauge arc/colors computed in display unit (v2.2.0) |
 | Playwright browser install | Manual | `npx playwright install chromium` required before first run |
-| Multi-user RBAC | Not implemented | Single admin user model |
-| Audit log rotation | Not implemented | `auth_log` table grows unbounded |
-| Session token rotation | Not implemented | Tokens valid until TTL expiry |
-| WebSocket auth renegotiation | 60-message interval | Not time-based; high-frequency updates re-auth faster |
+| ~~Multi-user RBAC~~ | ✅ Resolved | Admin/viewer roles with session propagation (v2.2.0) |
+| ~~Audit log rotation~~ | ✅ Resolved | `CleanupOldAuthLogsAsync` — 90-day retention, hourly prune (v2.2.0) |
+| Session token rotation | Deferred | Tokens valid until TTL expiry; low risk after password-change invalidation |
+| ~~WebSocket auth renegotiation~~ | ✅ Resolved | Time-based 60-second revalidation in both backends (v2.3) |
+| ~~Virtual sensor CRUD~~ | ✅ Resolved | 6 types (max/min/avg/weighted/delta/moving_avg), CRUD in both backends, runtime resolution before control tick, Settings-page UI (v2.3) |
+| ~~Load-based fan-curve inputs~~ | ✅ Resolved | cpu_load/gpu_load accepted in curve sensor picker; curve editor labels/groups update by source type (v2.3) |
+| ~~Control transparency~~ | ✅ Resolved | Per-fan control_source tracked (profile/temp_target/startup_safety/panic_sensor/panic_temp/released/manual); REST + WS; badges in FanCurvesPage (v2.3) |
+| ~~Alert-triggered profile switching~~ | ✅ Resolved | `revert_after_clear` semantics correct in both backends; Python + C# tests passing (v2.3) |
+| ~~SMART trend alerting~~ | ✅ Resolved | `DriveMonitorService` → `AlertService.InjectEvent` wired in C#; `SmartTrendAlert` carries `ActualValue`/`Threshold`; 14 new C# tests (v2.3) |
+| ~~Notification channel expansion~~ | ✅ Resolved (HTTP) | ntfy, Discord, Slack, generic webhook; SSRF hardening save-time + send-time; C# `SensorWorker` fan-out wired; MQTT deferred to v2.4 |
+| ~~liquidctl duplicate-device ambiguity~~ | ✅ Resolved | ID prefix includes USB address; `--address` flag on all targeted commands; 4 new Python tests (v2.3) |
+| ~~Backup `action_json` + `notification_channels` data loss~~ | ✅ Resolved | Both fields preserved in Python export/import; C# settings export/import includes notification channels (v2.3) |
+| Linux hwmon fan-write | Open (stretch) | Planned for v2.3 Phase 10 |
+| USB liquidctl support | Partial | Python backend + tests done; C# deferred; no hardware smoke test yet |
 
 ---
 

@@ -15,6 +15,7 @@ import { SettingsPage } from '@/components/settings/SettingsPage';
 import { AnalyticsPage } from '@/components/analytics/AnalyticsPage';
 import { DrivesPage } from '@/components/drives/DrivesPage';
 import { TemperatureTargetsPage } from '@/components/temperature-targets/TemperatureTargetsPage';
+import { QuietHoursPage } from '@/components/quiet-hours/QuietHoursPage';
 import { LoginPage } from '@/components/auth/LoginPage';
 import { ChangelogBanner } from '@/components/layout/ChangelogBanner';
 import { ConfirmDialogProvider } from '@/components/ui/ConfirmDialog';
@@ -70,6 +71,8 @@ function PageContent() {
       return <DrivesPage />;
     case 'temperature-targets':
       return <TemperatureTargetsPage />;
+    case 'quiet-hours':
+      return <QuietHoursPage />;
     default:
       return <SystemOverview />;
   }

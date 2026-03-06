@@ -11,15 +11,11 @@ import pytest
 
 from app.db.migration_runner import run_migrations
 from app.db.repositories.machine_repo import MachineRepo
-from app.main import _sanitize_metric_label
 from app.services.machine_monitor_service import MachineMonitorService
 from app.services.webhook_service import WebhookService
 
 
 class TestSecurityRegressions:
-    def test_prometheus_label_sanitizer_rejects_backslash(self) -> None:
-        assert _sanitize_metric_label(r'gpu\temp"} 1') == "gpu_temp___1"
-
     def test_machine_update_preserves_api_key_when_omitted(self, tmp_db) -> None:
         async def _run() -> None:
             await run_migrations(tmp_db)

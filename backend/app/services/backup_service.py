@@ -18,6 +18,7 @@ from pathlib import Path
 import aiosqlite
 
 from app.config import settings as app_settings
+from app.utils.url_security import validate_outbound_url_at_request_time
 from app.db.migration_runner import run_migrations
 
 logger = logging.getLogger(__name__)
@@ -60,10 +61,10 @@ async def export_backup(db_path: Path, output_path: Path | None = None) -> Path:
         labels_rows = await cursor.fetchall()
         sensor_labels = {row["sensor_id"]: row["label"] for row in labels_rows}
 
-        # Alert rules
+        # Alert rules (include action_json so profile-switch actions survive backup/restore)
         cursor = await db.execute(
             "SELECT id, sensor_id, threshold, direction, enabled, "
-            "cooldown_seconds, name FROM alert_rules"
+            "cooldown_seconds, name, action_json FROM alert_rules"
         )
         alert_rules = [dict(row) for row in await cursor.fetchall()]
 
@@ -81,6 +82,13 @@ async def export_backup(db_path: Path, output_path: Path | None = None) -> Path:
         )
         quiet_hours = [dict(row) for row in await cursor.fetchall()]
 
+        # Notification channels (config_json contains all channel-specific settings)
+        cursor = await db.execute(
+            "SELECT id, type, name, enabled, config_json, created_at, updated_at "
+            "FROM notification_channels ORDER BY created_at"
+        )
+        notification_channels = [dict(row) for row in await cursor.fetchall()]
+
     backup = {
         "backup_version": BACKUP_VERSION,
         "app_version": app_settings.app_version,
@@ -92,6 +100,7 @@ async def export_backup(db_path: Path, output_path: Path | None = None) -> Path:
         "sensor_labels": sensor_labels,
         "alert_rules": alert_rules,
         "quiet_hours": quiet_hours,
+        "notification_channels": notification_channels,
     }
 
     output_path.write_text(json.dumps(backup, indent=2), encoding="utf-8")
@@ -191,16 +200,52 @@ async def import_backup(db_path: Path, backup_path: Path) -> dict[str, int]:
                      fs.get("updated_at", datetime.now(timezone.utc).isoformat())),
                 )
 
-            # --- Alert rules ---
+            # --- Alert rules (restore action_json for profile-switch actions) ---
             await db.execute("DELETE FROM alert_rules")
             alert_rules = data.get("alert_rules", [])
             for r in alert_rules:
                 await db.execute(
                     "INSERT INTO alert_rules (id, sensor_id, threshold, direction, "
-                    "enabled, cooldown_seconds, name) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    "enabled, cooldown_seconds, name, action_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     (r["id"], r["sensor_id"], r["threshold"],
                      r.get("direction", "above"), r.get("enabled", 1),
-                     r.get("cooldown_seconds", 300), r.get("name", "")),
+                     r.get("cooldown_seconds", 300), r.get("name", ""),
+                     r.get("action_json")),
+                )
+
+            # --- Notification channels ---
+            await db.execute("DELETE FROM notification_channels")
+            notification_channels = data.get("notification_channels", [])
+            _URL_KEYS = ("url", "webhook_url")
+            for nc in notification_channels:
+                # Apply the same SSRF validation that the create/update routes enforce so
+                # import cannot persist URLs that the normal API would reject.
+                config_data: dict = {}
+                try:
+                    config_data = json.loads(nc.get("config_json", "{}") or "{}")
+                except (ValueError, TypeError):
+                    pass
+                ssrf_blocked = False
+                for url_key in _URL_KEYS:
+                    url_val = config_data.get(url_key)
+                    if url_val and isinstance(url_val, str):
+                        ok, reason = await validate_outbound_url_at_request_time(url_val)
+                        if not ok:
+                            logger.warning(
+                                "Backup import: skipping channel %s — SSRF-blocked %s: %s",
+                                nc.get("id"), url_key, reason,
+                            )
+                            ssrf_blocked = True
+                            break
+                if ssrf_blocked:
+                    continue
+                await db.execute(
+                    "INSERT INTO notification_channels "
+                    "(id, type, name, enabled, config_json, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (nc["id"], nc["type"], nc["name"], int(nc.get("enabled", 1)),
+                     nc.get("config_json", "{}"),
+                     nc.get("created_at", ""), nc.get("updated_at", "")),
                 )
 
             # --- Quiet hours ---
@@ -241,6 +286,7 @@ async def import_backup(db_path: Path, backup_path: Path) -> dict[str, int]:
         "sensor_labels": len(sensor_labels),
         "alert_rules": len(alert_rules),
         "quiet_hours": len(quiet_hours),
+        "notification_channels": len(notification_channels),
     }
     logger.info("Backup imported: %s", summary)
     return summary

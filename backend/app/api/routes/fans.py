@@ -209,12 +209,14 @@ async def cancel_fan_test(fan_id: str, request: Request):
 
 @router.get("/status")
 async def get_fan_status(request: Request):
-    """Get current fan control status including safe-mode state."""
+    """Get current fan control status including safe-mode state and control sources."""
     fan_service = request.app.state.fan_service
     return {
         "safe_mode": fan_service.safe_mode_status,
         "curves_active": len(fan_service.curves),
         "applied_speeds": fan_service.last_applied_speeds,
+        "control_sources": fan_service.control_sources,
+        "startup_safety_active": fan_service.startup_safety_active,
     }
 
 

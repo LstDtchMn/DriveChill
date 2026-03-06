@@ -1,5 +1,7 @@
+using System.Diagnostics;
 using DriveChill.Hardware;
 using DriveChill.Models;
+using Prometheus;
 
 namespace DriveChill.Services;
 
@@ -11,18 +13,20 @@ namespace DriveChill.Services;
 /// </summary>
 public sealed class SensorWorker : BackgroundService
 {
-    private readonly IHardwareBackend            _hw;
-    private readonly SensorService               _sensors;
-    private readonly FanService                  _fans;
-    private readonly AlertService                _alerts;
-    private readonly WebhookService              _webhooks;
-    private readonly EmailNotificationService    _email;
-    private readonly PushNotificationService     _push;
-    private readonly TemperatureTargetService    _tempTargets;
-    private readonly DbService                   _db;
-    private readonly SettingsStore               _store;
-    private readonly AppSettings                 _settings;
-    private readonly ILogger<SensorWorker>       _log;
+    private readonly IHardwareBackend               _hw;
+    private readonly SensorService                  _sensors;
+    private readonly FanService                     _fans;
+    private readonly AlertService                   _alerts;
+    private readonly WebhookService                 _webhooks;
+    private readonly EmailNotificationService       _email;
+    private readonly PushNotificationService        _push;
+    private readonly NotificationChannelService     _notifChannels;
+    private readonly TemperatureTargetService       _tempTargets;
+    private readonly VirtualSensorService           _virtualSensors;
+    private readonly DbService                      _db;
+    private readonly SettingsStore                  _store;
+    private readonly AppSettings                    _settings;
+    private readonly ILogger<SensorWorker>          _log;
 
     private DateTimeOffset _lastDbWrite = DateTimeOffset.MinValue;
     private DateTimeOffset _lastPrune   = DateTimeOffset.MinValue;
@@ -32,21 +36,24 @@ public sealed class SensorWorker : BackgroundService
     public SensorWorker(IHardwareBackend hw, SensorService sensors, FanService fans,
         AlertService alerts, WebhookService webhooks,
         EmailNotificationService email, PushNotificationService push,
-        TemperatureTargetService tempTargets,
+        NotificationChannelService notifChannels,
+        TemperatureTargetService tempTargets, VirtualSensorService virtualSensors,
         DbService db, SettingsStore store, AppSettings settings, ILogger<SensorWorker> log)
     {
-        _hw          = hw;
-        _sensors     = sensors;
-        _fans        = fans;
-        _alerts      = alerts;
-        _webhooks    = webhooks;
-        _email       = email;
-        _push        = push;
-        _tempTargets = tempTargets;
-        _db          = db;
-        _store       = store;
-        _settings    = settings;
-        _log         = log;
+        _hw              = hw;
+        _sensors         = sensors;
+        _fans            = fans;
+        _alerts          = alerts;
+        _webhooks        = webhooks;
+        _email           = email;
+        _push            = push;
+        _notifChannels   = notifChannels;
+        _tempTargets     = tempTargets;
+        _virtualSensors  = virtualSensors;
+        _db              = db;
+        _store           = store;
+        _settings        = settings;
+        _log             = log;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -54,35 +61,86 @@ public sealed class SensorWorker : BackgroundService
         _hw.Initialize();
         await _tempTargets.LoadAsync(stoppingToken);
         await _fans.LoadFanSettingsAsync(_db, stoppingToken);
+
+        // Load virtual sensor definitions from DB
+        var vsDefs = await _db.GetVirtualSensorsAsync(stoppingToken);
+        _virtualSensors.Load(vsDefs);
+        // Wire alert-triggered profile switching
+        _alerts.SetActivateProfileFn(profileId =>
+        {
+            var profiles = _store.LoadProfiles().ToList();
+            var profile = profiles.FirstOrDefault(p => p.Id == profileId);
+            if (profile == null) return Task.CompletedTask;
+            foreach (var p in profiles) p.IsActive = p.Id == profileId;
+            _store.SaveProfiles(profiles);
+            _fans.SetCurves(profile.Curves);
+            return Task.CompletedTask;
+        });
+        // Record current active profile for revert-after-clear
+        var activeProfile = _store.LoadProfiles().FirstOrDefault(p => p.IsActive);
+        if (activeProfile != null)
+            _alerts.SetPreAlertProfile(activeProfile.Id);
+
         _log.LogInformation("SensorWorker started — backend: {Backend}", _hw.GetBackendName());
 
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                // Offload blocking hardware read to thread pool
+                // Offload blocking hardware read to thread pool; time the call for Prometheus.
+                var backendName = _hw.GetBackendName();
+                var sw = Stopwatch.StartNew();
                 var readings = await Task.Run(() => _hw.GetSensorReadings(), stoppingToken);
+                sw.Stop();
+                DriveChillMetrics.SensorPollDuration
+                    .WithLabels(backendName)
+                    .Observe(sw.Elapsed.TotalSeconds);
 
                 var snapshot = new SensorSnapshot
                 {
                     Readings  = readings,
-                    Backend   = _hw.GetBackendName(),
+                    Backend   = backendName,
                     Timestamp = DateTimeOffset.UtcNow,
                 };
 
                 _sensors.Update(snapshot);
 
+                // Count readings by sensor_type
+                foreach (var r in readings)
+                    if (!string.IsNullOrEmpty(r.SensorType))
+                        DriveChillMetrics.SensorReadingsTotal.WithLabels(r.SensorType).Inc();
+
                 // Apply active fan curve (non-blocking — fan speeds are cached)
                 await _fans.ApplyCurvesAsync(readings, stoppingToken);
 
-                // Evaluate alert thresholds
+                // Update fan speed gauges from latest applied speeds
+                foreach (var fan in _fans.GetAll(snapshot))
+                    DriveChillMetrics.FanSpeedPct.WithLabels(fan.FanId).Set(fan.SpeedPercent);
+
+                // Update drive temperature gauges for hdd_temp sensors with a drive_id
+                foreach (var r in readings)
+                    if (r.SensorType == SensorTypeValues.HddTemp && !string.IsNullOrEmpty(r.DriveId))
+                        DriveChillMetrics.DriveTempCelsius.WithLabels(r.DriveId).Set(r.Value);
+
+                // Evaluate alert thresholds, then drain any synthetically injected events
+                // (e.g. SMART trend alerts from DriveMonitorService) so they reach the same
+                // delivery fan-out as threshold-crossing events.
                 var newEvents = _alerts.Evaluate(readings);
-                if (newEvents.Count > 0)
+                var injectedEvents = _alerts.DrainInjectedEvents();
+                IReadOnlyList<AlertEvent> allEvents = injectedEvents.Count > 0
+                    ? [.. newEvents, .. injectedEvents]
+                    : newEvents;
+
+                if (allEvents.Count > 0)
                 {
+                    // Increment alert counter for each fired event
+                    foreach (var evt in allEvents)
+                        DriveChillMetrics.AlertEventsTotal.WithLabels(evt.RuleId, evt.Condition).Inc();
+
                     // Dispatch all delivery channels concurrently (fire-and-forget).
                     // Errors inside each service are logged and swallowed so a delivery
                     // failure never crashes the polling loop.
-                    var capturedEvents = newEvents;
+                    var capturedEvents = allEvents;
                     _ = Task.Run(async () =>
                     {
                         try
@@ -95,6 +153,9 @@ public sealed class SensorWorker : BackgroundService
                             {
                                 tasks.Add(_email.SendAlertAsync(evt, CancellationToken.None));
                                 tasks.Add(_push.SendAlertAsync(evt, CancellationToken.None));
+                                tasks.Add(_notifChannels.SendAlertAllAsync(
+                                    evt.SensorName, evt.ActualValue, evt.Threshold,
+                                    CancellationToken.None));
                             }
                             await Task.WhenAll(tasks);
                         }

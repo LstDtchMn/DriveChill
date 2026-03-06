@@ -186,19 +186,40 @@ async def list_api_keys(request: Request):
 
 @router.post("/api-keys", dependencies=[Depends(require_auth), Depends(require_csrf)])
 async def create_api_key(body: CreateApiKeyRequest, request: Request):
-    """Create an API key and return plaintext key once."""
+    """Create an API key and return plaintext key once.
+
+    The key's effective role is capped to the caller's own role so that a
+    viewer cannot mint an admin-privilege key.
+    """
     auth_service = request.app.state.auth_service
+
+    # Determine the caller's role and username from the current auth context.
+    auth_info = getattr(request.state, "auth_info", None) or {}
+    if auth_info.get("auth_type") == "session":
+        session = auth_info.get("session", {})
+        caller_role = session.get("role", "admin")
+        caller_username = session.get("username")
+    elif auth_info.get("auth_type") == "api_key":
+        key_meta = auth_info.get("api_key", {})
+        caller_role = key_meta.get("role", "admin")
+        caller_username = key_meta.get("name")
+    else:
+        caller_role = "admin"
+        caller_username = None
+
     try:
         metadata, plaintext = await auth_service.create_api_key(
             body.name,
             scopes=body.scopes,
+            created_by_username=caller_username,
+            requesting_role=caller_role,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     ip = request.client.host if request.client else "unknown"
     await auth_service._log_auth_event(
-        "api_key_created", ip, None, "success",
-        f"key_id={metadata['id']} name={metadata['name']}",
+        "api_key_created", ip, caller_username, "success",
+        f"key_id={metadata['id']} name={metadata['name']} role={metadata['role']}",
     )
     return {"api_key": metadata, "plaintext_key": plaintext}
 
@@ -273,6 +294,12 @@ async def change_user_password(user_id: int, body: ChangePasswordRequest, reques
     await auth_service._db.execute(
         "UPDATE users SET password_hash = ?, updated_at = datetime('now') WHERE id = ?",
         (pw_hash, user_id),
+    )
+    await auth_service._db.commit()
+    # Invalidate all existing sessions — a stolen session cannot persist after
+    # an admin resets the password (GAP-2).
+    await auth_service._db.execute(
+        "DELETE FROM sessions WHERE user_id = ?", (user_id,)
     )
     await auth_service._db.commit()
     ip = request.client.host if request.client else "unknown"

@@ -1,5 +1,6 @@
 using DriveChill.Hardware;
 using DriveChill.Services;
+using Prometheus;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
@@ -42,6 +43,8 @@ internal static class Program
         ("/api/webhooks", "webhooks"),
         ("/api/analytics", "analytics"),
         ("/api/temperature-targets", "temperature_targets"),
+        ("/api/virtual-sensors", "virtual_sensors"),
+        ("/api/notification-channels", "notifications"),
     ];
     private static readonly HashSet<string> _readMethods = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -147,19 +150,26 @@ internal static class Program
         builder.Services.AddSingleton(settings);
 
         // Hardware backend: set env var DRIVECHILL_BACKEND=mock for dev/testing
+        var isMock = Environment.GetEnvironmentVariable("DRIVECHILL_BACKEND") == "mock";
         builder.Services.AddSingleton<IHardwareBackend>(_ =>
-            Environment.GetEnvironmentVariable("DRIVECHILL_BACKEND") == "mock"
-                ? (IHardwareBackend)new MockBackend()
-                : new LhmBackend());
+            isMock ? (IHardwareBackend)new MockBackend() : new LhmBackend());
+
+        // Drive provider: smartctl-based by default; mock for testing/dev
+        if (isMock)
+            builder.Services.AddSingleton<IDriveProvider, MockDriveProvider>();
+        else
+            builder.Services.AddSingleton<IDriveProvider, SmartctlDriveProvider>();
 
         // Core services
         builder.Services.AddSingleton<SensorService>();
         builder.Services.AddSingleton<TemperatureTargetService>();
+        builder.Services.AddSingleton<VirtualSensorService>();
         builder.Services.AddSingleton<FanService>(sp =>
             new FanService(
                 sp.GetRequiredService<IHardwareBackend>(),
                 sp.GetRequiredService<SettingsStore>(),
-                sp.GetRequiredService<TemperatureTargetService>()));
+                sp.GetRequiredService<TemperatureTargetService>(),
+                sp.GetRequiredService<VirtualSensorService>()));
         builder.Services.AddSingleton<AlertService>();
         builder.Services.AddSingleton<DbService>();
         builder.Services.AddSingleton<SettingsStore>();
@@ -169,6 +179,8 @@ internal static class Program
         builder.Services.AddSingleton<EmailNotificationService>();
         builder.Services.AddSingleton<PushNotificationService>();
         builder.Services.AddSingleton<FanTestService>();
+        builder.Services.AddSingleton<SmartTrendService>();
+        builder.Services.AddSingleton<NotificationChannelService>();
         builder.Services.AddSingleton<DriveMonitorService>();
         builder.Services.AddSingleton<WebSocketHub>();
         builder.Services
@@ -195,6 +207,12 @@ internal static class Program
         var app = builder.Build();
 
         app.UseCors();
+
+        // Prometheus metrics endpoint — auth-exempt (scrapers use network-level isolation).
+        // Gated by DRIVECHILL_PROMETHEUS_ENABLED=true.
+        if (settings.PrometheusEnabled)
+            app.UseMetricServer("/metrics");
+
         app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30) });
 
         // Security response headers
@@ -269,6 +287,17 @@ internal static class Program
                             : $"API key missing required scope: {requiredScope}"
                     );
                     return;
+                }
+
+                // Viewer-role API keys cannot perform write operations.
+                if (!_readMethods.Contains(context.Request.Method))
+                {
+                    var requestPath = context.Request.Path.Value ?? "";
+                    if (keyMeta.Role != "admin" && requestPath != "/api/auth/logout")
+                    {
+                        await Reject(context, 403, "Write access requires admin role");
+                        return;
+                    }
                 }
 
                 await next();

@@ -6,12 +6,16 @@ at the FastAPI dependency level.
 
 from __future__ import annotations
 
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
 from app.api.dependencies.auth import (
     _api_key_has_scope,
     _extract_api_key,
     _required_api_key_scope,
+    require_csrf,
 )
 
 
@@ -181,3 +185,80 @@ class TestApiKeyHasScope:
         assert _api_key_has_scope(scopes, "write:fans") is True
         assert _api_key_has_scope(scopes, "read:fans") is True  # write:fans implies read:fans
         assert _api_key_has_scope(scopes, "write:sensors") is False
+
+
+# -----------------------------------------------------------------------
+# Viewer-role API key write-block regression
+# -----------------------------------------------------------------------
+
+
+class TestViewerApiKeyWriteBlock:
+    """Regression: viewer-role API keys must not perform write operations.
+
+    The actual enforcement lives in require_csrf (not a separate helper).
+    These tests prove that a viewer-role API key is blocked on write routes
+    and allowed on logout.
+    """
+
+    def _make_request(self, path: str = "/api/fans/curves", method: str = "POST"):
+        req = MagicMock()
+        req.headers = _FakeHeaders({"authorization": "Bearer dc_viewer_key"})
+        req.method = method
+        url = MagicMock()
+        url.path = path
+        req.url = url
+        req.state = MagicMock()
+        req.state.auth_info = {
+            "auth_type": "api_key",
+            "api_key": {
+                "id": "k1",
+                "name": "viewer-key",
+                "role": "viewer",
+                "scopes": ["*"],
+            },
+        }
+        req.app = MagicMock()
+        return req
+
+    @patch("app.api.dependencies.auth._auth_enabled", return_value=True)
+    def test_viewer_api_key_blocked_on_write(self, _mock):
+        """Viewer-role API key must get 403 on a write route."""
+        from fastapi import HTTPException
+
+        req = self._make_request(path="/api/fans/curves", method="POST")
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(
+                require_csrf(req, drivechill_session=None, x_csrf_token=None)
+            )
+        assert exc_info.value.status_code == 403
+        assert "admin role" in exc_info.value.detail.lower()
+
+    @patch("app.api.dependencies.auth._auth_enabled", return_value=True)
+    def test_viewer_api_key_allowed_logout(self, _mock):
+        """Viewer-role API key must be allowed to call /api/auth/logout."""
+        req = self._make_request(path="/api/auth/logout", method="POST")
+
+        # Should return without raising
+        asyncio.run(
+            require_csrf(req, drivechill_session=None, x_csrf_token=None)
+        )
+
+    @patch("app.api.dependencies.auth._auth_enabled", return_value=True)
+    def test_admin_api_key_allowed_write(self, _mock):
+        """Admin-role API key must be allowed on write routes."""
+        req = self._make_request(path="/api/fans/curves", method="POST")
+        req.state.auth_info["api_key"]["role"] = "admin"
+
+        # Should return without raising
+        asyncio.run(
+            require_csrf(req, drivechill_session=None, x_csrf_token=None)
+        )
+
+    def test_stale_require_write_role_removed(self):
+        """The misleading require_write_role helper must no longer exist."""
+        import app.api.dependencies.auth as auth_mod
+        assert not hasattr(auth_mod, "require_write_role"), (
+            "require_write_role was re-introduced — viewer write-block "
+            "is enforced in require_csrf, not a separate helper"
+        )

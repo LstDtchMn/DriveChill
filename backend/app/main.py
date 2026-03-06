@@ -1,7 +1,6 @@
 import atexit
 import asyncio
 import logging
-import re
 import signal
 import sys
 from contextlib import asynccontextmanager
@@ -45,21 +44,17 @@ from app.api.routes.quiet_hours import router as quiet_hours_router
 from app.api.routes.notifications import router as notifications_router
 from app.api.routes import temperature_targets as temperature_targets_route
 from app.api.routes import update as update_route
+from app.api.routes import virtual_sensors as virtual_sensors_route
+from app.api.routes import notification_channels as notification_channels_route
 from app.api.websocket import router as ws_router
 from app.db.repositories.drive_repo import DriveRepo
 from app.db.repositories.temperature_target_repo import TemperatureTargetRepo
 from app.services.drive_monitor_service import DriveMonitorService
 from app.services.drive_self_test_service import DriveSelfTestService
 from app.services.temperature_target_service import TemperatureTargetService
+from app.services.virtual_sensor_service import VirtualSensorDef, VirtualSensorService
 
 logger = logging.getLogger(__name__)
-_PROM_LABEL_SAFE_RE = re.compile(r"[^a-zA-Z0-9_.-]")
-
-
-def _sanitize_metric_label(value: object) -> str:
-    """Sanitize a dynamic label value for Prometheus text exposition."""
-    return _PROM_LABEL_SAFE_RE.sub("_", str(value))
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -106,6 +101,29 @@ async def lifespan(app: FastAPI):
     )
     app.state.sensor_service = sensor_service
 
+    # Virtual sensor service — resolve composite/virtual sensors before
+    # fan curves, temperature targets, and alerts consume sensor data.
+    virtual_sensor_service = VirtualSensorService()
+    app.state.virtual_sensor_service = virtual_sensor_service
+    # Load definitions from DB
+    vs_cursor = await db.execute(
+        "SELECT id, name, type, source_ids_json, weights_json, "
+        "window_seconds, \"offset\", enabled, created_at, updated_at "
+        "FROM virtual_sensors ORDER BY name"
+    )
+    vs_rows = await vs_cursor.fetchall()
+    import json as _json
+    vs_defs = [
+        VirtualSensorDef(
+            id=r[0], name=r[1], type=r[2],
+            source_ids=_json.loads(r[3]) if r[3] else [],
+            weights=_json.loads(r[4]) if r[4] else None,
+            window_seconds=r[5], offset=r[6] or 0.0, enabled=bool(r[7]),
+        )
+        for r in vs_rows
+    ]
+    virtual_sensor_service.load(vs_defs)
+
     # Temperature target service (proportional drive-temp → fan control)
     temp_target_repo = TemperatureTargetRepo(db)
     temp_target_service = TemperatureTargetService(temp_target_repo)
@@ -121,6 +139,7 @@ async def lifespan(app: FastAPI):
         panic_gpu_temp=panic_gpu,
         panic_hysteresis=panic_hyst,
         temp_target_service=temp_target_service,
+        virtual_sensor_service=virtual_sensor_service,
     )
     await fan_service.load_fan_settings(fan_settings_repo)
     app.state.fan_service = fan_service
@@ -220,14 +239,27 @@ async def lifespan(app: FastAPI):
         await fan_service.apply_profile(profile)
 
     quiet_hours_service.set_activate_fn(_activate_profile_by_id)
+    alert_service.set_activate_profile_fn(_activate_profile_by_id)
+    # Record the current active profile so alert-triggered switches can revert
+    if active_profile:
+        alert_service.set_pre_alert_profile(active_profile.id)
     await quiet_hours_service.start()
     await machine_monitor_service.start()
 
     # ------------------------------------------------------------------
     # Drive monitoring
     # ------------------------------------------------------------------
+    from app.services.smart_trend_service import SmartTrendService
+    from app.services.notification_channel_service import NotificationChannelService
+    smart_trend_svc = SmartTrendService()
+    smart_trend_svc.set_alert_service(alert_service)
+    notification_channel_svc = NotificationChannelService(db)
+    app.state.notification_channel_service = notification_channel_svc
+    alert_service._channel_svc = notification_channel_svc
+
     drive_monitor = DriveMonitorService(db, settings_repo)
     drive_monitor.set_sensor_service(sensor_service)
+    drive_monitor.set_smart_trend_service(smart_trend_svc)
     app.state.drive_monitor_service = drive_monitor
 
     drive_repo = DriveRepo(db)
@@ -465,6 +497,8 @@ app.include_router(analytics_route.router, dependencies=_auth_deps)
 app.include_router(drives_route.router, dependencies=_auth_deps)
 app.include_router(temperature_targets_route.router, dependencies=_auth_deps)
 app.include_router(update_route.router, dependencies=_auth_deps)
+app.include_router(virtual_sensors_route.router, dependencies=_auth_deps)
+app.include_router(notification_channels_route.router, dependencies=_auth_deps)
 # WebSocket auth is handled inside the endpoint (require_ws_auth) because
 # router-level Depends(require_auth) injects Request, which fails for WS.
 app.include_router(ws_router)
@@ -486,33 +520,20 @@ async def health():
             "machine_registry",
             "composite_curves",
             "fan_settings",
-        ],
+        ] + (["fan_write"] if getattr(getattr(app.state, "backend", None), "fan_write_supported", False) else []),
         "version": settings.app_version,
         "backend": app.state.backend.get_backend_name() if hasattr(app.state, "backend") else "unknown",
     }
 
 
 if settings.prometheus_enabled:
+    from prometheus_client import generate_latest
+    from app.services.prom_metrics import REGISTRY as _prom_registry
 
     @_health_router.get("/metrics", response_class=PlainTextResponse)
     async def metrics():
-        """Prometheus text exposition for core temperatures and fan RPM."""
-        readings = []
-        if hasattr(app.state, "sensor_service"):
-            readings = app.state.sensor_service.latest
-        lines = [
-            "# HELP drivechill_temperature_c Temperature reading in Celsius",
-            "# TYPE drivechill_temperature_c gauge",
-            "# HELP drivechill_fan_rpm Fan speed in RPM",
-            "# TYPE drivechill_fan_rpm gauge",
-        ]
-        for r in readings:
-            sid = _sanitize_metric_label(r.id)
-            if r.sensor_type.value in {"cpu_temp", "gpu_temp", "hdd_temp", "case_temp"}:
-                lines.append(f'drivechill_temperature_c{{sensor_id="{sid}",sensor_type="{r.sensor_type.value}"}} {float(r.value):.3f}')
-            elif r.sensor_type.value == "fan_rpm":
-                lines.append(f'drivechill_fan_rpm{{sensor_id="{sid}"}} {float(r.value):.3f}')
-        return "\n".join(lines) + "\n"
+        """Prometheus metrics — auth-exempt (scrapers use network-level isolation)."""
+        return generate_latest(_prom_registry).decode("utf-8")
 
 
 app.include_router(_health_router)

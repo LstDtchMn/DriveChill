@@ -206,4 +206,124 @@ public sealed class AlertServiceTests : IDisposable
         Assert.Empty(_svc.GetEvents(100));
         Assert.Empty(_svc.GetActiveEvents());
     }
+
+    // -----------------------------------------------------------------------
+    // Profile switching — revert_after_clear semantics
+    // -----------------------------------------------------------------------
+
+    private AlertRule AddActionRule(double threshold, string profileId,
+        bool revertAfterClear = true, string sensorId = "cpu")
+    {
+        return _svc.AddRule(new CreateAlertRuleRequest
+        {
+            SensorId   = sensorId,
+            SensorName = "CPU Temp",
+            Threshold  = threshold,
+            Condition  = "above",
+            Action     = new AlertAction
+            {
+                Type             = "switch_profile",
+                ProfileId        = profileId,
+                RevertAfterClear = revertAfterClear,
+            },
+        });
+    }
+
+    [Fact]
+    public void ProfileSwitch_Fires_WhenAlertTriggered()
+    {
+        var activated = new List<string>();
+        _svc.SetActivateProfileFn(id => { activated.Add(id); return Task.CompletedTask; });
+        _svc.SetPreAlertProfile("default");
+
+        AddActionRule(70, "perf");
+
+        _svc.Evaluate([Reading("cpu", 75)]);
+        // Task.Run is fire-and-forget; give it a moment
+        System.Threading.Thread.Sleep(50);
+
+        Assert.Contains("perf", activated);
+    }
+
+    [Fact]
+    public void ProfileSwitch_Reverts_WhenRevertAfterClearTrue()
+    {
+        var activated = new List<string>();
+        _svc.SetActivateProfileFn(id => { activated.Add(id); return Task.CompletedTask; });
+        _svc.SetPreAlertProfile("default");
+
+        AddActionRule(70, "perf", revertAfterClear: true);
+
+        _svc.Evaluate([Reading("cpu", 75)]); // fire
+        System.Threading.Thread.Sleep(50);
+        activated.Clear();
+
+        _svc.Evaluate([Reading("cpu", 60)]); // clear
+        System.Threading.Thread.Sleep(50);
+
+        Assert.Contains("default", activated);
+    }
+
+    [Fact]
+    public void ProfileSwitch_DoesNotRevert_WhenRevertAfterClearFalse()
+    {
+        var activated = new List<string>();
+        _svc.SetActivateProfileFn(id => { activated.Add(id); return Task.CompletedTask; });
+        _svc.SetPreAlertProfile("default");
+
+        AddActionRule(70, "perf", revertAfterClear: false);
+
+        _svc.Evaluate([Reading("cpu", 75)]); // fire
+        System.Threading.Thread.Sleep(50);
+        activated.Clear();
+
+        _svc.Evaluate([Reading("cpu", 60)]); // clear
+        System.Threading.Thread.Sleep(50);
+
+        Assert.DoesNotContain("default", activated);
+    }
+
+    [Fact]
+    public void ProfileSwitch_NoRevertWhenNoPreAlertProfile()
+    {
+        var activated = new List<string>();
+        _svc.SetActivateProfileFn(id => { activated.Add(id); return Task.CompletedTask; });
+        // Deliberately do NOT call SetPreAlertProfile
+
+        AddActionRule(70, "perf", revertAfterClear: true);
+
+        _svc.Evaluate([Reading("cpu", 75)]); // fire
+        System.Threading.Thread.Sleep(50);
+        activated.Clear();
+
+        _svc.Evaluate([Reading("cpu", 60)]); // clear
+        System.Threading.Thread.Sleep(50);
+
+        // No pre-alert profile was set, so nothing to revert to
+        Assert.Empty(activated);
+    }
+
+    [Fact]
+    public void ProfileSwitch_MixedRevertAfterClear_NoRevertWins()
+    {
+        // If any fired rule had RevertAfterClear=false, the revert is suppressed
+        var activated = new List<string>();
+        _svc.SetActivateProfileFn(id => { activated.Add(id); return Task.CompletedTask; });
+        _svc.SetPreAlertProfile("default");
+
+        AddActionRule(70,  "profile_A", revertAfterClear: true,  sensorId: "cpu");
+        AddActionRule(80,  "profile_B", revertAfterClear: false, sensorId: "cpu");
+
+        // Fire both (cpu > 80 satisfies both thresholds)
+        _svc.Evaluate([Reading("cpu", 85)]);
+        System.Threading.Thread.Sleep(50);
+        activated.Clear();
+
+        // Clear both
+        _svc.Evaluate([Reading("cpu", 60)]);
+        System.Threading.Thread.Sleep(50);
+
+        // profile_B had revert_after_clear=false → no revert
+        Assert.DoesNotContain("default", activated);
+    }
 }

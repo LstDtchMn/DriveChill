@@ -299,6 +299,41 @@ export function FanTestPanel({ fanId, fanName }: Props) {
           </>
         )}
 
+        {/* Apply calibration from benchmark */}
+        {result.status === 'completed' && result.min_operational_pct != null && fanSettings && canWrite && (
+          <div className="mt-3 pt-3" style={{ borderTop: '1px solid var(--border)' }}>
+            <p className="text-xs font-medium mb-2" style={{ color: 'var(--text)' }}>Apply Calibration</p>
+            <p className="text-xs mb-2" style={{ color: 'var(--text-secondary)' }}>
+              Set min speed floor to <strong>{result.min_operational_pct}%</strong> (stall + margin)
+              {result.steps[0]?.spinning === false ? ' and mark as zero-RPM capable' : ''}.
+            </p>
+            <div className="flex items-center gap-2 text-xs mb-2" style={{ color: 'var(--text-secondary)' }}>
+              <span>Current: {fanSettings.min_speed_pct}%</span>
+              <span style={{ color: 'var(--accent)' }}>→</span>
+              <span>Proposed: {result.min_operational_pct}%</span>
+            </div>
+            <button
+              disabled={settingsSaving}
+              onClick={async () => {
+                setSettingsSaving(true);
+                const zeroRpm = result.steps[0]?.spinning === false;
+                const newSettings = {
+                  min_speed_pct: result.min_operational_pct!,
+                  zero_rpm_capable: zeroRpm,
+                };
+                try {
+                  await api.updateFanSettings(fanId, newSettings);
+                  setFanSettings({ ...fanSettings, ...newSettings });
+                } catch { /* ignore */ }
+                setSettingsSaving(false);
+              }}
+              className="btn-primary text-xs px-3 py-1"
+            >
+              {settingsSaving ? 'Applying...' : 'Apply Calibration'}
+            </button>
+          </div>
+        )}
+
         {/* Fan Settings — min speed floor & zero-RPM */}
         {fanSettings && (
           <div className="mt-3 pt-3" style={{ borderTop: '1px solid var(--border)' }}>

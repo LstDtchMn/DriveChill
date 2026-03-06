@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using DriveChill.Models;
 using DriveChill.Utils;
+using Prometheus;
 
 namespace DriveChill.Services;
 
@@ -145,6 +146,7 @@ public sealed class WebhookService
             }
 
             sw.Stop();
+            DriveChillMetrics.WebhookDeliveriesTotal.WithLabels(success ? "true" : "false").Inc();
             AddDelivery(new WebhookDelivery
             {
                 Timestamp = DateTimeOffset.UtcNow.ToString("o"),

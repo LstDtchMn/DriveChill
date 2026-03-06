@@ -190,7 +190,7 @@ export const api = {
 
   // Fans
   getFans: () => fetchAPI<{ fans: string[] }>('/api/fans'),
-  getFanStatus: () => fetchAPI<{ safe_mode: any; curves_active: number; applied_speeds: Record<string, number> }>('/api/fans/status'),
+  getFanStatus: () => fetchAPI<import('./types').FanControlStatus>('/api/fans/status'),
   releaseFanControl: () => fetchAPI<{ success: boolean; message: string }>('/api/fans/release', { method: 'POST' }),
   resumeFanControl: () => fetchAPI<{ success: boolean; active_profile: any }>('/api/fans/resume', { method: 'POST' }),
   getCurves: () => fetchAPI<{ curves: any[] }>('/api/fans/curves'),
@@ -238,6 +238,12 @@ export const api = {
   getSettings: () => fetchAPI<any>('/api/settings'),
   updateSettings: (settings: any) =>
     fetchAPI('/api/settings', { method: 'PUT', body: JSON.stringify(settings) }),
+  exportConfig: () => fetchAPI<any>('/api/settings/export'),
+  importConfig: (data: any) =>
+    fetchAPI<{ success: boolean; imported: Record<string, number> }>('/api/settings/import', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
 
   // Fan benchmarks
   fanTests: {
@@ -559,10 +565,62 @@ export const api = {
     },
   },
 
+  // Quiet Hours
+  quietHours: {
+    list: () =>
+      fetchAPI<{ rules: import('./types').QuietHoursRule[] }>('/api/quiet-hours'),
+    create: (rule: { day_of_week: number; start_time: string; end_time: string; profile_id: string; enabled?: boolean }) =>
+      fetchAPI<{ success: boolean; id: number }>('/api/quiet-hours', {
+        method: 'POST', body: JSON.stringify(rule),
+      }),
+    update: (id: number, rule: { day_of_week: number; start_time: string; end_time: string; profile_id: string; enabled?: boolean }) =>
+      fetchAPI<{ success: boolean }>(`/api/quiet-hours/${id}`, {
+        method: 'PUT', body: JSON.stringify(rule),
+      }),
+    delete: (id: number) =>
+      fetchAPI<{ success: boolean }>(`/api/quiet-hours/${id}`, { method: 'DELETE' }),
+  },
+
   update: {
     check: () =>
       fetchAPI<import('./types').UpdateCheck>('/api/update/check'),
     apply: () =>
       fetchAPI<import('./types').UpdateApplyResult>('/api/update/apply', { method: 'POST' }),
+  },
+
+  // Notification Channels
+  notificationChannels: {
+    list: () =>
+      fetchAPI<{ channels: import('./types').NotificationChannel[] }>('/api/notification-channels'),
+    get: (id: string) =>
+      fetchAPI<import('./types').NotificationChannel>(`/api/notification-channels/${encodeURIComponent(id)}`),
+    create: (body: { type: string; name: string; enabled?: boolean; config?: Record<string, unknown> }) =>
+      fetchAPI<{ success: boolean; channel: import('./types').NotificationChannel }>('/api/notification-channels', {
+        method: 'POST', body: JSON.stringify(body),
+      }),
+    update: (id: string, body: { name?: string; enabled?: boolean; config?: Record<string, unknown> }) =>
+      fetchAPI<{ success: boolean; channel: import('./types').NotificationChannel }>(`/api/notification-channels/${encodeURIComponent(id)}`, {
+        method: 'PUT', body: JSON.stringify(body),
+      }),
+    delete: (id: string) =>
+      fetchAPI<{ success: boolean }>(`/api/notification-channels/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    test: (id: string) =>
+      fetchAPI<{ success: boolean; error?: string }>(`/api/notification-channels/${encodeURIComponent(id)}/test`, { method: 'POST' }),
+  },
+
+  // Virtual Sensors
+  virtualSensors: {
+    list: () =>
+      fetchAPI<{ virtual_sensors: import('./types').VirtualSensor[] }>('/api/virtual-sensors'),
+    create: (body: import('./types').VirtualSensorRequest) =>
+      fetchAPI<{ success: boolean; id: string }>('/api/virtual-sensors', {
+        method: 'POST', body: JSON.stringify(body),
+      }),
+    update: (id: string, body: import('./types').VirtualSensorRequest) =>
+      fetchAPI<{ success: boolean }>(`/api/virtual-sensors/${id}`, {
+        method: 'PUT', body: JSON.stringify(body),
+      }),
+    delete: (id: string) =>
+      fetchAPI<{ success: boolean }>(`/api/virtual-sensors/${id}`, { method: 'DELETE' }),
   },
 };

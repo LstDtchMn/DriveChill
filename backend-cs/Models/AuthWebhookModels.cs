@@ -26,6 +26,9 @@ public sealed class ApiKeyRecord
     public string KeyPrefix { get; set; } = "";
     public string KeyHash { get; set; } = "";
     public List<string> Scopes { get; set; } = ["read:sensors"];
+    /// <summary>Effective role of this key — capped to the creator's role.</summary>
+    public string Role { get; set; } = "admin";
+    public string? CreatedBy { get; set; }
     public string CreatedAt { get; set; } = DateTimeOffset.UtcNow.ToString("o");
     public string? RevokedAt { get; set; }
     public string? LastUsedAt { get; set; }

@@ -22,6 +22,7 @@ from app.services.drive_health_normalizer import DriveHealthNormalizer
 
 if TYPE_CHECKING:
     from app.services.sensor_service import SensorService
+    from app.services.smart_trend_service import SmartTrendService
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,7 @@ class DriveMonitorService:
         self._drives: dict[str, DriveRawData] = {}
 
         self._sensor_service: SensorService | None = None
+        self._smart_trend_svc: SmartTrendService | None = None
 
         self._running = False
         self._tasks: list[asyncio.Task] = []
@@ -66,6 +68,9 @@ class DriveMonitorService:
 
     def set_sensor_service(self, svc: SensorService) -> None:
         self._sensor_service = svc
+
+    def set_smart_trend_service(self, svc: SmartTrendService) -> None:
+        self._smart_trend_svc = svc
 
     # ── Settings loading ─────────────────────────────────────────────────────
 
@@ -257,6 +262,16 @@ class DriveMonitorService:
             )
             if refreshed.raw_attributes:
                 await self._repo.upsert_attributes(drive_id, refreshed.raw_attributes)
+
+            # SMART trend detection
+            if self._smart_trend_svc:
+                self._smart_trend_svc.check_drive(
+                    drive_id=drive_id,
+                    drive_name=refreshed.name,
+                    reallocated_sectors=refreshed.reallocated_sectors,
+                    wear_percent_used=refreshed.wear_percent_used,
+                    power_on_hours=refreshed.power_on_hours,
+                )
 
         await self._publish_drive_sensors(settings)
 

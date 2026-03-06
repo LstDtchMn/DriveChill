@@ -8,8 +8,8 @@ import { useSettingsStore } from '@/stores/settingsStore';
 import { useSensors } from '@/hooks/useSensors';
 import type { TempUnit } from '@/lib/tempUnit';
 import { requestNotificationPermission } from '@/hooks/useNotifications';
-import type { ApiKeyInfo, DriveSettings, MachineInfo, WebhookConfig, WebhookDelivery, PushSubscription, EmailNotificationSettings } from '@/lib/types';
-import { Save, RefreshCw, Download, Info, Pencil, X, Check, Bell, BellOff, HardDrive, ArrowUpCircle } from 'lucide-react';
+import type { ApiKeyInfo, DriveSettings, MachineInfo, WebhookConfig, WebhookDelivery, PushSubscription, EmailNotificationSettings, NotificationChannel, NotificationChannelType } from '@/lib/types';
+import { Save, RefreshCw, Download, Upload, Info, Pencil, X, Check, Bell, BellOff, HardDrive, ArrowUpCircle } from 'lucide-react';
 import { useConfirm } from '@/components/ui/ConfirmDialog';
 import { useToast } from '@/components/ui/ToastProvider';
 import { ViewerBanner } from '@/components/ui/ViewerBanner';
@@ -55,6 +55,7 @@ export function SettingsPage() {
   const [busyMachineIds, setBusyMachineIds] = useState<Set<string>>(new Set());
   const [apiKeys, setApiKeys] = useState<ApiKeyInfo[]>([]);
   const [newApiKeyName, setNewApiKeyName] = useState('');
+  const [newApiKeyScopes, setNewApiKeyScopes] = useState<Set<string>>(new Set());
   const [issuedApiKey, setIssuedApiKey] = useState<string | null>(null);
   const [users, setUsers] = useState<Array<{ id: number; username: string; role: string; created_at: string }>>([]);
   const [newUserName, setNewUserName] = useState('');
@@ -78,6 +79,38 @@ export function SettingsPage() {
   const [driveSaving, setDriveSaving] = useState(false);
   const [updateApplying, setUpdateApplying] = useState(false);
   const [updateMessage, setUpdateMessage] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<Record<string, number> | null>(null);
+
+  // Notification channels
+  const [notifChannels, setNotifChannels] = useState<NotificationChannel[]>([]);
+  const [ncName, setNcName] = useState('');
+  const [ncType, setNcType] = useState<NotificationChannelType>('discord');
+  const [ncEnabled, setNcEnabled] = useState(true);
+  const [ncConfig, setNcConfig] = useState('');
+  const [ncEditId, setNcEditId] = useState<string | null>(null);
+  const [ncBusy, setNcBusy] = useState(false);
+  const [ncTestingId, setNcTestingId] = useState<string | null>(null);
+
+  // Virtual sensors
+  const [virtualSensors, setVirtualSensors] = useState<import('@/lib/types').VirtualSensor[]>([]);
+  const [vsName, setVsName] = useState('');
+  const [vsType, setVsType] = useState<import('@/lib/types').VirtualSensorType>('max');
+  const [vsSourceIds, setVsSourceIds] = useState('');
+  const [vsWeights, setVsWeights] = useState('');
+  const [vsWindow, setVsWindow] = useState('');
+  const [vsOffset, setVsOffset] = useState('0');
+  const [vsEditId, setVsEditId] = useState<string | null>(null);
+  const [vsBusy, setVsBusy] = useState(false);
+
+  useEffect(() => {
+    api.notificationChannels.list().then(r => setNotifChannels(r.channels)).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    api.virtualSensors.list().then(r => setVirtualSensors(r.virtual_sensors)).catch(() => {});
+  }, []);
 
   useEffect(() => {
     api.drives.getSettings().then(setDriveSettings).catch(() => {});
@@ -351,9 +384,11 @@ export function SettingsPage() {
     const name = newApiKeyName.trim();
     if (!name) return;
     try {
-      const data = await api.createApiKey(name);
+      const scopes = newApiKeyScopes.size > 0 ? Array.from(newApiKeyScopes) : undefined;
+      const data = await api.createApiKey(name, scopes);
       setIssuedApiKey(data.plaintext_key);
       setNewApiKeyName('');
+      setNewApiKeyScopes(new Set());
       await fetchApiKeys();
     } catch {
       toast('Failed to create API key.', 'error');
@@ -1023,19 +1058,65 @@ export function SettingsPage() {
       {isAdmin && <div className="card p-6 animate-card-enter">
         <h3 className="text-base font-semibold mb-2" style={{ color: 'var(--text)' }}>API Keys</h3>
         <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
-          Generate keys for hub-to-agent machine authentication. New keys default to
-          read-only sensor scope (`read:sensors`).
+          Generate keys for machine-to-machine access. Select scopes below — leave all unchecked for a read-only <code>read:sensors</code> key.
         </p>
-        <div className="flex flex-col sm:flex-row gap-2 mb-3">
+        <div className="flex flex-col gap-3 mb-3">
           <input
             type="text"
             value={newApiKeyName}
             onChange={(e) => setNewApiKeyName(e.target.value)}
             placeholder="Key name (e.g. Hub Main)"
-            className="flex-1 px-3 py-2 rounded-lg text-sm border outline-none"
+            className="px-3 py-2 rounded-lg text-sm border outline-none"
             style={{ background: 'var(--bg)', borderColor: 'var(--border)', color: 'var(--text)' }}
           />
-          <button onClick={handleCreateApiKey} className="btn-primary text-sm px-4">
+          {/* Scope picker */}
+          <div className="rounded-lg p-3" style={{ background: 'var(--bg)', border: '1px solid var(--border)' }}>
+            <p className="text-xs font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>Scopes — leave all unchecked for default <code>read:sensors</code></p>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1">
+              {/* Full-access wildcard */}
+              <label key="*" className="flex items-center gap-1.5 cursor-pointer col-span-full">
+                <input
+                  type="checkbox"
+                  checked={newApiKeyScopes.has('*')}
+                  onChange={(e) => {
+                    const next = new Set(newApiKeyScopes);
+                    if (e.target.checked) {
+                      next.clear();
+                      next.add('*');
+                    } else {
+                      next.delete('*');
+                    }
+                    setNewApiKeyScopes(next);
+                  }}
+                  className="rounded"
+                />
+                <span className="text-xs font-medium" style={{ color: 'var(--accent)' }}>* (full access — all domains)</span>
+              </label>
+              {/* Per-domain scopes (disabled when * is selected) */}
+              {(['alerts','analytics','auth','drives','fans','machines','notifications','profiles','quiet_hours','sensors','settings','temperature_targets','webhooks'] as const).flatMap(domain =>
+                (['read','write'] as const).map(action => {
+                  const scope = `${action}:${domain}`;
+                  return (
+                    <label key={scope} className="flex items-center gap-1.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={newApiKeyScopes.has(scope)}
+                        disabled={newApiKeyScopes.has('*')}
+                        onChange={(e) => {
+                          const next = new Set(newApiKeyScopes);
+                          e.target.checked ? next.add(scope) : next.delete(scope);
+                          setNewApiKeyScopes(next);
+                        }}
+                        className="rounded"
+                      />
+                      <span className="text-xs" style={{ color: newApiKeyScopes.has('*') ? 'var(--text-secondary)' : 'var(--text)' }}>{scope}</span>
+                    </label>
+                  );
+                })
+              )}
+            </div>
+          </div>
+          <button onClick={handleCreateApiKey} className="btn-primary text-sm px-4 self-start">
             Create Key
           </button>
         </div>
@@ -1052,14 +1133,31 @@ export function SettingsPage() {
           {apiKeys.length === 0 ? (
             <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>No API keys yet.</p>
           ) : apiKeys.map((k) => (
-            <div key={k.id} className="flex items-center justify-between rounded-lg px-3 py-2" style={{ background: 'var(--bg)', border: '1px solid var(--border)' }}>
-              <div className="min-w-0">
-                <p className="text-sm truncate" style={{ color: 'var(--text)' }}>{k.name}</p>
-                <p className="text-xs truncate" style={{ color: 'var(--text-secondary)' }}>{k.key_prefix}...</p>
+            <div key={k.id} className="rounded-lg px-3 py-2" style={{ background: 'var(--bg)', border: '1px solid var(--border)' }}>
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0 flex items-center gap-2">
+                  <p className="text-sm truncate" style={{ color: 'var(--text)' }}>{k.name}</p>
+                  <span
+                    className={`badge ${k.role === 'viewer' ? '' : 'badge-success'}`}
+                    style={k.role === 'viewer' ? { background: 'var(--surface-200)', color: 'var(--text-secondary)' } : undefined}
+                  >
+                    {k.role ?? 'admin'}
+                  </span>
+                </div>
+                <button onClick={() => handleRevokeApiKey(k.id)} className="btn-secondary text-xs px-3 shrink-0">
+                  Revoke
+                </button>
               </div>
-              <button onClick={() => handleRevokeApiKey(k.id)} className="btn-secondary text-xs px-3">
-                Revoke
-              </button>
+              <p className="text-xs mt-0.5" style={{ color: 'var(--text-secondary)' }}>{k.key_prefix}...</p>
+              {k.scopes && k.scopes.length > 0 && (
+                <div className="flex flex-wrap gap-1 mt-1.5">
+                  {k.scopes.map(s => (
+                    <span key={s} className="badge text-xs" style={{ background: 'var(--surface-200)', color: 'var(--text-secondary)', fontSize: '0.65rem' }}>
+                      {s}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -1462,6 +1560,458 @@ export function SettingsPage() {
           </div>
         )}
       </div>
+
+      {/* Notification Channels */}
+      <div className="card p-6 animate-card-enter">
+        <h3 className="text-base font-semibold mb-4" style={{ color: 'var(--text)' }}>Notification Channels</h3>
+        <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
+          Send alert notifications to Discord, Slack, ntfy.sh, or a generic webhook endpoint.
+          Channels are used alongside existing push/email notifications.
+        </p>
+
+        {/* Existing channels list */}
+        {notifChannels.length > 0 && (
+          <div className="space-y-2 mb-4">
+            {notifChannels.map(ch => (
+              <div key={ch.id} className="flex items-center justify-between p-3 rounded text-xs"
+                style={{ background: 'var(--surface-200)', color: 'var(--text)' }}>
+                <div className="flex-1 min-w-0">
+                  <div className="font-medium flex items-center gap-2">
+                    {ch.name}
+                    <span className="badge" style={{ fontSize: '0.65rem' }}>{ch.type.replace('_', ' ')}</span>
+                    {ch.enabled
+                      ? <span className="badge badge-success" style={{ fontSize: '0.6rem' }}>ON</span>
+                      : <span className="badge badge-danger" style={{ fontSize: '0.6rem' }}>OFF</span>}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 ml-2 shrink-0">
+                  <button className="btn-secondary text-xs px-2 py-1"
+                    disabled={ncTestingId === ch.id}
+                    onClick={async () => {
+                      setNcTestingId(ch.id);
+                      try {
+                        const r = await api.notificationChannels.test(ch.id);
+                        if (r.success) toast('Test notification sent!');
+                        else toast(r.error || 'Test failed.', 'error');
+                      } catch (err: any) {
+                        toast(err?.message || 'Test failed.', 'error');
+                      } finally {
+                        setNcTestingId(null);
+                      }
+                    }}>
+                    {ncTestingId === ch.id ? '...' : 'Test'}
+                  </button>
+                  {isAdmin && (
+                    <>
+                      <button className="btn-secondary text-xs px-2 py-1"
+                        onClick={() => {
+                          setNcEditId(ch.id);
+                          setNcName(ch.name);
+                          setNcType(ch.type);
+                          setNcEnabled(ch.enabled);
+                          setNcConfig(JSON.stringify(ch.config, null, 2));
+                        }}>
+                        <Pencil size={12} />
+                      </button>
+                      <button className="btn-secondary text-xs px-2 py-1"
+                        style={{ color: 'var(--danger)' }}
+                        onClick={async () => {
+                          const confirmed = await confirm(`Delete channel "${ch.name}"?`);
+                          if (!confirmed) return;
+                          try {
+                            await api.notificationChannels.delete(ch.id);
+                            setNotifChannels(prev => prev.filter(c => c.id !== ch.id));
+                            toast('Channel deleted.');
+                          } catch (err: any) {
+                            toast(err?.message || 'Delete failed.', 'error');
+                          }
+                        }}>
+                        <X size={12} />
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Create/Edit form — admin only */}
+        {isAdmin && (
+          <div className="space-y-3 p-4 rounded" style={{ background: 'var(--surface-200)' }}>
+            <div className="text-xs font-medium" style={{ color: 'var(--text)' }}>
+              {ncEditId ? 'Edit Channel' : 'Add Channel'}
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs block mb-1" style={{ color: 'var(--text-secondary)' }}>Name</label>
+                <input className="w-full p-2 rounded text-xs" style={{ background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)' }}
+                  value={ncName} onChange={e => setNcName(e.target.value)} placeholder="My Discord Alert" />
+              </div>
+              <div>
+                <label className="text-xs block mb-1" style={{ color: 'var(--text-secondary)' }}>Type</label>
+                <select className="w-full p-2 rounded text-xs" style={{ background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)' }}
+                  value={ncType} onChange={e => setNcType(e.target.value as NotificationChannelType)}
+                  disabled={!!ncEditId}>
+                  <option value="discord">Discord</option>
+                  <option value="slack">Slack</option>
+                  <option value="ntfy">ntfy.sh</option>
+                  <option value="generic_webhook">Generic Webhook</option>
+                </select>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <input type="checkbox" id="nc-enabled" checked={ncEnabled} onChange={e => setNcEnabled(e.target.checked)} />
+              <label htmlFor="nc-enabled" className="text-xs" style={{ color: 'var(--text-secondary)' }}>Enabled</label>
+            </div>
+            <div>
+              <label className="text-xs block mb-1" style={{ color: 'var(--text-secondary)' }}>
+                Config (JSON)
+                <span style={{ opacity: 0.6, marginLeft: 4 }}>
+                  {ncType === 'discord' && '— { "webhook_url": "https://discord.com/api/webhooks/..." }'}
+                  {ncType === 'slack' && '— { "webhook_url": "https://hooks.slack.com/services/..." }'}
+                  {ncType === 'ntfy' && '— { "topic": "my-alerts", "url": "https://ntfy.sh" }'}
+                  {ncType === 'generic_webhook' && '— { "url": "https://...", "hmac_secret": "optional" }'}
+                </span>
+              </label>
+              <textarea className="w-full p-2 rounded text-xs font-mono" rows={4}
+                style={{ background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', resize: 'vertical' }}
+                value={ncConfig} onChange={e => setNcConfig(e.target.value)}
+                placeholder={ncType === 'discord' ? '{ "webhook_url": "" }' :
+                  ncType === 'slack' ? '{ "webhook_url": "" }' :
+                  ncType === 'ntfy' ? '{ "topic": "", "url": "https://ntfy.sh" }' :
+                  '{ "url": "" }'} />
+            </div>
+            <div className="flex gap-2">
+              <button className="btn-primary text-xs px-4 py-2" disabled={ncBusy || !ncName.trim()}
+                onClick={async () => {
+                  let config: Record<string, unknown>;
+                  try {
+                    config = ncConfig.trim() ? JSON.parse(ncConfig) : {};
+                  } catch {
+                    toast('Config must be valid JSON.', 'error');
+                    return;
+                  }
+                  setNcBusy(true);
+                  try {
+                    if (ncEditId) {
+                      await api.notificationChannels.update(ncEditId, { name: ncName.trim(), enabled: ncEnabled, config });
+                      toast('Channel updated.');
+                    } else {
+                      await api.notificationChannels.create({ type: ncType, name: ncName.trim(), enabled: ncEnabled, config });
+                      toast('Channel created.');
+                    }
+                    const r = await api.notificationChannels.list();
+                    setNotifChannels(r.channels);
+                    setNcEditId(null); setNcName(''); setNcType('discord'); setNcEnabled(true); setNcConfig('');
+                  } catch (err: any) {
+                    toast(err?.message || 'Save failed.', 'error');
+                  } finally {
+                    setNcBusy(false);
+                  }
+                }}>
+                {ncBusy ? 'Saving...' : ncEditId ? 'Update' : 'Create'}
+              </button>
+              {ncEditId && (
+                <button className="btn-secondary text-xs px-4 py-2"
+                  onClick={() => { setNcEditId(null); setNcName(''); setNcType('discord'); setNcEnabled(true); setNcConfig(''); }}>
+                  Cancel
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Virtual Sensors */}
+      <div className="card p-6 animate-card-enter">
+        <h3 className="text-base font-semibold mb-4" style={{ color: 'var(--text)' }}>Virtual Sensors</h3>
+        <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
+          Create computed sensors from real sensor readings. Virtual sensor IDs can be used
+          anywhere a real sensor ID is accepted (fan curves, temperature targets, alerts).
+        </p>
+
+        {/* List existing */}
+        {virtualSensors.length > 0 && (
+          <div className="space-y-2 mb-4">
+            {virtualSensors.map(vs => (
+              <div key={vs.id} className="flex items-center justify-between p-3 rounded text-xs"
+                style={{ background: 'var(--surface-200)', color: 'var(--text)' }}>
+                <div className="flex-1 min-w-0">
+                  <div className="font-medium">{vs.name}</div>
+                  <div style={{ color: 'var(--text-secondary)' }}>
+                    <span className="badge" style={{ fontSize: '0.65rem' }}>{vs.type}</span>
+                    {' '}← {vs.source_ids.join(', ')}
+                    {vs.offset !== 0 && <span> (offset: {vs.offset})</span>}
+                    {vs.type === 'moving_avg' && vs.window_seconds && <span> (window: {vs.window_seconds}s)</span>}
+                    {vs.type === 'weighted' && vs.weights && <span> (weights: {vs.weights.join(', ')})</span>}
+                  </div>
+                  <div style={{ color: 'var(--text-secondary)', opacity: 0.7 }}>ID: {vs.id}</div>
+                </div>
+                <div className="flex items-center gap-2 ml-2 shrink-0">
+                  {isAdmin && (
+                    <>
+                      <button className="btn-secondary text-xs px-2 py-1"
+                        onClick={() => {
+                          setVsEditId(vs.id);
+                          setVsName(vs.name);
+                          setVsType(vs.type);
+                          setVsSourceIds(vs.source_ids.join(', '));
+                          setVsWeights(vs.weights?.join(', ') || '');
+                          setVsWindow(vs.window_seconds?.toString() || '');
+                          setVsOffset(vs.offset.toString());
+                        }}>
+                        <Pencil size={12} />
+                      </button>
+                      <button className="btn-secondary text-xs px-2 py-1"
+                        style={{ color: 'var(--danger)' }}
+                        onClick={async () => {
+                          const confirmed = await confirm(`Delete virtual sensor "${vs.name}"?`);
+                          if (!confirmed) return;
+                          try {
+                            await api.virtualSensors.delete(vs.id);
+                            setVirtualSensors(prev => prev.filter(v => v.id !== vs.id));
+                            toast('Virtual sensor deleted.');
+                          } catch (err: any) {
+                            toast(err?.message || 'Delete failed.', 'error');
+                          }
+                        }}>
+                        <X size={12} />
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Create/Edit form — admin only */}
+        {isAdmin && (
+          <div className="space-y-3 p-4 rounded" style={{ background: 'var(--surface-200)' }}>
+            <div className="text-xs font-medium" style={{ color: 'var(--text)' }}>
+              {vsEditId ? 'Edit Virtual Sensor' : 'Create Virtual Sensor'}
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs block mb-1" style={{ color: 'var(--text-secondary)' }}>Name</label>
+                <input className="w-full p-2 rounded text-xs" style={{ background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)' }}
+                  value={vsName} onChange={e => setVsName(e.target.value)} placeholder="CPU Max (all cores)" />
+              </div>
+              <div>
+                <label className="text-xs block mb-1" style={{ color: 'var(--text-secondary)' }}>Type</label>
+                <select className="w-full p-2 rounded text-xs" style={{ background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)' }}
+                  value={vsType} onChange={e => setVsType(e.target.value as any)}>
+                  <option value="max">MAX</option>
+                  <option value="min">MIN</option>
+                  <option value="avg">AVG</option>
+                  <option value="weighted">Weighted</option>
+                  <option value="delta">Delta (A − B)</option>
+                  <option value="moving_avg">Moving Average</option>
+                </select>
+              </div>
+            </div>
+            <div>
+              <label className="text-xs block mb-1" style={{ color: 'var(--text-secondary)' }}>
+                Source Sensor IDs <span style={{ opacity: 0.6 }}>(comma-separated)</span>
+              </label>
+              <input className="w-full p-2 rounded text-xs" style={{ background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)' }}
+                value={vsSourceIds} onChange={e => setVsSourceIds(e.target.value)}
+                placeholder="cpu_temp_0, cpu_temp_1, cpu_temp_2" />
+            </div>
+            {vsType === 'weighted' && (
+              <div>
+                <label className="text-xs block mb-1" style={{ color: 'var(--text-secondary)' }}>
+                  Weights <span style={{ opacity: 0.6 }}>(comma-separated, same order as source IDs)</span>
+                </label>
+                <input className="w-full p-2 rounded text-xs" style={{ background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)' }}
+                  value={vsWeights} onChange={e => setVsWeights(e.target.value)} placeholder="1.0, 0.5, 0.5" />
+              </div>
+            )}
+            {vsType === 'moving_avg' && (
+              <div>
+                <label className="text-xs block mb-1" style={{ color: 'var(--text-secondary)' }}>
+                  Window (seconds)
+                </label>
+                <input className="w-full p-2 rounded text-xs" type="number" min="1" step="1"
+                  style={{ background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)' }}
+                  value={vsWindow} onChange={e => setVsWindow(e.target.value)} placeholder="30" />
+              </div>
+            )}
+            <div>
+              <label className="text-xs block mb-1" style={{ color: 'var(--text-secondary)' }}>
+                Offset <span style={{ opacity: 0.6 }}>(added after computation)</span>
+              </label>
+              <input className="w-full p-2 rounded text-xs" type="number" step="0.1"
+                style={{ background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)' }}
+                value={vsOffset} onChange={e => setVsOffset(e.target.value)} />
+            </div>
+
+            {/* Formula preview */}
+            <div className="text-xs p-2 rounded" style={{ background: 'var(--bg)', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>
+              {(() => {
+                const ids = vsSourceIds.split(',').map(s => s.trim()).filter(Boolean);
+                const off = parseFloat(vsOffset) || 0;
+                const offStr = off !== 0 ? ` + ${off}` : '';
+                if (ids.length === 0) return 'Enter source sensor IDs to see formula preview';
+                if (vsType === 'delta') return ids.length >= 2 ? `${ids[0]} − ${ids[1]}${offStr}` : 'Delta requires exactly 2 sources';
+                if (vsType === 'weighted') {
+                  const w = vsWeights.split(',').map(s => parseFloat(s.trim())).filter(n => !isNaN(n));
+                  if (w.length === ids.length) return `(${ids.map((id, i) => `${id}×${w[i]}`).join(' + ')}) / ${w.reduce((a, b) => a + b, 0)}${offStr}`;
+                  return `avg(${ids.join(', ')})${offStr}  ← weights needed`;
+                }
+                if (vsType === 'moving_avg') return `EMA(avg(${ids.join(', ')}), window=${vsWindow || '30'}s)${offStr}`;
+                return `${vsType}(${ids.join(', ')})${offStr}`;
+              })()}
+            </div>
+
+            <div className="flex gap-2">
+              <button className="btn-primary text-xs px-4 py-2" disabled={vsBusy || !vsName.trim() || !vsSourceIds.trim()}
+                onClick={async () => {
+                  setVsBusy(true);
+                  try {
+                    const sourceIds = vsSourceIds.split(',').map(s => s.trim()).filter(Boolean);
+                    const weights = vsWeights ? vsWeights.split(',').map(s => parseFloat(s.trim())).filter(n => !isNaN(n)) : undefined;
+                    const body: import('@/lib/types').VirtualSensorRequest = {
+                      name: vsName.trim(),
+                      type: vsType,
+                      source_ids: sourceIds,
+                      weights: weights && weights.length > 0 ? weights : undefined,
+                      window_seconds: vsWindow ? parseFloat(vsWindow) : undefined,
+                      offset: parseFloat(vsOffset) || 0,
+                      enabled: true,
+                    };
+                    if (vsEditId) {
+                      await api.virtualSensors.update(vsEditId, body);
+                      toast('Virtual sensor updated.');
+                    } else {
+                      await api.virtualSensors.create(body);
+                      toast('Virtual sensor created.');
+                    }
+                    // Refresh list
+                    const r = await api.virtualSensors.list();
+                    setVirtualSensors(r.virtual_sensors);
+                    // Reset form
+                    setVsEditId(null); setVsName(''); setVsType('max');
+                    setVsSourceIds(''); setVsWeights(''); setVsWindow(''); setVsOffset('0');
+                  } catch (err: any) {
+                    toast(err?.message || 'Save failed.', 'error');
+                  } finally {
+                    setVsBusy(false);
+                  }
+                }}>
+                {vsBusy ? 'Saving...' : vsEditId ? 'Update' : 'Create'}
+              </button>
+              {vsEditId && (
+                <button className="btn-secondary text-xs px-4 py-2"
+                  onClick={() => {
+                    setVsEditId(null); setVsName(''); setVsType('max');
+                    setVsSourceIds(''); setVsWeights(''); setVsWindow(''); setVsOffset('0');
+                  }}>
+                  Cancel
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Import / Export — admin only */}
+      {isAdmin && (
+        <div className="card p-6 animate-card-enter">
+          <h3 className="text-base font-semibold mb-4" style={{ color: 'var(--text)' }}>Import / Export</h3>
+          <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
+            Export your entire configuration (profiles, alert rules, temperature targets, quiet hours,
+            webhook settings, sensor labels, and app settings) as a JSON file, or import a previously
+            exported file to restore or clone a configuration.
+          </p>
+          <div className="flex flex-wrap gap-3">
+            <button
+              className="btn-primary text-sm px-4 py-2 flex items-center gap-2"
+              disabled={exporting}
+              onClick={async () => {
+                setExporting(true);
+                try {
+                  const data = await api.exportConfig();
+                  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  const date = new Date().toISOString().slice(0, 10);
+                  a.href = url;
+                  a.download = `drivechill-config-${date}.json`;
+                  document.body.appendChild(a);
+                  a.click();
+                  document.body.removeChild(a);
+                  URL.revokeObjectURL(url);
+                  toast('Configuration exported successfully.');
+                } catch (err: any) {
+                  toast(err?.message || 'Export failed.', 'error');
+                } finally {
+                  setExporting(false);
+                }
+              }}
+            >
+              <Download size={14} />
+              {exporting ? 'Exporting...' : 'Export Config'}
+            </button>
+
+            <button
+              className="btn-secondary text-sm px-4 py-2 flex items-center gap-2"
+              disabled={importing}
+              onClick={() => {
+                const input = document.createElement('input');
+                input.type = 'file';
+                input.accept = '.json,application/json';
+                input.onchange = async () => {
+                  const file = input.files?.[0];
+                  if (!file) return;
+                  setImporting(true);
+                  setImportResult(null);
+                  try {
+                    const text = await file.text();
+                    const data = JSON.parse(text);
+                    if (data.export_version !== 1) {
+                      toast('Unsupported export file format (expected export_version: 1).', 'error');
+                      return;
+                    }
+                    const confirmed = await confirm(
+                      'This will overwrite alert rules, temperature targets, and quiet hours with the imported values. Profiles and sensor labels will be merged. Continue?'
+                    );
+                    if (!confirmed) return;
+                    const result = await api.importConfig(data);
+                    setImportResult(result.imported);
+                    toast('Configuration imported successfully.');
+                    // Refresh settings to reflect any changes
+                    try {
+                      const refreshed = await api.getSettings();
+                      setSettings(refreshed);
+                    } catch { /* best effort */ }
+                  } catch (err: any) {
+                    toast(err?.message || 'Import failed.', 'error');
+                  } finally {
+                    setImporting(false);
+                  }
+                };
+                input.click();
+              }}
+            >
+              <Upload size={14} />
+              {importing ? 'Importing...' : 'Import Config'}
+            </button>
+          </div>
+
+          {importResult && (
+            <div className="mt-4 p-3 rounded text-xs" style={{ background: 'var(--surface-200)', color: 'var(--text)' }}>
+              <strong>Import results:</strong>
+              <ul className="mt-1 space-y-0.5 list-disc list-inside" style={{ color: 'var(--text-secondary)' }}>
+                {Object.entries(importResult).map(([key, count]) => (
+                  <li key={key}>{key.replace(/_/g, ' ')}: {count}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Help */}
       <div className="card p-4 flex items-start gap-3 animate-card-enter" style={{ background: 'var(--accent-muted)' }}>

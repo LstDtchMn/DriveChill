@@ -13,6 +13,7 @@ from urllib.parse import urlparse, urlunparse
 import aiosqlite
 import httpx
 
+from app.services import prom_metrics
 from app.utils.url_security import validate_outbound_url_at_request_time
 
 logger = logging.getLogger(__name__)
@@ -223,6 +224,7 @@ class WebhookService:
                 error = str(exc)[:300]
             latency_ms = int((time.perf_counter() - start) * 1000)
 
+            prom_metrics.webhook_deliveries_total.labels("true" if success else "false").inc()
             await self._db.execute(
                 "INSERT INTO webhook_delivery_log "
                 "(timestamp, event_type, target_url, payload_json, attempt, success, "

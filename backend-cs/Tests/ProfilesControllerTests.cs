@@ -16,6 +16,7 @@ public sealed class ProfilesControllerTests : IDisposable
     private readonly string _tempDir;
     private readonly SettingsStore _store;
     private readonly FanService _fans;
+    private readonly AlertService _alerts;
     private readonly ProfilesController _ctrl;
 
     public ProfilesControllerTests()
@@ -25,9 +26,10 @@ public sealed class ProfilesControllerTests : IDisposable
         Environment.SetEnvironmentVariable("DRIVECHILL_DATA_DIR", _tempDir);
 
         var settings = new AppSettings();
-        _store = new SettingsStore(settings);
-        _fans  = new FanService(new StubHardware("fan1", "fan2"), _store);
-        _ctrl  = new ProfilesController(_store, _fans);
+        _store  = new SettingsStore(settings);
+        _fans   = new FanService(new StubHardware("fan1", "fan2"), _store);
+        _alerts = new AlertService(_store);
+        _ctrl   = new ProfilesController(_store, _fans, _alerts);
     }
 
     public void Dispose()

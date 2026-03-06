@@ -21,6 +21,7 @@ export function useWebSocket(enabled = true) {
     setReadings,
     addHistoryPoint,
     setAppliedSpeeds,
+    setControlSources,
     addAlertEvents,
     setActiveAlerts,
     setFanTestProgress,
@@ -82,6 +83,10 @@ export function useWebSocket(enabled = true) {
               setAppliedSpeeds(msg.applied_speeds);
             }
 
+            if (msg.control_sources) {
+              setControlSources(msg.control_sources);
+            }
+
             if (msg.alerts && msg.alerts.length > 0) {
               addAlertEvents(msg.alerts);
             }
@@ -116,7 +121,7 @@ export function useWebSocket(enabled = true) {
     } catch {
       scheduleReconnect();
     }
-  }, [setReadings, addHistoryPoint, setAppliedSpeeds, addAlertEvents, setActiveAlerts, setFanTestProgress, setSafeMode, setConnected, setBackendName, scheduleReconnect]);
+  }, [setReadings, addHistoryPoint, setAppliedSpeeds, setControlSources, addAlertEvents, setActiveAlerts, setFanTestProgress, setSafeMode, setConnected, setBackendName, scheduleReconnect]);
 
   useEffect(() => {
     if (!enabled) {

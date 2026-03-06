@@ -56,6 +56,11 @@ async def activate_profile(profile_id: str, request: Request):
     if hasattr(request.app.state, "quiet_hours_service"):
         request.app.state.quiet_hours_service.notify_manual_override()
 
+    # Update alert service's pre-alert profile so future alert-triggered
+    # switches know which profile to revert to.
+    if hasattr(request.app.state, "alert_service"):
+        request.app.state.alert_service.set_pre_alert_profile(profile_id)
+
     # M-3: delegate to FanService.apply_profile() — single canonical
     # implementation instead of duplicating preset-expansion logic here.
     fan_service = request.app.state.fan_service

@@ -26,6 +26,9 @@ public sealed class FanCurve
 
     [JsonPropertyName("enabled")]
     public bool Enabled { get; set; } = true;
+
+    [JsonPropertyName("sensor_ids")]
+    public List<string> SensorIds { get; set; } = [];
 }
 
 /// <summary>Request body for POST /api/fans/speed.</summary>

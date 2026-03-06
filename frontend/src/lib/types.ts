@@ -47,12 +47,19 @@ export interface Profile {
   is_active: boolean;
 }
 
+export interface AlertAction {
+  type: 'switch_profile';
+  profile_id: string;
+  revert_after_clear: boolean;
+}
+
 export interface AlertRule {
   id: string;
   sensor_id: string;
   threshold: number;
   name: string;
   enabled: boolean;
+  action?: AlertAction | null;
 }
 
 export interface AlertEvent {
@@ -173,6 +180,8 @@ export interface ApiKeyInfo {
   name: string;
   key_prefix: string;
   scopes?: string[];
+  role?: string;
+  created_by?: string | null;
   created_at: string;
   revoked_at: string | null;
   last_used_at: string | null;
@@ -199,6 +208,24 @@ export interface WebhookDelivery {
   error: string | null;
 }
 
+export type ControlSource =
+  | 'profile'
+  | 'temperature_target'
+  | 'startup_safety'
+  | 'panic_sensor'
+  | 'panic_temp'
+  | 'released'
+  | 'manual';
+
+export interface FanControlStatus {
+  safe_mode?: SafeModeStatus;
+  curves_active?: number;
+  applied_speeds?: Record<string, number>;
+  /** Per-fan source of the last applied speed (B3 control transparency). */
+  control_sources?: Record<string, ControlSource>;
+  startup_safety_active?: boolean;
+}
+
 export interface WSMessage {
   type: 'sensor_update' | 'heartbeat';
   timestamp?: string;
@@ -208,9 +235,22 @@ export interface WSMessage {
   active_alerts?: string[];
   fan_test?: FanTestProgress[];
   safe_mode?: SafeModeStatus;
+  control_sources?: Record<string, ControlSource>;
+  startup_safety_active?: boolean;
 }
 
-export type Page = 'dashboard' | 'curves' | 'alerts' | 'settings' | 'analytics' | 'drives' | 'temperature-targets';
+export type Page = 'dashboard' | 'curves' | 'alerts' | 'settings' | 'analytics' | 'drives' | 'temperature-targets' | 'quiet-hours';
+
+// ── Quiet Hours ──────────────────────────────────────────────────────────────
+
+export interface QuietHoursRule {
+  id: number;
+  day_of_week: number;  // 0=Monday, 6=Sunday
+  start_time: string;   // HH:MM
+  end_time: string;     // HH:MM
+  profile_id: string;
+  enabled: boolean;
+}
 
 // ── Temperature targets ──────────────────────────────────────────────────────
 
@@ -407,6 +447,47 @@ export interface ThermalRegression {
   delta: number;
   severity: 'warning' | 'critical';
   message: string;
+}
+
+// ─── Virtual Sensors ──────────────────────────────────────────────────────────
+
+export type VirtualSensorType = 'max' | 'min' | 'avg' | 'weighted' | 'delta' | 'moving_avg';
+
+export interface VirtualSensor {
+  id: string;
+  name: string;
+  type: VirtualSensorType;
+  source_ids: string[];
+  weights: number[] | null;
+  window_seconds: number | null;
+  offset: number;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface VirtualSensorRequest {
+  name: string;
+  type: VirtualSensorType;
+  source_ids: string[];
+  weights?: number[] | null;
+  window_seconds?: number | null;
+  offset?: number;
+  enabled?: boolean;
+}
+
+// ─── Notification Channels ────────────────────────────────────────────────────
+
+export type NotificationChannelType = 'discord' | 'slack' | 'ntfy' | 'generic_webhook';
+
+export interface NotificationChannel {
+  id: string;
+  type: NotificationChannelType;
+  name: string;
+  enabled: boolean;
+  config: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface UpdateCheck {

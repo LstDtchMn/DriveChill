@@ -23,6 +23,8 @@ _API_KEY_SCOPE_PREFIX_RULES: tuple[tuple[str, str], ...] = (
     ("/api/sensors", "sensors"),
     ("/api/settings", "settings"),
     ("/api/temperature-targets", "temperature_targets"),
+    ("/api/virtual-sensors", "virtual_sensors"),
+    ("/api/notification-channels", "notifications"),
     ("/api/webhooks", "webhooks"),
 )
 
@@ -172,6 +174,11 @@ async def require_csrf(
 
     existing = getattr(request.state, "auth_info", None)
     if existing and existing.get("auth_type") == "api_key":
+        # Viewer-role API keys cannot perform write operations.
+        key_meta = existing.get("api_key", {})
+        path = request.url.path.rstrip("/")
+        if key_meta.get("role", "admin") != "admin" and path != "/api/auth/logout":
+            raise HTTPException(status_code=403, detail="Write access requires admin role")
         return
 
     # Tray sends a per-process internal token to bypass CSRF
@@ -193,6 +200,10 @@ async def require_csrf(
                 status_code=403,
                 detail=f"API key missing required scope: {required_scope}",
             )
+        # Viewer-role API keys cannot perform write operations.
+        path = request.url.path.rstrip("/")
+        if key_meta.get("role", "admin") != "admin" and path != "/api/auth/logout":
+            raise HTTPException(status_code=403, detail="Write access requires admin role")
         request.state.auth_info = {"auth_type": "api_key", "api_key": key_meta}
         return
 
@@ -262,39 +273,3 @@ async def require_admin(
         raise HTTPException(status_code=403, detail="Admin role required")
 
 
-async def require_write_role(
-    request: Request,
-    drivechill_session: str | None = Cookie(None),
-) -> None:
-    """Block viewer-role sessions from write (non-GET) requests.
-
-    Applied as a dependency on all state-changing routes. API-key requests and
-    internal requests are not affected (they have their own scope enforcement).
-    """
-    if not _auth_enabled():
-        return
-
-    if _is_internal_request(request):
-        return
-
-    api_key = _extract_api_key(request)
-    if api_key:
-        return  # API keys use scope enforcement instead
-
-    if not drivechill_session:
-        return  # require_auth/require_csrf will catch missing sessions
-
-    existing = getattr(request.state, "auth_info", None)
-    session = None
-    if existing and existing.get("auth_type") == "session":
-        session = existing.get("session")
-    if session is None:
-        auth_service = request.app.state.auth_service
-        session = await auth_service.validate_session(drivechill_session)
-        if session is None:
-            return  # require_auth will reject before we get here
-
-    assert session is not None
-    role = session.get("role", "admin")
-    if role != "admin":
-        raise HTTPException(status_code=403, detail="Write access requires admin role")

@@ -1,10 +1,12 @@
 import asyncio
 import logging
+import time
 from collections import deque
 from datetime import datetime, timezone
 
 from app.hardware.base import HardwareBackend
-from app.models.sensors import SensorReading, SensorSnapshot
+from app.models.sensors import SensorReading, SensorSnapshot, SensorType
+from app.services import prom_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -115,11 +117,26 @@ class SensorService:
     async def _poll_loop(self) -> None:
         while self._running:
             try:
+                t0 = time.monotonic()
                 readings = await self._backend.get_sensor_readings()
+                prom_metrics.sensor_poll_duration.labels(
+                    self._backend.get_backend_name()
+                ).observe(time.monotonic() - t0)
+
                 # Merge in drive temperature readings from the drive monitor
                 all_readings = readings + self._drive_readings
                 self._latest = all_readings
                 self._consecutive_failures = 0
+
+                # Count hardware sensor readings by sensor_type (drive monitor readings
+                # excluded to match C# SensorWorker behaviour).
+                for r in readings:
+                    if r.sensor_type:
+                        prom_metrics.sensor_readings_total.labels(r.sensor_type.value).inc()
+                # Update drive temp gauge from all readings (includes DriveMonitor).
+                for r in all_readings:
+                    if r.sensor_type == SensorType.HDD_TEMP and getattr(r, "drive_id", None):
+                        prom_metrics.drive_temp_celsius.labels(r.drive_id).set(float(r.value))
 
                 snapshot = SensorSnapshot(timestamp=datetime.now(timezone.utc), readings=all_readings)
                 self._history.append(snapshot)

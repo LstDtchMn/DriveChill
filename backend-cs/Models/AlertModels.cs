@@ -2,6 +2,19 @@ using System.Text.Json.Serialization;
 
 namespace DriveChill.Models;
 
+/// <summary>Optional action payload attached to an alert rule.</summary>
+public sealed class AlertAction
+{
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = "switch_profile";
+
+    [JsonPropertyName("profile_id")]
+    public string ProfileId { get; set; } = "";
+
+    [JsonPropertyName("revert_after_clear")]
+    public bool RevertAfterClear { get; set; } = true;
+}
+
 /// <summary>A threshold rule that fires when a sensor exceeds a value.</summary>
 public sealed class AlertRule
 {
@@ -29,6 +42,9 @@ public sealed class AlertRule
 
     [JsonPropertyName("created_at")]
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+
+    [JsonPropertyName("action")]
+    public AlertAction? Action { get; set; }
 }
 
 /// <summary>A fired alert event with the actual sensor value that triggered it.</summary>
@@ -79,4 +95,7 @@ public sealed class CreateAlertRuleRequest
 
     [JsonPropertyName("message")]
     public string Message { get; set; } = "";
+
+    [JsonPropertyName("action")]
+    public AlertAction? Action { get; set; }
 }

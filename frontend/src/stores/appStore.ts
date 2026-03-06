@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { SensorReading, AlertEvent, Page, Profile, FanCurve, FanTestProgress, SafeModeStatus, UpdateCheck } from '@/lib/types';
+import type { SensorReading, AlertEvent, Page, Profile, FanCurve, FanTestProgress, SafeModeStatus, UpdateCheck, ControlSource } from '@/lib/types';
 
 interface HistoryPoint {
   timestamp: string;
@@ -24,6 +24,8 @@ interface AppState {
   // Fan control
   appliedSpeeds: Record<string, number>;
   setAppliedSpeeds: (speeds: Record<string, number>) => void;
+  controlSources: Record<string, ControlSource>;
+  setControlSources: (sources: Record<string, ControlSource>) => void;
   curves: FanCurve[];
   setCurves: (curves: FanCurve[]) => void;
 
@@ -98,6 +100,8 @@ export const useAppStore = create<AppState>((set) => ({
   // Fan control
   appliedSpeeds: {},
   setAppliedSpeeds: (speeds) => set({ appliedSpeeds: speeds }),
+  controlSources: {},
+  setControlSources: (sources) => set({ controlSources: sources }),
   curves: [],
   setCurves: (curves) => set({ curves }),
 

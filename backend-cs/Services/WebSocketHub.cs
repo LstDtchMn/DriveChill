@@ -2,6 +2,7 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using DriveChill.Models;
+using Prometheus;
 
 namespace DriveChill.Services;
 
@@ -22,7 +23,11 @@ public sealed class WebSocketHub
     private readonly FanService     _fans;
     private readonly AlertService   _alerts;
     private readonly FanTestService _fanTest;
+    private readonly SessionService _sessions;
+    private readonly AppSettings    _settings;
     private readonly ILogger<WebSocketHub> _log;
+
+    private static readonly TimeSpan _revalidateInterval = TimeSpan.FromSeconds(60);
 
     private static readonly JsonSerializerOptions _json = new()
     {
@@ -30,19 +35,28 @@ public sealed class WebSocketHub
     };
 
     public WebSocketHub(SensorService sensors, FanService fans, AlertService alerts,
-        FanTestService fanTest, ILogger<WebSocketHub> log)
+        FanTestService fanTest, SessionService sessions, AppSettings settings,
+        ILogger<WebSocketHub> log)
     {
-        _sensors = sensors;
-        _fans    = fans;
-        _alerts  = alerts;
-        _fanTest = fanTest;
-        _log     = log;
+        _sensors  = sensors;
+        _fans     = fans;
+        _alerts   = alerts;
+        _fanTest  = fanTest;
+        _sessions = sessions;
+        _settings = settings;
+        _log      = log;
     }
 
     public async Task HandleAsync(HttpContext context)
     {
         using var ws = await context.WebSockets.AcceptWebSocketAsync();
+        DriveChillMetrics.WebSocketConnectionsActive.Inc();
         _log.LogDebug("WebSocket connected: {RemoteIp}", context.Connection.RemoteIpAddress);
+
+        // Extract session token for periodic revalidation (long-lived connections
+        // could outlive a session otherwise — GAP-3).
+        var sessionToken = context.Request.Cookies["drivechill_session"];
+        var lastRevalidate = DateTimeOffset.UtcNow;
 
         var channel = _sensors.Subscribe();
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);
@@ -70,6 +84,20 @@ public sealed class WebSocketHub
                     continue;
                 }
 
+                // Periodic session revalidation: close if session expired or revoked.
+                if (_settings.AuthRequired && !string.IsNullOrEmpty(sessionToken)
+                    && DateTimeOffset.UtcNow - lastRevalidate >= _revalidateInterval)
+                {
+                    lastRevalidate = DateTimeOffset.UtcNow;
+                    var session = await _sessions.ValidateSessionAsync(sessionToken, cts.Token);
+                    if (session is null)
+                    {
+                        await ws.CloseAsync(WebSocketCloseStatus.PolicyViolation,
+                            "Session expired", CancellationToken.None);
+                        return;
+                    }
+                }
+
                 await SendSnapshotAsync(ws, snap, cts.Token);
             }
         }
@@ -82,6 +110,7 @@ public sealed class WebSocketHub
         }
         finally
         {
+            DriveChillMetrics.WebSocketConnectionsActive.Dec();
             _sensors.Unsubscribe(channel);
             if (ws.State == WebSocketState.Open || ws.State == WebSocketState.CloseReceived)
                 await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "Server closing",

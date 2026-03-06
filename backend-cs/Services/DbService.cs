@@ -233,6 +233,29 @@ public sealed class DbService : IDisposable
                 );
                 CREATE INDEX IF NOT EXISTS idx_temp_targets_sensor ON temperature_targets (sensor_id);
 
+                CREATE TABLE IF NOT EXISTS virtual_sensors (
+                    id               TEXT PRIMARY KEY,
+                    name             TEXT NOT NULL,
+                    type             TEXT NOT NULL DEFAULT 'max',
+                    source_ids_json  TEXT NOT NULL DEFAULT '[]',
+                    weights_json     TEXT,
+                    window_seconds   REAL,
+                    "offset"         REAL NOT NULL DEFAULT 0.0,
+                    enabled          INTEGER NOT NULL DEFAULT 1,
+                    created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+                    updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+
+                CREATE TABLE IF NOT EXISTS notification_channels (
+                    id           TEXT PRIMARY KEY,
+                    type         TEXT NOT NULL,
+                    name         TEXT NOT NULL DEFAULT '',
+                    enabled      INTEGER NOT NULL DEFAULT 1,
+                    config_json  TEXT NOT NULL DEFAULT '{}',
+                    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+                    updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+
                 CREATE TABLE IF NOT EXISTS settings (
                     key        TEXT PRIMARY KEY,
                     value      TEXT NOT NULL,
@@ -972,6 +995,7 @@ public sealed class DbService : IDisposable
     }
 
     // -----------------------------------------------------------------------
+    // -----------------------------------------------------------------------
     // Quiet hours
     // -----------------------------------------------------------------------
 
@@ -1391,6 +1415,18 @@ public sealed class DbService : IDisposable
         cmd.Parameters.AddWithValue("$h", passwordHash);
         cmd.Parameters.AddWithValue("$id", userId);
         return await cmd.ExecuteNonQueryAsync(ct) > 0;
+    }
+
+    /// <summary>Delete all sessions for a user by username — called after password change (GAP-2).</summary>
+    public async Task DeleteUserSessionsByUsernameAsync(string username, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM sessions WHERE username = $u";
+        cmd.Parameters.AddWithValue("$u", username);
+        await cmd.ExecuteNonQueryAsync(ct);
     }
 
     public async Task<int> CountAdminUsersAsync(CancellationToken ct = default)
@@ -1906,6 +1942,114 @@ public sealed class DbService : IDisposable
     }
 
     // -----------------------------------------------------------------------
+    // Virtual sensors CRUD
+    // -----------------------------------------------------------------------
+
+    public async Task<List<VirtualSensor>> GetVirtualSensorsAsync(CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT id, name, type, source_ids_json, weights_json,
+                   window_seconds, "offset", enabled, created_at, updated_at
+            FROM virtual_sensors ORDER BY name
+            """;
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        var list = new List<VirtualSensor>();
+        while (await reader.ReadAsync(ct))
+        {
+            list.Add(ReadVirtualSensor(reader));
+        }
+        return list;
+    }
+
+    public async Task CreateVirtualSensorAsync(VirtualSensor vs, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO virtual_sensors
+            (id, name, type, source_ids_json, weights_json, window_seconds, "offset", enabled, created_at, updated_at)
+            VALUES ($id, $name, $type, $sids, $weights, $window, $offset, $enabled, $cat, $uat)
+            """;
+        var now = DateTimeOffset.UtcNow.ToString("o");
+        cmd.Parameters.AddWithValue("$id", vs.Id);
+        cmd.Parameters.AddWithValue("$name", vs.Name);
+        cmd.Parameters.AddWithValue("$type", vs.Type);
+        cmd.Parameters.AddWithValue("$sids", System.Text.Json.JsonSerializer.Serialize(vs.SourceIds));
+        cmd.Parameters.AddWithValue("$weights", vs.Weights != null
+            ? (object)System.Text.Json.JsonSerializer.Serialize(vs.Weights)
+            : DBNull.Value);
+        cmd.Parameters.AddWithValue("$window", vs.WindowSeconds.HasValue ? (object)vs.WindowSeconds.Value : DBNull.Value);
+        cmd.Parameters.AddWithValue("$offset", vs.Offset);
+        cmd.Parameters.AddWithValue("$enabled", vs.Enabled ? 1 : 0);
+        cmd.Parameters.AddWithValue("$cat", now);
+        cmd.Parameters.AddWithValue("$uat", now);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<bool> UpdateVirtualSensorAsync(VirtualSensor vs, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            UPDATE virtual_sensors SET name=$name, type=$type, source_ids_json=$sids,
+            weights_json=$weights, window_seconds=$window, "offset"=$offset,
+            enabled=$enabled, updated_at=$uat WHERE id=$id
+            """;
+        cmd.Parameters.AddWithValue("$id", vs.Id);
+        cmd.Parameters.AddWithValue("$name", vs.Name);
+        cmd.Parameters.AddWithValue("$type", vs.Type);
+        cmd.Parameters.AddWithValue("$sids", System.Text.Json.JsonSerializer.Serialize(vs.SourceIds));
+        cmd.Parameters.AddWithValue("$weights", vs.Weights != null
+            ? (object)System.Text.Json.JsonSerializer.Serialize(vs.Weights)
+            : DBNull.Value);
+        cmd.Parameters.AddWithValue("$window", vs.WindowSeconds.HasValue ? (object)vs.WindowSeconds.Value : DBNull.Value);
+        cmd.Parameters.AddWithValue("$offset", vs.Offset);
+        cmd.Parameters.AddWithValue("$enabled", vs.Enabled ? 1 : 0);
+        cmd.Parameters.AddWithValue("$uat", DateTimeOffset.UtcNow.ToString("o"));
+        return await cmd.ExecuteNonQueryAsync(ct) > 0;
+    }
+
+    public async Task<bool> DeleteVirtualSensorAsync(string id, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM virtual_sensors WHERE id=$id";
+        cmd.Parameters.AddWithValue("$id", id);
+        return await cmd.ExecuteNonQueryAsync(ct) > 0;
+    }
+
+    private static VirtualSensor ReadVirtualSensor(SqliteDataReader reader)
+    {
+        var sidsJson = reader.IsDBNull(3) ? "[]" : reader.GetString(3);
+        var weightsJson = reader.IsDBNull(4) ? null : reader.GetString(4);
+        return new VirtualSensor
+        {
+            Id = reader.GetString(0),
+            Name = reader.GetString(1),
+            Type = reader.GetString(2),
+            SourceIds = System.Text.Json.JsonSerializer.Deserialize<List<string>>(sidsJson) ?? new(),
+            Weights = weightsJson != null
+                ? System.Text.Json.JsonSerializer.Deserialize<List<double>>(weightsJson)
+                : null,
+            WindowSeconds = reader.IsDBNull(5) ? null : reader.GetDouble(5),
+            Offset = reader.IsDBNull(6) ? 0.0 : reader.GetDouble(6),
+            Enabled = !reader.IsDBNull(7) && reader.GetInt64(7) != 0,
+            CreatedAt = reader.IsDBNull(8) ? null : reader.GetString(8),
+            UpdatedAt = reader.IsDBNull(9) ? null : reader.GetString(9),
+        };
+    }
+
+    // -----------------------------------------------------------------------
 
     public void Dispose() { _initLock.Dispose(); }
 
@@ -2122,6 +2266,102 @@ public sealed class DbService : IDisposable
             var deleted = await cmd.ExecuteNonQueryAsync(ct);
             if (deleted == 0) break;
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Notification Channels CRUD
+    // -----------------------------------------------------------------------
+
+    public async Task<List<NotificationChannel>> GetNotificationChannelsAsync(CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT id, type, name, enabled, config_json, created_at, updated_at FROM notification_channels ORDER BY created_at";
+        await using var rdr = await cmd.ExecuteReaderAsync(ct);
+        var list = new List<NotificationChannel>();
+        while (await rdr.ReadAsync(ct))
+            list.Add(ReadNotificationChannel(rdr));
+        return list;
+    }
+
+    public async Task<NotificationChannel?> GetNotificationChannelAsync(string id, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT id, type, name, enabled, config_json, created_at, updated_at FROM notification_channels WHERE id = $id";
+        cmd.Parameters.AddWithValue("$id", id);
+        await using var rdr = await cmd.ExecuteReaderAsync(ct);
+        return await rdr.ReadAsync(ct) ? ReadNotificationChannel(rdr) : null;
+    }
+
+    public async Task CreateNotificationChannelAsync(string id, string type, string name,
+        bool enabled, Dictionary<string, System.Text.Json.JsonElement> config, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "INSERT INTO notification_channels (id, type, name, enabled, config_json) VALUES ($id, $type, $name, $enabled, $config)";
+        cmd.Parameters.AddWithValue("$id", id);
+        cmd.Parameters.AddWithValue("$type", type);
+        cmd.Parameters.AddWithValue("$name", name);
+        cmd.Parameters.AddWithValue("$enabled", enabled ? 1 : 0);
+        cmd.Parameters.AddWithValue("$config", System.Text.Json.JsonSerializer.Serialize(config));
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<bool> UpdateNotificationChannelAsync(string id, string? name, bool? enabled,
+        Dictionary<string, System.Text.Json.JsonElement>? config, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        var parts = new List<string>();
+        var parms = new List<SqliteParameter>();
+        if (name is not null) { parts.Add("name = $name"); parms.Add(new("$name", name)); }
+        if (enabled.HasValue) { parts.Add("enabled = $enabled"); parms.Add(new("$enabled", enabled.Value ? 1 : 0)); }
+        if (config is not null) { parts.Add("config_json = $config"); parms.Add(new("$config", System.Text.Json.JsonSerializer.Serialize(config))); }
+        if (parts.Count == 0) return false;
+        parts.Add("updated_at = datetime('now')");
+        parms.Add(new("$id", id));
+
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"UPDATE notification_channels SET {string.Join(", ", parts)} WHERE id = $id";
+        foreach (var p in parms) cmd.Parameters.Add(p);
+        return await cmd.ExecuteNonQueryAsync(ct) > 0;
+    }
+
+    public async Task<bool> DeleteNotificationChannelAsync(string id, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM notification_channels WHERE id = $id";
+        cmd.Parameters.AddWithValue("$id", id);
+        return await cmd.ExecuteNonQueryAsync(ct) > 0;
+    }
+
+    private static NotificationChannel ReadNotificationChannel(SqliteDataReader rdr)
+    {
+        var configJson = rdr.IsDBNull(4) ? "{}" : rdr.GetString(4);
+        Dictionary<string, System.Text.Json.JsonElement> config;
+        try { config = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, System.Text.Json.JsonElement>>(configJson) ?? []; }
+        catch { config = []; }
+        return new NotificationChannel
+        {
+            Id        = rdr.GetString(0),
+            Type      = rdr.GetString(1),
+            Name      = rdr.GetString(2),
+            Enabled   = rdr.GetInt32(3) != 0,
+            Config    = config,
+            CreatedAt = rdr.IsDBNull(5) ? "" : rdr.GetString(5),
+            UpdatedAt = rdr.IsDBNull(6) ? "" : rdr.GetString(6),
+        };
     }
 }
 

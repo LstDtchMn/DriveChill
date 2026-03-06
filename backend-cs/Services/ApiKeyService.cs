@@ -45,11 +45,17 @@ public sealed class ApiKeyService
         }
     }
 
-    public (ApiKeyRecord Metadata, string PlaintextKey) Create(string name, IEnumerable<string>? scopes = null)
+    public (ApiKeyRecord Metadata, string PlaintextKey) Create(
+        string name,
+        IEnumerable<string>? scopes = null,
+        string requestingRole = "admin",
+        string? createdByUsername = null)
     {
         var key = $"dc_live_{Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)).TrimEnd('=').Replace('+', '-').Replace('/', '_')}";
         var now = DateTimeOffset.UtcNow.ToString("o");
         var normalizedScopes = NormalizeScopes(scopes);
+        // Cap role: a viewer-role caller cannot mint an admin key.
+        var effectiveRole = requestingRole == "viewer" ? "viewer" : "admin";
         var record = new ApiKeyRecord
         {
             Id = Guid.NewGuid().ToString("N")[..16],
@@ -57,6 +63,8 @@ public sealed class ApiKeyService
             KeyPrefix = key[..Math.Min(8, key.Length)],
             KeyHash = Sha256(key),
             Scopes = normalizedScopes,
+            Role = effectiveRole,
+            CreatedBy = createdByUsername,
             CreatedAt = now,
             RevokedAt = null,
             LastUsedAt = null,

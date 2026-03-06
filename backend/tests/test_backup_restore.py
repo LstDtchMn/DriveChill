@@ -197,6 +197,111 @@ class TestImportBackup:
         summary = asyncio.run(import_backup(fresh_db, backup_file))
         assert summary["profiles"] == 1
 
+    def test_round_trip_preserves_action_json(self, tmp_db: Path, tmp_path: Path) -> None:
+        """Export/import preserves action_json on alert rules."""
+        asyncio.run(_seed_db(tmp_db))
+
+        # Add an alert rule with an action_json
+        action_payload = json.dumps({
+            "type": "switch_profile",
+            "profile_id": "perf",
+            "revert_after_clear": False,
+        })
+        async def _add_action_rule():
+            async with aiosqlite.connect(str(tmp_db)) as db:
+                await db.execute(
+                    "INSERT INTO alert_rules (id, sensor_id, threshold, direction, enabled, "
+                    "cooldown_seconds, name, action_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    ("a2", "sensor_gpu", 90.0, "above", 1, 60, "GPU Hot", action_payload),
+                )
+                await db.commit()
+        asyncio.run(_add_action_rule())
+
+        backup_file = tmp_path / "backup.json"
+        asyncio.run(export_backup(tmp_db, backup_file))
+
+        # Verify action_json is in the export
+        data = json.loads(backup_file.read_text())
+        rules_with_action = [r for r in data["alert_rules"] if r.get("action_json")]
+        assert len(rules_with_action) == 1
+        parsed = json.loads(rules_with_action[0]["action_json"])
+        assert parsed["profile_id"] == "perf"
+        assert parsed["revert_after_clear"] is False
+
+        # Wipe and re-import
+        tmp_db.unlink()
+        asyncio.run(import_backup(tmp_db, backup_file))
+
+        async def _get_action_json():
+            async with aiosqlite.connect(str(tmp_db)) as db:
+                cursor = await db.execute(
+                    "SELECT action_json FROM alert_rules WHERE id = 'a2'"
+                )
+                row = await cursor.fetchone()
+                return row[0] if row else None
+        restored = asyncio.run(_get_action_json())
+        assert restored is not None
+        assert json.loads(restored)["profile_id"] == "perf"
+
+    def test_round_trip_preserves_notification_channels(self, tmp_db: Path, tmp_path: Path) -> None:
+        """Export/import preserves notification_channels."""
+        asyncio.run(_seed_db(tmp_db))
+
+        async def _add_channel():
+            async with aiosqlite.connect(str(tmp_db)) as db:
+                await db.execute(
+                    "INSERT INTO notification_channels (id, type, name, enabled, config_json) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    ("nc_1", "discord", "Test Discord", 1,
+                     json.dumps({"webhook_url": "https://discord.com/api/webhooks/x/y"})),
+                )
+                await db.commit()
+        asyncio.run(_add_channel())
+
+        backup_file = tmp_path / "backup.json"
+        asyncio.run(export_backup(tmp_db, backup_file))
+
+        # Verify channel is in export
+        data = json.loads(backup_file.read_text())
+        assert "notification_channels" in data
+        assert len(data["notification_channels"]) == 1
+        assert data["notification_channels"][0]["id"] == "nc_1"
+        assert data["notification_channels"][0]["type"] == "discord"
+
+        # Wipe and re-import
+        tmp_db.unlink()
+        summary = asyncio.run(import_backup(tmp_db, backup_file))
+        assert summary["notification_channels"] == 1
+
+        async def _count_channels():
+            async with aiosqlite.connect(str(tmp_db)) as db:
+                cursor = await db.execute("SELECT COUNT(*) FROM notification_channels")
+                row = await cursor.fetchone()
+                return row[0]
+        assert asyncio.run(_count_channels()) == 1
+
+    def test_import_old_backup_without_new_fields_succeeds(self, tmp_db: Path, tmp_path: Path) -> None:
+        """Importing a backup that predates notification_channels and action_json still works."""
+        old_backup = tmp_path / "old_backup.json"
+        old_backup.write_text(json.dumps({
+            "backup_version": 1,
+            "app_version": "1.0.0",
+            "created_at": "2025-01-01T00:00:00+00:00",
+            "profiles": [],
+            "fan_curves": [],
+            "fan_settings": [],
+            "settings": {},
+            "sensor_labels": {},
+            "alert_rules": [],
+            "quiet_hours": [],
+            # notification_channels and action_json intentionally absent
+        }))
+
+        summary = asyncio.run(import_backup(tmp_db, old_backup))
+        # Should succeed with zero records — no exception
+        assert summary["profiles"] == 0
+        assert summary.get("notification_channels", 0) == 0
+
 
 # ---------------------------------------------------------------------------
 # DB snapshot restore tests

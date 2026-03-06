@@ -43,8 +43,9 @@ export function FanCurvesPage() {
   const confirm = useConfirm();
   const toast = useToast();
   const canWrite = useCanWrite();
-  const { all: allReadings, cpuTemps, gpuTemps, hddTemps, caseTemps, fanRpms, fanPcts } = useSensors();
+  const { all: allReadings, cpuTemps, gpuTemps, hddTemps, caseTemps, cpuLoads, gpuLoads, fanRpms, fanPcts } = useSensors();
   const appliedSpeeds = useAppStore((s) => s.appliedSpeeds);
+  const controlSources = useAppStore((s) => s.controlSources);
   const preselectedSensorId = useAppStore((s) => s.preselectedCurveSensorId);
   const setPreselectedSensorId = useAppStore((s) => s.setPreselectedCurveSensorId);
   const createCoolingCurveSensorId = useAppStore((s) => s.createCoolingCurveSensorId);
@@ -56,6 +57,8 @@ export function FanCurvesPage() {
   const [curvesLoaded, setCurvesLoaded] = useState(false);
 
   const allTempSensors = [...cpuTemps, ...gpuTemps, ...hddTemps, ...caseTemps];
+  const allLoadSensors = [...cpuLoads, ...gpuLoads];
+  const allCurveInputSensors = [...allTempSensors, ...allLoadSensors];
   const allFans = fanRpms.map((f) => f.id.replace('_rpm', ''));
 
   // Compute the current operating point for the selected curve
@@ -272,7 +275,7 @@ export function FanCurvesPage() {
                       : curve.sensor_id}{' '}
                     → {curve.fan_id}
                   </p>
-                  <div className="flex items-center gap-2 mt-2">
+                  <div className="flex items-center gap-2 mt-2 flex-wrap">
                     <span className={`badge ${curve.enabled ? 'badge-success' : 'badge-warning'}`}>
                       {curve.enabled ? 'Enabled' : 'Disabled'}
                     </span>
@@ -282,6 +285,28 @@ export function FanCurvesPage() {
                     <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
                       {curve.points.length} points
                     </span>
+                    {/* B3: control source badge */}
+                    {controlSources[curve.fan_id] && (() => {
+                      const src = controlSources[curve.fan_id];
+                      const label: Record<string, string> = {
+                        profile: 'Profile',
+                        temperature_target: 'Temp Target',
+                        startup_safety: 'Startup Safety',
+                        panic_sensor: 'Sensor Panic',
+                        panic_temp: 'Temp Panic',
+                        released: 'Released',
+                        manual: 'Manual',
+                      };
+                      const cls = src.startsWith('panic') ? 'badge-danger'
+                        : src === 'startup_safety' ? 'badge-warning'
+                        : src === 'released' ? 'badge-warning'
+                        : 'badge';
+                      return (
+                        <span className={`badge ${cls}`} title={`Control source: ${src}`}>
+                          ▸ {label[src] ?? src}
+                        </span>
+                      );
+                    })()}
                   </div>
                 </button>
               ))}
@@ -296,42 +321,65 @@ export function FanCurvesPage() {
                 height={editorSize.height}
                 currentTemp={operatingPoint.temp}
                 currentSpeed={operatingPoint.speed}
+                xAxisLabel={(() => {
+                  const curve = curves.find((c) => c.id === selectedCurve);
+                  const ids = curve?.sensor_ids ?? [];
+                  const usesLoad = ids.some(id => allLoadSensors.some(s => s.id === id));
+                  return usesLoad ? 'Load (%)' : undefined;
+                })()}
               />
 
-              {/* Composite sensor selector */}
+              {/* Composite sensor selector — grouped by type */}
               {selectedCurve && (() => {
                 const curve = curves.find((c) => c.id === selectedCurve);
                 const ids = curve?.sensor_ids ?? [];
+                const hasLoadSource = ids.some(id => allLoadSensors.some(s => s.id === id));
+                const sourceLabel = hasLoadSource ? 'Input Sources' : 'Temperature Sources';
+
+                const renderSensorGroup = (label: string, sensors: typeof allTempSensors) => {
+                  if (sensors.length === 0) return null;
+                  return (
+                    <div className="mb-2">
+                      <p className="text-xs mb-1" style={{ color: 'var(--text-secondary)', opacity: 0.7 }}>{label}</p>
+                      <div className="flex flex-wrap gap-2">
+                        {sensors.map((sensor) => (
+                          <button
+                            key={sensor.id}
+                            onClick={() => canWrite && handleToggleSensor(sensor.id)}
+                            disabled={!canWrite}
+                            className={`text-xs min-h-11 px-2 py-1 rounded transition-all ${
+                              ids.includes(sensor.id) ? 'ring-1' : ''
+                            }`}
+                            style={{
+                              background: ids.includes(sensor.id) ? 'var(--accent-muted)' : 'var(--bg)',
+                              color: ids.includes(sensor.id) ? 'var(--accent)' : 'var(--text-secondary)',
+                              borderColor: ids.includes(sensor.id) ? 'var(--accent)' : 'var(--border)',
+                              border: '1px solid',
+                            }}
+                          >
+                            {sensor.name || sensor.id}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                };
+
                 return (
                   <div className="mt-3 p-3 rounded" style={{ background: 'var(--card-bg)', border: '1px solid var(--border)' }}>
                     <p className="text-xs font-medium mb-2" style={{ color: 'var(--text)' }}>
-                      Temperature Sources {ids.length > 1 && <span className="badge badge-info ml-1">Composite — MAX</span>}
+                      {sourceLabel} {ids.length > 1 && <span className="badge badge-info ml-1">Composite — MAX</span>}
                     </p>
-                    <div className="flex flex-wrap gap-2">
-                      {allTempSensors.map((sensor) => (
-                        <button
-                          key={sensor.id}
-                          onClick={() => canWrite && handleToggleSensor(sensor.id)}
-                          disabled={!canWrite}
-                          className={`text-xs min-h-11 px-2 py-1 rounded transition-all ${
-                            ids.includes(sensor.id)
-                              ? 'ring-1'
-                              : ''
-                          }`}
-                          style={{
-                            background: ids.includes(sensor.id) ? 'var(--accent-muted)' : 'var(--bg)',
-                            color: ids.includes(sensor.id) ? 'var(--accent)' : 'var(--text-secondary)',
-                            borderColor: ids.includes(sensor.id) ? 'var(--accent)' : 'var(--border)',
-                            border: '1px solid',
-                          }}
-                        >
-                          {sensor.name || sensor.id}
-                        </button>
-                      ))}
-                    </div>
+                    {renderSensorGroup('Temperature', allTempSensors)}
+                    {renderSensorGroup('Load', allLoadSensors)}
                     {ids.length === 0 && (
                       <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
                         Using primary sensor: {curve?.sensor_id}. Select multiple for composite MAX.
+                      </p>
+                    )}
+                    {hasLoadSource && (
+                      <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
+                        X-axis represents load % (0–100) instead of temperature.
                       </p>
                     )}
                   </div>

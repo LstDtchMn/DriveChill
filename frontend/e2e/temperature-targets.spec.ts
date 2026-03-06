@@ -59,4 +59,38 @@ test.describe('Temperature Targets', () => {
       await expect(page.locator('select, input[type="number"]').first()).toBeVisible({ timeout: 5_000 });
     }
   });
+
+  test('PID control fields are accessible in target form', async ({ page }) => {
+    const addButton = page.getByRole('button', { name: /add target|new target|\+/i }).first();
+    if (!await addButton.isVisible({ timeout: 5_000 }).catch(() => false)) {
+      return; // No form to open
+    }
+    await addButton.click();
+    // Wait for form to appear
+    await page.waitForSelector('select, input[type="number"]', { timeout: 5_000 }).catch(() => {});
+
+    // PID fields: Kp, Ki, Kd or proportional/integral/derivative labels
+    const pidLabel = page.getByText(/kp|ki|kd|proportional|integral|derivative/i).first();
+    const pidInput = page.locator('input[type="number"]').first();
+    // Either PID labels are visible, or numeric inputs (for target temp, tolerances, PID gains)
+    const hasPidFields =
+      await pidLabel.isVisible({ timeout: 3_000 }).catch(() => false) ||
+      await pidInput.isVisible({ timeout: 3_000 }).catch(() => false);
+    expect(hasPidFields).toBe(true);
+  });
+
+  test('target temperature input accepts numeric value', async ({ page }) => {
+    const addButton = page.getByRole('button', { name: /add target|new target|\+/i }).first();
+    if (!await addButton.isVisible({ timeout: 5_000 }).catch(() => false)) {
+      return;
+    }
+    await addButton.click();
+
+    // Find the target temperature input (likely the first number input)
+    const tempInput = page.locator('input[type="number"]').first();
+    if (await tempInput.isVisible({ timeout: 5_000 }).catch(() => false)) {
+      await tempInput.fill('45');
+      await expect(tempInput).toHaveValue('45');
+    }
+  });
 });

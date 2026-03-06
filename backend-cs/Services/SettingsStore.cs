@@ -58,6 +58,12 @@ public sealed class SettingsStore
         set { lock (_lock) { _data.FanRampRatePctPerSec = value; Save(); } }
     }
 
+    public double Deadband
+    {
+        get { lock (_lock) return _data.Deadband; }
+        set { lock (_lock) { _data.Deadband = Math.Max(0.0, value); Save(); } }
+    }
+
     public StoredData GetAll() { lock (_lock) return Clone(_data); }
     public void SetAll(StoredData d) { lock (_lock) { _data = d; Save(); } }
 
@@ -151,6 +157,7 @@ public sealed class StoredData
     public int    RetentionMigrationVersion { get; set; } = 0;
     public string TempUnit                  { get; set; } = "C";
     public double FanRampRatePctPerSec      { get; set; } = 5.0;
+    public double Deadband                  { get; set; } = 3.0;
 
     public List<FanCurve>  Curves   { get; set; } = [];
     public List<AlertRule> Alerts   { get; set; } = [];

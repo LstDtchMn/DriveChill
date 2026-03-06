@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using DriveChill.Hardware;
 using DriveChill.Models;
 
@@ -12,6 +13,7 @@ public sealed class FanService
     private readonly IHardwareBackend _hw;
     private readonly SettingsStore    _store;
     private readonly TemperatureTargetService? _tempTargetSvc;
+    private readonly VirtualSensorService? _virtualSensorSvc;
 
     private readonly ReaderWriterLockSlim _rwl = new();
     // fanId → curve (null means auto/manual)
@@ -27,21 +29,44 @@ public sealed class FanService
 
     private volatile bool _curvesSynced;
 
+    // Hysteresis state keyed by (fanId, sensorId)
+    private readonly Dictionary<(string fanId, string sensorId), HysteresisState> _hyst = new();
+
+    // Ramp-rate limiting state
+    private readonly Dictionary<string, double> _rampState = new();
+    private readonly Stopwatch _rampStopwatch = Stopwatch.StartNew();
+    private long _lastTickMs;
+
     // Safe mode state
     private volatile bool _released;      // user released fan control to BIOS
     private volatile bool _sensorPanic;   // sensor read failure → all fans full
     private volatile bool _tempPanic;     // temperature above panic threshold
+
+    // Startup safety: run fans at a safe fixed speed until curves are loaded
+    // or the safety window expires (15 seconds).
+    private volatile bool _startupSafetyActive = true;
+    private const double StartupSafetySpeed = 50.0;    // percent
+    private const double StartupSafetyDurationSec = 15.0;
+    private readonly Stopwatch _startupStopwatch = Stopwatch.StartNew();
+
+    // Control transparency (B3): per-fan source of the last applied speed.
+    // Sources: "startup_safety" | "panic_sensor" | "panic_temp" | "released"
+    //          | "profile" | "temperature_target" | "manual"
+    private Dictionary<string, string> _controlSources = new();
 
     private const double PanicCpuTemp = 95.0;
     private const double PanicGpuTemp = 90.0;
     private const double PanicHysteresis = 5.0;
 
     public FanService(IHardwareBackend hw, SettingsStore store,
-        TemperatureTargetService? tempTargetSvc = null)
+        TemperatureTargetService? tempTargetSvc = null,
+        VirtualSensorService? virtualSensorSvc = null)
     {
         _hw    = hw;
         _store = store;
         _tempTargetSvc = tempTargetSvc;
+        _virtualSensorSvc = virtualSensorSvc;
+        _lastTickMs = _rampStopwatch.ElapsedMilliseconds;
         // NOTE: GetFanIds() returns empty before Initialize() — fan IDs are
         // populated lazily on the first ApplyCurvesAsync tick (see SyncCurveSlots).
     }
@@ -143,6 +168,7 @@ public sealed class FanService
         if (activeProfile == null) return false;
 
         _released = false;
+        ExitStartupSafety();
         // Re-apply curves from active profile
         _rwl.EnterWriteLock();
         try
@@ -166,6 +192,9 @@ public sealed class FanService
         }
         finally { _rwl.ExitReadLock(); }
 
+        Dictionary<string, string> sources;
+        lock (_controlSources) sources = new Dictionary<string, string>(_controlSources);
+
         return new
         {
             safe_mode = new
@@ -178,6 +207,8 @@ public sealed class FanService
             },
             curves_active = activeCurves,
             applied_speeds = speeds,
+            control_sources = sources,
+            startup_safety_active = _startupSafetyActive,
         };
     }
 
@@ -192,8 +223,22 @@ public sealed class FanService
             if (!_sensorPanic)
             {
                 _sensorPanic = true;
-                foreach (var fanId in _hw.GetFanIds())
-                    _hw.SetFanSpeed(fanId, 100);
+                _rwl.EnterWriteLock();
+                try
+                {
+                    foreach (var fanId in _hw.GetFanIds())
+                    {
+                        _hw.SetFanSpeed(fanId, 100);
+                        _lastApplied[fanId] = 100;
+                    }
+                }
+                finally { _rwl.ExitWriteLock(); }
+                lock (_controlSources)
+                {
+                    _controlSources.Clear();
+                    foreach (var fanId in _hw.GetFanIds())
+                        _controlSources[fanId] = "panic_sensor";
+                }
             }
             return;
         }
@@ -217,9 +262,22 @@ public sealed class FanService
         if (shouldPanic && !_tempPanic)
         {
             _tempPanic = true;
-            // Force all fans to 100%
-            foreach (var fanId in _hw.GetFanIds())
-                _hw.SetFanSpeed(fanId, 100);
+            _rwl.EnterWriteLock();
+            try
+            {
+                foreach (var fanId in _hw.GetFanIds())
+                {
+                    _hw.SetFanSpeed(fanId, 100);
+                    _lastApplied[fanId] = 100;
+                }
+            }
+            finally { _rwl.ExitWriteLock(); }
+            lock (_controlSources)
+            {
+                _controlSources.Clear();
+                foreach (var fanId in _hw.GetFanIds())
+                    _controlSources[fanId] = "panic_temp";
+            }
         }
         else if (shouldClear && _tempPanic)
         {
@@ -228,6 +286,23 @@ public sealed class FanService
     }
 
     public bool IsReleased => _released;
+    public bool IsStartupSafetyActive => _startupSafetyActive;
+
+    /// <summary>Per-fan source of the last applied speed (B3 control transparency).</summary>
+    public IReadOnlyDictionary<string, string> ControlSources
+    {
+        get { lock (_controlSources) return new Dictionary<string, string>(_controlSources); }
+    }
+
+    /// <summary>Exit startup safety mode (curves are now loaded).</summary>
+    private void ExitStartupSafety()
+    {
+        if (_startupSafetyActive)
+        {
+            _startupSafetyActive = false;
+            Debug.WriteLine("Exiting startup safety mode — normal fan control active");
+        }
+    }
 
     // -----------------------------------------------------------------------
     // Manual control
@@ -263,8 +338,16 @@ public sealed class FanService
 
     public void SetCurve(FanCurve curve)
     {
+        ExitStartupSafety();
         _rwl.EnterWriteLock();
-        try { _curves[curve.FanId] = curve; }
+        try
+        {
+            // Clear hysteresis for affected fan so the new curve takes effect immediately
+            if (_curves.TryGetValue(curve.FanId, out var old) && old != null)
+                _hyst.Remove((old.FanId, old.SensorId));
+            _hyst.Remove((curve.FanId, curve.SensorId));
+            _curves[curve.FanId] = curve;
+        }
         finally { _rwl.ExitWriteLock(); }
         _store.SaveCurves(GetCurves());
     }
@@ -276,11 +359,13 @@ public sealed class FanService
     /// </summary>
     public void SetCurves(IEnumerable<FanCurve> curves)
     {
+        ExitStartupSafety();
         _rwl.EnterWriteLock();
         try
         {
             foreach (var key in _curves.Keys.ToList())
                 _curves[key] = null;
+            _hyst.Clear(); // Clear all hysteresis state on full curve replacement
             foreach (var curve in curves)
                 _curves[curve.FanId] = curve;
         }
@@ -291,7 +376,12 @@ public sealed class FanService
     public void DeleteCurve(string fanId)
     {
         _rwl.EnterWriteLock();
-        try { _curves[fanId] = null; }
+        try
+        {
+            if (_curves.TryGetValue(fanId, out var old) && old != null)
+                _hyst.Remove((old.FanId, old.SensorId));
+            _curves[fanId] = null;
+        }
         finally { _rwl.ExitWriteLock(); }
         _store.SaveCurves(GetCurves());
     }
@@ -312,11 +402,44 @@ public sealed class FanService
 
         // Skip curve application when released to BIOS or in panic mode
         if (_released || _tempPanic || _sensorPanic)
+        {
+            lock (_controlSources) _controlSources.Clear();
             return Task.CompletedTask;
+        }
+
+        // Startup safety: hold fans at a safe fixed speed until curves are
+        // loaded or the safety window expires.
+        if (_startupSafetyActive)
+        {
+            if (_startupStopwatch.Elapsed.TotalSeconds >= StartupSafetyDurationSec)
+                ExitStartupSafety();
+            else
+            {
+                var startupFanIds = _hw.GetFanIds();
+                foreach (var fanId in startupFanIds)
+                    _hw.SetFanSpeed(fanId, StartupSafetySpeed);
+                lock (_controlSources)
+                {
+                    _controlSources.Clear();
+                    foreach (var fanId in startupFanIds)
+                        _controlSources[fanId] = "startup_safety";
+                }
+                return Task.CompletedTask;
+            }
+        }
+
+        // Build a sensor value lookup for composite temp resolution
+        var sensorValues = new Dictionary<string, double>();
+        foreach (var r in readings)
+            sensorValues[r.Id] = r.Value;
+
+        // Resolve virtual sensors so curves/targets can reference them
+        if (_virtualSensorSvc != null)
+            sensorValues = _virtualSensorSvc.ResolveAll(sensorValues);
 
         // 1. Build curve-based speeds
         var curveSpeeds = new Dictionary<string, double>();
-        _rwl.EnterReadLock();
+        _rwl.EnterWriteLock(); // write lock needed for hysteresis state mutation
         try
         {
             foreach (var (fanId, curve) in _curves)
@@ -326,12 +449,23 @@ public sealed class FanService
                     if (_testLocked.Contains(fanId)) continue;
 
                 if (curve == null || !curve.Enabled) continue;
-                var sensor = readings.FirstOrDefault(r => r.Id == curve.SensorId);
-                if (sensor == null) continue;
-                curveSpeeds[fanId] = Interpolate(curve.Points, sensor.Value);
+
+                // Resolve composite temperature (MAX of sensor_ids), fall back to single sensor_id
+                double? temp = ResolveCompositeTemp(curve, sensorValues);
+                if (temp is null) continue;
+
+                var rawSpeed = Interpolate(curve.Points, temp.Value);
+
+                // Apply hysteresis to prevent oscillation
+                var speed = ApplyHysteresis(fanId, curve.SensorId, temp.Value, rawSpeed);
+
+                if (curveSpeeds.TryGetValue(fanId, out var existing))
+                    curveSpeeds[fanId] = Math.Max(existing, speed);
+                else
+                    curveSpeeds[fanId] = speed;
             }
         }
-        finally { _rwl.ExitReadLock(); }
+        finally { _rwl.ExitWriteLock(); }
 
         // 2. Build temperature-target speeds
         var ttSpeeds = new Dictionary<string, double>();
@@ -347,12 +481,17 @@ public sealed class FanService
         var allFanIds = new HashSet<string>(curveSpeeds.Keys);
         allFanIds.UnionWith(ttSpeeds.Keys);
 
-        List<(string fanId, double speed)> toApply = [];
+        var allSpeeds = new Dictionary<string, double>();
+        var newSources = new Dictionary<string, string>();
         foreach (var fanId in allFanIds)
         {
             curveSpeeds.TryGetValue(fanId, out var curveSpeed);
             ttSpeeds.TryGetValue(fanId, out var ttSpeed);
             var finalSpeed = Math.Max(curveSpeed, ttSpeed);
+            // Dominant source: temperature_target wins when its speed is higher
+            newSources[fanId] = (ttSpeed > 0.0 && ttSpeed >= curveSpeed)
+                ? "temperature_target"
+                : "profile";
 
             // Enforce per-fan minimum speed floor (zero-RPM fans are exempt at 0%)
             _fanSettings.TryGetValue(fanId, out var fs);
@@ -368,6 +507,39 @@ public sealed class FanService
                 }
             }
 
+            allSpeeds[fanId] = finalSpeed;
+        }
+
+        // Apply ramp-rate limiting: clamp speed change per tick (panic bypasses this)
+        var rampRate = _store.FanRampRatePctPerSec;
+        var nowMs = _rampStopwatch.ElapsedMilliseconds;
+        var elapsedSec = (_lastTickMs > 0) ? (nowMs - _lastTickMs) / 1000.0 : 0.0;
+        _lastTickMs = nowMs;
+
+        if (rampRate > 0 && elapsedSec > 0)
+        {
+            var maxDelta = rampRate * elapsedSec;
+            foreach (var fanId in allSpeeds.Keys.ToList())
+            {
+                if (_rampState.TryGetValue(fanId, out var prev))
+                {
+                    var target = allSpeeds[fanId];
+                    if (target > prev)
+                        allSpeeds[fanId] = Math.Min(target, prev + maxDelta);
+                    else if (target < prev)
+                        allSpeeds[fanId] = Math.Max(target, prev - maxDelta);
+                }
+            }
+        }
+
+        // Track ramp state for next tick
+        foreach (var (fanId, speed) in allSpeeds)
+            _rampState[fanId] = speed;
+
+        // Determine which fans actually need a hardware update (delta check)
+        List<(string fanId, double speed)> toApply = [];
+        foreach (var (fanId, finalSpeed) in allSpeeds)
+        {
             _rwl.EnterReadLock();
             double last;
             try { _lastApplied.TryGetValue(fanId, out last); }
@@ -392,6 +564,9 @@ public sealed class FanService
             finally { _rwl.ExitWriteLock(); }
         }
 
+        // Persist control sources
+        lock (_controlSources) { _controlSources = newSources; }
+
         return Task.CompletedTask;
     }
 
@@ -415,6 +590,86 @@ public sealed class FanService
             _curvesSynced = true;
         }
         finally { _rwl.ExitWriteLock(); }
+    }
+
+    // -----------------------------------------------------------------------
+    // Composite sensor resolution (MAX of multiple sensors)
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Resolve the effective temperature for a curve.
+    /// For composite curves (SensorIds non-empty), returns the MAX of all matching sensor temps.
+    /// Falls back to SensorId (single sensor) if no composite temps found.
+    /// Returns null when no temperature can be determined.
+    /// </summary>
+    private static double? ResolveCompositeTemp(FanCurve curve, Dictionary<string, double> sensorValues)
+    {
+        if (curve.SensorIds is { Count: > 0 })
+        {
+            var temps = new List<double>();
+            foreach (var sid in curve.SensorIds)
+            {
+                if (sensorValues.TryGetValue(sid, out var val) && double.IsFinite(val))
+                    temps.Add(val);
+            }
+            if (temps.Count > 0)
+                return temps.Max();
+        }
+
+        // Fallback to single primary sensor
+        if (sensorValues.TryGetValue(curve.SensorId, out var singleVal))
+            return double.IsFinite(singleVal) ? singleVal : null;
+        return null;
+    }
+
+    // -----------------------------------------------------------------------
+    // Hysteresis — prevent fan oscillation near curve thresholds
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Apply deadband hysteresis to prevent oscillation.
+    /// Ramp up immediately. Ramp down only when temp drops below decision_temp minus deadband.
+    /// Must be called under the write lock (mutates _hyst).
+    /// </summary>
+    private double ApplyHysteresis(string fanId, string sensorId,
+        double currentTemp, double rawSpeed)
+    {
+        var deadband = _store.Deadband;
+        if (deadband <= 0)
+            return rawSpeed;
+
+        var key = (fanId, sensorId);
+        if (!_hyst.TryGetValue(key, out var st))
+        {
+            _hyst[key] = new HysteresisState { LastSpeed = rawSpeed, DecisionTemp = currentTemp };
+            return rawSpeed;
+        }
+
+        // Ramp up: always allow
+        if (rawSpeed >= st.LastSpeed)
+        {
+            st.LastSpeed = rawSpeed;
+            st.DecisionTemp = currentTemp;
+            return rawSpeed;
+        }
+
+        // Ramp down: only allow if temp dropped below decision_temp - deadband
+        if (currentTemp <= st.DecisionTemp - deadband)
+        {
+            st.LastSpeed = rawSpeed;
+            st.DecisionTemp = currentTemp;
+            return rawSpeed;
+        }
+
+        // Within deadband — hold previous speed
+        return st.LastSpeed;
+    }
+
+    /// <summary>Per-(fan, sensor) hysteresis tracking state.</summary>
+    private sealed class HysteresisState
+    {
+        public double LastSpeed    = -1.0;
+        public double DecisionTemp = 0.0;
     }
 
     // -----------------------------------------------------------------------

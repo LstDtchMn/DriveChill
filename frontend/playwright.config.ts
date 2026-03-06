@@ -39,7 +39,7 @@ export default defineConfig({
   // Start the Next.js dev server pointed at the mock backend.
   // Set PLAYWRIGHT_BASE_URL to skip this if testing against an already-running server.
   webServer: process.env.PLAYWRIGHT_BASE_URL ? undefined : {
-    command: 'NEXT_PUBLIC_API_URL=http://localhost:8085 NEXT_PUBLIC_WS_URL=ws://localhost:8085/api/ws npm run dev',
+    command: 'cross-env NEXT_PUBLIC_API_URL=http://localhost:8085 NEXT_PUBLIC_WS_URL=ws://localhost:8085/api/ws npm run dev',
     url: 'http://localhost:3000',
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
