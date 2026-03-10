@@ -32,6 +32,7 @@ public sealed class SensorWorker : BackgroundService
     private DateTimeOffset _lastPrune   = DateTimeOffset.MinValue;
     private const int DbIntervalSeconds = 10;
     private const int PruneIntervalSeconds = 3600; // prune once per hour
+    private volatile bool _telemetryPublishing;
 
     public SensorWorker(IHardwareBackend hw, SensorService sensors, FanService fans,
         AlertService alerts, WebhookService webhooks,
@@ -104,6 +105,35 @@ public sealed class SensorWorker : BackgroundService
                 };
 
                 _sensors.Update(snapshot);
+
+                // MQTT telemetry — single-flight: skip if previous publish still running
+                if (!_telemetryPublishing)
+                {
+                    _telemetryPublishing = true;
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            var telemetryReadings = readings.Select(r => new TelemetryReading
+                            {
+                                SensorId   = r.Id,
+                                SensorName = r.Name,
+                                SensorType = r.SensorType,
+                                Value      = r.Value,
+                                Unit       = r.Unit,
+                            }).ToList();
+                            await _notifChannels.PublishTelemetryAsync(telemetryReadings, stoppingToken);
+                        }
+                        catch (Exception ex)
+                        {
+                            _log.LogDebug(ex, "MQTT telemetry publish failed");
+                        }
+                        finally
+                        {
+                            _telemetryPublishing = false;
+                        }
+                    }, CancellationToken.None);
+                }
 
                 // Count readings by sensor_type
                 foreach (var r in readings)
