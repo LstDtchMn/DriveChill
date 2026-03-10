@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { Cpu, Monitor, HardDrive, Thermometer, AlertTriangle } from 'lucide-react';
+import { useEffect, useState, useCallback } from 'react';
+import { Cpu, Monitor, HardDrive, Thermometer, AlertTriangle, Settings2, ChevronUp, ChevronDown, RotateCcw } from 'lucide-react';
 import { TempGauge } from './TempGauge';
 import { FanSpeedCard } from './FanSpeedCard';
 import { TempChart } from './TempChart';
@@ -11,7 +11,136 @@ import { useAppStore } from '@/stores/appStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { api } from '@/lib/api';
 import { formatTemp } from '@/lib/tempUnit';
+import {
+  loadWidgetConfig,
+  saveWidgetConfig,
+  getWidgetLabel,
+  DEFAULT_WIDGETS,
+  type WidgetConfig,
+  type WidgetType,
+} from '@/lib/widgetConfig';
 import type { DriveSummary, MachineInfo } from '@/lib/types';
+
+// ─── Widget customize panel ────────────────────────────────────────────────
+
+interface CustomizePanelProps {
+  widgets: WidgetConfig[];
+  onChange: (widgets: WidgetConfig[]) => void;
+  onClose: () => void;
+}
+
+function CustomizePanel({ widgets, onChange, onClose }: CustomizePanelProps) {
+  const sorted = [...widgets].sort((a, b) => a.order - b.order);
+
+  const toggle = (type: WidgetType) => {
+    onChange(widgets.map((w) => (w.type === type ? { ...w, visible: !w.visible } : w)));
+  };
+
+  const move = (type: WidgetType, direction: -1 | 1) => {
+    const ordered = [...sorted];
+    const idx = ordered.findIndex((w) => w.type === type);
+    const swapIdx = idx + direction;
+    if (swapIdx < 0 || swapIdx >= ordered.length) return;
+
+    // Swap order values
+    const newWidgets = widgets.map((w) => {
+      if (w.type === ordered[idx].type) return { ...w, order: ordered[swapIdx].order };
+      if (w.type === ordered[swapIdx].type) return { ...w, order: ordered[idx].order };
+      return w;
+    });
+    onChange(newWidgets);
+  };
+
+  const reset = () => onChange([...DEFAULT_WIDGETS]);
+
+  return (
+    <div
+      className="card animate-fade-in"
+      style={{ padding: '1rem', marginBottom: '1rem', border: '1px solid var(--accent)' }}
+    >
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
+          Customize Dashboard
+        </span>
+        <div className="flex items-center gap-2">
+          <button
+            className="btn-secondary"
+            style={{ fontSize: 12, padding: '2px 8px', display: 'flex', alignItems: 'center', gap: 4 }}
+            onClick={reset}
+            title="Reset to default layout"
+          >
+            <RotateCcw size={12} />
+            Reset
+          </button>
+          <button
+            className="btn-secondary"
+            style={{ fontSize: 12, padding: '2px 8px' }}
+            onClick={onClose}
+          >
+            Done
+          </button>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {sorted.map((widget, idx) => (
+          <div
+            key={widget.type}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '6px 8px',
+              borderRadius: 6,
+              background: 'var(--surface-200)',
+            }}
+          >
+            <input
+              type="checkbox"
+              id={`widget-toggle-${widget.type}`}
+              checked={widget.visible}
+              onChange={() => toggle(widget.type)}
+              style={{ cursor: 'pointer', accentColor: 'var(--accent)', flexShrink: 0 }}
+            />
+            <label
+              htmlFor={`widget-toggle-${widget.type}`}
+              style={{
+                flex: 1,
+                fontSize: 13,
+                cursor: 'pointer',
+                color: widget.visible ? 'var(--text)' : 'var(--text-secondary)',
+              }}
+            >
+              {getWidgetLabel(widget.type)}
+            </label>
+            <div style={{ display: 'flex', gap: 2 }}>
+              <button
+                className="btn-secondary"
+                style={{ padding: '2px 4px', opacity: idx === 0 ? 0.3 : 1 }}
+                onClick={() => move(widget.type, -1)}
+                disabled={idx === 0}
+                title="Move up"
+              >
+                <ChevronUp size={14} />
+              </button>
+              <button
+                className="btn-secondary"
+                style={{ padding: '2px 4px', opacity: idx === sorted.length - 1 ? 0.3 : 1 }}
+                onClick={() => move(widget.type, 1)}
+                disabled={idx === sorted.length - 1}
+                title="Move down"
+              >
+                <ChevronDown size={14} />
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── Main component ────────────────────────────────────────────────────────
 
 export function SystemOverview() {
   const {
@@ -28,6 +157,15 @@ export function SystemOverview() {
   const [selectedMachineId, setSelectedMachineId] = useState<string | null>(null);
   const selectedMachine = selectedMachineId ? machines.find(m => m.id === selectedMachineId) ?? null : null;
   const [drives, setDrives] = useState<DriveSummary[]>([]);
+
+  // Widget layout state
+  const [widgets, setWidgets] = useState<WidgetConfig[]>(() => loadWidgetConfig());
+  const [customizing, setCustomizing] = useState(false);
+
+  const handleWidgetChange = useCallback((next: WidgetConfig[]) => {
+    setWidgets(next);
+    saveWidgetConfig(next);
+  }, []);
 
   useEffect(() => {
     api.drives.list().then((r) => setDrives(r.drives)).catch(() => {});
@@ -78,163 +216,151 @@ export function SystemOverview() {
     return <MachineDrillIn machine={selectedMachine} onClose={() => setSelectedMachineId(null)} />;
   }
 
-  return (
-    <div className="space-y-6 animate-fade-in">
-      {!connected && (
-        <div className="px-3 py-2 rounded text-xs" style={{ background: 'var(--warning)', color: '#000', opacity: 0.85 }}>
-          Sensor data may be stale — reconnecting to backend…
-        </div>
-      )}
-      {machines.length > 0 && (
-        <div>
-          <h3 className="section-title mb-3 px-1">Machines</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-            {machines.map((machine) => {
-              const summary = machine.snapshot?.summary;
-              return (
-                <div
-                  key={machine.id}
-                  className="card p-4 animate-card-enter"
-                  onClick={() => setSelectedMachineId(machine.id)}
-                  style={{ cursor: 'pointer', transition: 'opacity 0.15s' }}
-                  onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.opacity = '0.8'; }}
-                  onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.opacity = '1'; }}
-                >
-                  <div className="flex items-center justify-between gap-2 mb-2">
-                    <p className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
-                      {machine.name}
-                    </p>
-                    <span className={`badge ${statusBadgeClass[machine.status] || 'badge-warning'}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                      <span style={{
-                        display: 'inline-block',
-                        width: 6,
-                        height: 6,
-                        borderRadius: '50%',
-                        background: machine.status === 'online' ? 'var(--success)'
-                          : machine.status === 'offline' || machine.status === 'auth_error' ? 'var(--danger)'
-                          : machine.status === 'unknown' ? 'var(--text-secondary)'
-                          : 'var(--warning)',
-                      }} />
-                      {machine.status === 'online' ? 'Online'
-                        : machine.status === 'offline' ? 'Offline'
-                        : machine.status === 'unknown' ? 'Unknown'
-                        : machine.status.replace('_', ' ')}
-                    </span>
-                  </div>
-                  <p className="text-xs mb-3 truncate" style={{ color: 'var(--text-secondary)' }}>
-                    {machine.base_url}
-                  </p>
-                  <div className="grid grid-cols-3 gap-2 text-xs">
-                    <div>
-                      <p style={{ color: 'var(--text-secondary)' }}>CPU</p>
-                      <p style={{ color: 'var(--text)' }}>
-                        {summary?.cpu_temp != null ? formatTemp(summary.cpu_temp, tempUnit) : '--'}
-                      </p>
-                    </div>
-                    <div>
-                      <p style={{ color: 'var(--text-secondary)' }}>GPU</p>
-                      <p style={{ color: 'var(--text)' }}>
-                        {summary?.gpu_temp != null ? formatTemp(summary.gpu_temp, tempUnit) : '--'}
-                      </p>
-                    </div>
-                    <div>
-                      <p style={{ color: 'var(--text-secondary)' }}>Fresh</p>
-                      <p style={{ color: 'var(--text)' }}>
-                        {machine.freshness_seconds != null ? `${machine.freshness_seconds.toFixed(1)}s` : '--'}
-                      </p>
-                    </div>
-                  </div>
-                  {machine.last_error && (
-                    <p className="text-xs mt-2 truncate" style={{ color: 'var(--danger)' }}>
-                      {machine.last_error}
-                    </p>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
+  // Sort visible widgets by order
+  const sortedWidgets = [...widgets].sort((a, b) => a.order - b.order);
+  const isVisible = (type: WidgetType) => sortedWidgets.find((w) => w.type === type)?.visible ?? true;
 
-      {/* Storage summary */}
-      {drives.length > 0 && (() => {
-        const critical = drives.filter((d) => d.health_status === 'critical').length;
-        const warning  = drives.filter((d) => d.health_status === 'warning').length;
-        const hottest  = drives.reduce<DriveSummary | null>(
-          (best, d) => (d.temperature_c != null && (best === null || d.temperature_c > (best.temperature_c ?? -Infinity))) ? d : best,
-          null,
-        );
-        const hasProblem = critical > 0 || warning > 0;
-        return (
-          <div>
-            <h3 className="section-title mb-3 px-1">Storage</h3>
-            <div
-              className="card flex items-center justify-between gap-4 cursor-pointer hover:opacity-90 transition-opacity"
-              onClick={() => setPage('drives')}
-            >
-              <div className="flex items-center gap-3">
-                <div
-                  className="w-10 h-10 rounded-lg flex items-center justify-center shrink-0"
-                  style={{ background: 'var(--accent-muted)' }}
-                >
-                  <HardDrive size={20} style={{ color: hasProblem ? 'var(--warning)' : 'var(--accent)' }} />
-                </div>
-                <div>
+  // ─── Widget renderers ───────────────────────────────────────────────────
+
+  const renderCoolingScore = () => {
+    if (!isVisible('cooling_score') || machines.length === 0) return null;
+    return (
+      <div key="cooling_score">
+        <h3 className="section-title mb-3 px-1">Machines</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {machines.map((machine) => {
+            const summary = machine.snapshot?.summary;
+            return (
+              <div
+                key={machine.id}
+                className="card p-4 animate-card-enter"
+                onClick={() => setSelectedMachineId(machine.id)}
+                style={{ cursor: 'pointer', transition: 'opacity 0.15s' }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.opacity = '0.8'; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.opacity = '1'; }}
+              >
+                <div className="flex items-center justify-between gap-2 mb-2">
                   <p className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
-                    {drives.length} drive{drives.length !== 1 ? 's' : ''} detected
+                    {machine.name}
                   </p>
-                  <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-                    {critical > 0
-                      ? `${critical} critical`
-                      : warning > 0
-                      ? `${warning} warning`
-                      : 'All healthy'}
-                    {hottest?.temperature_c != null && ` · hottest ${formatTemp(hottest.temperature_c, tempUnit)}`}
-                  </p>
+                  <span className={`badge ${statusBadgeClass[machine.status] || 'badge-warning'}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{
+                      display: 'inline-block',
+                      width: 6,
+                      height: 6,
+                      borderRadius: '50%',
+                      background: machine.status === 'online' ? 'var(--success)'
+                        : machine.status === 'offline' || machine.status === 'auth_error' ? 'var(--danger)'
+                        : machine.status === 'unknown' ? 'var(--text-secondary)'
+                        : 'var(--warning)',
+                    }} />
+                    {machine.status === 'online' ? 'Online'
+                      : machine.status === 'offline' ? 'Offline'
+                      : machine.status === 'unknown' ? 'Unknown'
+                      : machine.status.replace('_', ' ')}
+                  </span>
                 </div>
+                <p className="text-xs mb-3 truncate" style={{ color: 'var(--text-secondary)' }}>
+                  {machine.base_url}
+                </p>
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  <div>
+                    <p style={{ color: 'var(--text-secondary)' }}>CPU</p>
+                    <p style={{ color: 'var(--text)' }}>
+                      {summary?.cpu_temp != null ? formatTemp(summary.cpu_temp, tempUnit) : '--'}
+                    </p>
+                  </div>
+                  <div>
+                    <p style={{ color: 'var(--text-secondary)' }}>GPU</p>
+                    <p style={{ color: 'var(--text)' }}>
+                      {summary?.gpu_temp != null ? formatTemp(summary.gpu_temp, tempUnit) : '--'}
+                    </p>
+                  </div>
+                  <div>
+                    <p style={{ color: 'var(--text-secondary)' }}>Fresh</p>
+                    <p style={{ color: 'var(--text)' }}>
+                      {machine.freshness_seconds != null ? `${machine.freshness_seconds.toFixed(1)}s` : '--'}
+                    </p>
+                  </div>
+                </div>
+                {machine.last_error && (
+                  <p className="text-xs mt-2 truncate" style={{ color: 'var(--danger)' }}>
+                    {machine.last_error}
+                  </p>
+                )}
               </div>
-              <div className="flex items-center gap-3">
-                {hasProblem && <AlertTriangle size={16} style={{ color: critical > 0 ? 'var(--danger)' : 'var(--warning)' }} />}
-                <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>View →</span>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
-
-      {/* Temperature Gauges */}
-      <div>
-        <h3 className="section-title mb-3 px-1">Temperatures</h3>
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <TempGauge
-            label={cpuLabel}
-            value={cpuTemp}
-            maxValue={100}
-            icon={<Cpu size={16} />}
-          />
-          <TempGauge
-            label={gpuLabel}
-            value={gpuTemp}
-            maxValue={95}
-            icon={<Monitor size={16} />}
-          />
-          <TempGauge
-            label={hddLabel}
-            value={hddTemp}
-            maxValue={70}
-            icon={<HardDrive size={16} />}
-          />
-          <TempGauge
-            label={caseLabel}
-            value={caseTemp}
-            maxValue={55}
-            icon={<Thermometer size={16} />}
-          />
+            );
+          })}
         </div>
       </div>
+    );
+  };
 
-      {/* Load indicators */}
-      <div>
+  const renderDriveHealth = () => {
+    if (!isVisible('drive_health') || drives.length === 0) return null;
+    const critical = drives.filter((d) => d.health_status === 'critical').length;
+    const warning  = drives.filter((d) => d.health_status === 'warning').length;
+    const hottest  = drives.reduce<DriveSummary | null>(
+      (best, d) => (d.temperature_c != null && (best === null || d.temperature_c > (best.temperature_c ?? -Infinity))) ? d : best,
+      null,
+    );
+    const hasProblem = critical > 0 || warning > 0;
+    return (
+      <div key="drive_health">
+        <h3 className="section-title mb-3 px-1">Storage</h3>
+        <div
+          className="card flex items-center justify-between gap-4 cursor-pointer hover:opacity-90 transition-opacity"
+          onClick={() => setPage('drives')}
+        >
+          <div className="flex items-center gap-3">
+            <div
+              className="w-10 h-10 rounded-lg flex items-center justify-center shrink-0"
+              style={{ background: 'var(--accent-muted)' }}
+            >
+              <HardDrive size={20} style={{ color: hasProblem ? 'var(--warning)' : 'var(--accent)' }} />
+            </div>
+            <div>
+              <p className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
+                {drives.length} drive{drives.length !== 1 ? 's' : ''} detected
+              </p>
+              <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                {critical > 0
+                  ? `${critical} critical`
+                  : warning > 0
+                  ? `${warning} warning`
+                  : 'All healthy'}
+                {hottest?.temperature_c != null && ` · hottest ${formatTemp(hottest.temperature_c, tempUnit)}`}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            {hasProblem && <AlertTriangle size={16} style={{ color: critical > 0 ? 'var(--danger)' : 'var(--warning)' }} />}
+            <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>View →</span>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderTempGauges = () => {
+    if (!isVisible('temp_gauges')) return null;
+    return (
+      <div key="temp_gauges">
+        <h3 className="section-title mb-3 px-1">Temperatures</h3>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <TempGauge label={cpuLabel}  value={cpuTemp}  maxValue={100} icon={<Cpu       size={16} />} />
+          <TempGauge label={gpuLabel}  value={gpuTemp}  maxValue={95}  icon={<Monitor   size={16} />} />
+          <TempGauge label={hddLabel}  value={hddTemp}  maxValue={70}  icon={<HardDrive size={16} />} />
+          <TempGauge label={caseLabel} value={caseTemp} maxValue={55}  icon={<Thermometer size={16} />} />
+        </div>
+      </div>
+    );
+  };
+
+  const renderSystemLoad = () => {
+    if (!isVisible('system_load')) return null;
+    return (
+      <div key="system_load">
         <h3 className="section-title mb-3 px-1">System Load</h3>
         <div className="grid grid-cols-2 gap-4">
           <div className="card p-4 animate-card-enter">
@@ -273,12 +399,16 @@ export function SystemOverview() {
           </div>
         </div>
       </div>
+    );
+  };
 
-      {/* Fan Speeds */}
-      <div>
+  const renderFanSpeeds = () => {
+    if (!isVisible('fan_speeds')) return null;
+    return (
+      <div key="fan_speeds">
         <h3 className="section-title mb-3 px-1">Fan Speeds</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {fanRpms.map((fan, i) => {
+          {fanRpms.map((fan) => {
             const fanBase = fan.id.replace(/_rpm$/, '');
             const pct = fanPcts.find((f) => f.id.replace(/_pct$/, '') === fanBase);
             const fanLabel = sensorLabels[fan.id] || fan.name.replace(' RPM', '').replace(' Rpm', '');
@@ -294,9 +424,59 @@ export function SystemOverview() {
           })}
         </div>
       </div>
+    );
+  };
 
-      {/* Temperature Chart */}
-      <TempChart />
+  const renderTempChart = () => {
+    if (!isVisible('temp_chart')) return null;
+    return <TempChart key="temp_chart" />;
+  };
+
+  const widgetRenderers: Record<WidgetType, () => React.ReactNode> = {
+    cooling_score: renderCoolingScore,
+    temp_gauges:   renderTempGauges,
+    fan_speeds:    renderFanSpeeds,
+    drive_health:  renderDriveHealth,
+    system_load:   renderSystemLoad,
+    temp_chart:    renderTempChart,
+  };
+
+  return (
+    <div className="space-y-6 animate-fade-in">
+      {!connected && (
+        <div className="px-3 py-2 rounded text-xs" style={{ background: 'var(--warning)', color: '#000', opacity: 0.85 }}>
+          Sensor data may be stale — reconnecting to backend…
+        </div>
+      )}
+
+      {/* Customize button */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <button
+          className="btn-secondary"
+          style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}
+          onClick={() => setCustomizing((v) => !v)}
+          aria-expanded={customizing}
+          aria-label="Customize dashboard layout"
+        >
+          <Settings2 size={14} />
+          {customizing ? 'Close' : 'Customize'}
+        </button>
+      </div>
+
+      {/* Widget configuration panel */}
+      {customizing && (
+        <CustomizePanel
+          widgets={widgets}
+          onChange={handleWidgetChange}
+          onClose={() => setCustomizing(false)}
+        />
+      )}
+
+      {/* Ordered widget list */}
+      {sortedWidgets.map((w) => {
+        const renderer = widgetRenderers[w.type];
+        return renderer ? renderer() : null;
+      })}
     </div>
   );
 }
