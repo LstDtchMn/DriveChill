@@ -53,6 +53,7 @@ from app.services.drive_monitor_service import DriveMonitorService
 from app.services.drive_self_test_service import DriveSelfTestService
 from app.services.temperature_target_service import TemperatureTargetService
 from app.services.virtual_sensor_service import VirtualSensorDef, VirtualSensorService
+from app.mqtt_telemetry import create_telemetry_publisher
 
 logger = logging.getLogger(__name__)
 
@@ -257,6 +258,10 @@ async def lifespan(app: FastAPI):
     app.state.notification_channel_service = notification_channel_svc
     alert_service._channel_svc = notification_channel_svc
 
+    telemetry_task = asyncio.create_task(
+        create_telemetry_publisher(sensor_service, notification_channel_svc)
+    )
+
     drive_monitor = DriveMonitorService(db, settings_repo)
     drive_monitor.set_sensor_service(sensor_service)
     drive_monitor.set_smart_trend_service(smart_trend_svc)
@@ -406,6 +411,7 @@ async def lifespan(app: FastAPI):
     log_task.cancel()
     auth_cleanup_task.cancel()
     retention_prune_task.cancel()
+    telemetry_task.cancel()
     try:
         await log_task
     except asyncio.CancelledError:
@@ -417,6 +423,10 @@ async def lifespan(app: FastAPI):
     try:
         await retention_prune_task
     except asyncio.CancelledError:
+        pass
+    try:
+        await asyncio.wait_for(telemetry_task, timeout=2.0)
+    except (asyncio.CancelledError, asyncio.TimeoutError):
         pass
 
     await drive_self_test_svc.stop()
