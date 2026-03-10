@@ -9,6 +9,7 @@ import { Heatmap } from './Heatmap';
 import { CoolingScore } from './CoolingScore';
 import { TrendChart } from './TrendChart';
 import { PeriodComparison } from './PeriodComparison';
+import { NoiseAdvisor } from './NoiseAdvisor';
 import type { AnalyticsStat, AnalyticsAnomaly, AnalyticsBucket, ThermalRegression, AnalyticsCorrelationSample } from '@/lib/types';
 
 const TIME_OPTIONS = [
@@ -327,6 +328,11 @@ export function AnalyticsPage() {
             )}
             {/* Period Comparison — always shown, fetches its own 24h vs prev 24h data */}
             <PeriodComparison fmt={fmt} />
+            {/* Noise Optimization Advisor */}
+            <div>
+              <h3 className="section-title mb-3">Noise Optimization Advisor</h3>
+              <NoiseAdvisor />
+            </div>
             {thermalStats.length > 0 && (
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
                 {thermalStats.map((s) => <StatCard key={s.sensor_id} s={s} accentColor="var(--warning)" fmt={fmt} />)}
