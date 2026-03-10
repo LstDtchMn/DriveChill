@@ -7,6 +7,7 @@ HTML analytics summary, and dispatches it via EmailNotificationService.
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 import math
 from collections import defaultdict
@@ -192,8 +193,8 @@ def _build_report_html(
     # Stats table
     if stats:
         rows_html = "".join(
-            f"<tr><td>{s['sensor_name']}</td><td>{s['sensor_type']}</td>"
-            f"<td>{s['avg_value']:.1f} {s['unit']}</td>"
+            f"<tr><td>{html.escape(str(s['sensor_name']))}</td><td>{html.escape(str(s['sensor_type']))}</td>"
+            f"<td>{s['avg_value']:.1f} {html.escape(str(s['unit']))}</td>"
             f"<td>{s['min_value']:.1f}</td><td>{s['max_value']:.1f}</td>"
             f"<td>{s['sample_count']}</td></tr>"
             for s in stats
@@ -211,11 +212,11 @@ def _build_report_html(
     # Anomalies table
     if anomalies:
         rows_html = "".join(
-            f"<tr><td>{a['timestamp_utc']}</td><td>{a['sensor_name']}</td>"
-            f"<td>{a['value']:.1f} {a['unit']}</td>"
+            f"<tr><td>{html.escape(str(a['timestamp_utc']))}</td><td>{html.escape(str(a['sensor_name']))}</td>"
+            f"<td>{a['value']:.1f} {html.escape(str(a['unit']))}</td>"
             f"<td>{a['z_score']:.2f}</td>"
             f"<td><span class=\"{'badge-crit' if a['severity'] == 'critical' else 'badge-warn'}\">"
-            f"{a['severity']}</span></td></tr>"
+            f"{html.escape(str(a['severity']))}</span></td></tr>"
             for a in anomalies
         )
         anomalies_table = (
