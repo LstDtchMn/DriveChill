@@ -47,6 +47,7 @@ class NotificationChannelService:
         self._db = db
         self._http_session: Any = None  # lazily created aiohttp.ClientSession
         self._mqtt_clients: dict[str, Any] = {}  # channel_id -> aiomqtt.Client
+        self._ha_advertised: dict[str, set[str]] = {}  # channel_id -> set of advertised sensor/fan IDs
 
     async def _ensure_session(self) -> Any:
         if self._http_session is None:
@@ -368,6 +369,81 @@ class NotificationChannelService:
                 pass
             return False
 
+    async def _publish_ha_discovery(
+        self, channel: NotificationChannel, client: Any, readings: list[dict]
+    ) -> None:
+        """Publish Home Assistant MQTT discovery messages for sensors and fans."""
+        if not channel.config.get("ha_discovery", False):
+            return
+
+        ha_prefix = channel.config.get("ha_discovery_prefix", "homeassistant")
+        topic_prefix = channel.config.get("topic_prefix", "drivechill")
+
+        device_block = {
+            "identifiers": ["drivechill"],
+            "name": "DriveChill",
+            "manufacturer": "DriveChill",
+            "model": "Fan Controller",
+        }
+
+        current_ids: set[str] = set()
+        for reading in readings:
+            sensor_id = reading.get("id", reading.get("sensor_id", "unknown"))
+            sensor_name = reading.get("name", reading.get("sensor_name", sensor_id))
+            sensor_type = reading.get("sensor_type", "")
+            unit = reading.get("unit", "")
+            current_ids.add(sensor_id)
+
+            is_fan = "fan" in sensor_type.lower()
+
+            if is_fan:
+                component = "fan"
+                config_payload = {
+                    "name": f"DriveChill {sensor_name}",
+                    "unique_id": f"drivechill_{sensor_id}",
+                    "state_topic": f"{topic_prefix}/sensors/{sensor_id}",
+                    "value_template": "{{ value_json.value }}",
+                    "percentage_state_topic": f"{topic_prefix}/sensors/{sensor_id}",
+                    "percentage_value_template": "{{ value_json.value }}",
+                    "command_topic": f"{topic_prefix}/commands/fans/{sensor_id}/speed",
+                    "percentage_command_topic": f"{topic_prefix}/commands/fans/{sensor_id}/speed",
+                    "device": device_block,
+                }
+            else:
+                component = "sensor"
+                config_payload = {
+                    "name": f"DriveChill {sensor_name}",
+                    "unique_id": f"drivechill_{sensor_id}",
+                    "state_topic": f"{topic_prefix}/sensors/{sensor_id}",
+                    "value_template": "{{ value_json.value }}",
+                    "unit_of_measurement": unit,
+                    "device": device_block,
+                }
+
+            config_topic = f"{ha_prefix}/{component}/drivechill_{sensor_id}/config"
+            await client.publish(
+                config_topic,
+                payload=json.dumps(config_payload).encode(),
+                qos=1,
+                retain=True,
+            )
+
+        # Remove previously advertised IDs that are no longer present
+        previously_advertised = self._ha_advertised.get(channel.id, set())
+        removed_ids = previously_advertised - current_ids
+        for old_id in removed_ids:
+            # We don't know the original component type, so remove from both
+            for component in ("sensor", "fan"):
+                config_topic = f"{ha_prefix}/{component}/drivechill_{old_id}/config"
+                await client.publish(
+                    config_topic,
+                    payload=b"",
+                    qos=1,
+                    retain=True,
+                )
+
+        self._ha_advertised[channel.id] = current_ids
+
     async def publish_telemetry(self, readings: list[dict]) -> int:
         """Publish sensor telemetry to all MQTT channels with publish_telemetry enabled.
 
@@ -390,6 +466,9 @@ class NotificationChannelService:
             retain = bool(ch.config.get("retain", False))
 
             try:
+                # Publish HA discovery messages before telemetry
+                await self._publish_ha_discovery(ch, client, readings)
+
                 for reading in readings:
                     sensor_id = reading.get("id", reading.get("sensor_id", "unknown"))
                     payload = json.dumps(reading)

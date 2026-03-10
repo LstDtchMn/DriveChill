@@ -33,6 +33,7 @@ public sealed class NotificationChannelService
     private readonly IHttpClientFactory _httpFactory;
     private readonly ILogger<NotificationChannelService> _logger;
     private readonly Dictionary<string, MqttClientWrapper> _mqttClients = new();
+    private readonly Dictionary<string, HashSet<string>> _haAdvertised = new();
 
     public NotificationChannelService(DbService db, IHttpClientFactory httpFactory,
                                        ILogger<NotificationChannelService> logger)
@@ -307,6 +308,92 @@ public sealed class NotificationChannelService
         }
     }
 
+    private async Task PublishHaDiscoveryAsync(NotificationChannel ch, MqttClientWrapper wrapper,
+        IReadOnlyList<TelemetryReading> readings, CancellationToken ct)
+    {
+        if (!GetBool(ch.Config, "ha_discovery", false)) return;
+
+        var haPrefix = GetStr(ch.Config, "ha_discovery_prefix") ?? "homeassistant";
+        var topicPrefix = GetStr(ch.Config, "topic_prefix") ?? "drivechill";
+
+        var device = new Dictionary<string, object>
+        {
+            ["identifiers"] = new[] { "drivechill" },
+            ["name"] = "DriveChill",
+            ["manufacturer"] = "DriveChill",
+            ["model"] = "Fan Controller",
+        };
+
+        var currentIds = new HashSet<string>();
+        foreach (var r in readings)
+        {
+            currentIds.Add(r.SensorId);
+            var isFan = r.SensorType.Contains("fan", StringComparison.OrdinalIgnoreCase);
+            var component = isFan ? "fan" : "sensor";
+
+            object configPayload;
+            if (isFan)
+            {
+                configPayload = new Dictionary<string, object>
+                {
+                    ["name"] = $"DriveChill {r.SensorName}",
+                    ["unique_id"] = $"drivechill_{r.SensorId}",
+                    ["state_topic"] = $"{topicPrefix}/sensors/{r.SensorId}",
+                    ["value_template"] = "{{ value_json.value }}",
+                    ["percentage_state_topic"] = $"{topicPrefix}/sensors/{r.SensorId}",
+                    ["percentage_value_template"] = "{{ value_json.value }}",
+                    ["command_topic"] = $"{topicPrefix}/commands/fans/{r.SensorId}/speed",
+                    ["percentage_command_topic"] = $"{topicPrefix}/commands/fans/{r.SensorId}/speed",
+                    ["device"] = device,
+                };
+            }
+            else
+            {
+                configPayload = new Dictionary<string, object>
+                {
+                    ["name"] = $"DriveChill {r.SensorName}",
+                    ["unique_id"] = $"drivechill_{r.SensorId}",
+                    ["state_topic"] = $"{topicPrefix}/sensors/{r.SensorId}",
+                    ["value_template"] = "{{ value_json.value }}",
+                    ["unit_of_measurement"] = r.Unit,
+                    ["device"] = device,
+                };
+            }
+
+            var configTopic = $"{haPrefix}/{component}/drivechill_{r.SensorId}/config";
+            var msg = new MqttApplicationMessageBuilder()
+                .WithTopic(configTopic)
+                .WithPayload(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(configPayload)))
+                .WithQualityOfServiceLevel(MqttQualityOfServiceLevel.AtLeastOnce)
+                .WithRetainFlag(true)
+                .Build();
+            await wrapper.Client.PublishAsync(msg, ct);
+        }
+
+        // Remove previously advertised IDs no longer present
+        if (_haAdvertised.TryGetValue(ch.Id, out var previous))
+        {
+            foreach (var oldId in previous)
+            {
+                if (currentIds.Contains(oldId)) continue;
+                // Remove from both component types since we don't track which it was
+                foreach (var comp in new[] { "sensor", "fan" })
+                {
+                    var removeTopic = $"{haPrefix}/{comp}/drivechill_{oldId}/config";
+                    var removeMsg = new MqttApplicationMessageBuilder()
+                        .WithTopic(removeTopic)
+                        .WithPayload(Array.Empty<byte>())
+                        .WithQualityOfServiceLevel(MqttQualityOfServiceLevel.AtLeastOnce)
+                        .WithRetainFlag(true)
+                        .Build();
+                    await wrapper.Client.PublishAsync(removeMsg, ct);
+                }
+            }
+        }
+
+        _haAdvertised[ch.Id] = currentIds;
+    }
+
     public async Task<int> PublishTelemetryAsync(IReadOnlyList<TelemetryReading> readings, CancellationToken ct = default)
     {
         var channels = await ListAsync(ct);
@@ -325,6 +412,9 @@ public sealed class NotificationChannelService
 
             try
             {
+                // Publish HA discovery messages before telemetry
+                await PublishHaDiscoveryAsync(ch, wrapper, readings, ct);
+
                 foreach (var r in readings)
                 {
                     var payload = JsonSerializer.Serialize(r);

@@ -194,4 +194,57 @@ public sealed class MqttChannelTests : IDisposable
 
         Assert.Contains(channels, c => c.Id == "mqtt_list" && c.Type == "mqtt" && c.Name == "Listed MQTT");
     }
+
+    // -----------------------------------------------------------------------
+    // HA Discovery — config disabled
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task PublishTelemetry_HaDiscoveryDisabled_NoExtraPublish()
+    {
+        // When ha_discovery is false (default), PublishTelemetryAsync should still
+        // work but not attempt any HA discovery publishes.
+        // With an unreachable broker, the telemetry publish returns 0 — the key
+        // assertion is that no exception is thrown due to HA discovery logic.
+        await _svc.CreateAsync("mqtt_noha", "mqtt", "No HA", true,
+            Cfg(
+                ("broker_url", "mqtt://localhost:1883"),
+                ("publish_telemetry", true),
+                ("ha_discovery", false)
+            ),
+            CancellationToken.None);
+
+        var readings = new List<TelemetryReading>
+        {
+            new() { SensorId = "cpu0", SensorName = "CPU Core #0", SensorType = "temperature", Value = 55.0, Unit = "C" },
+        };
+
+        // Should not throw — connection will fail gracefully
+        var published = await _svc.PublishTelemetryAsync(readings, CancellationToken.None);
+        Assert.Equal(0, published);
+    }
+
+    [Fact]
+    public async Task PublishTelemetry_HaDiscoveryEnabled_NoExtraException()
+    {
+        // When ha_discovery is true but broker is unreachable, the method should
+        // still handle gracefully (connection failure before discovery publish).
+        await _svc.CreateAsync("mqtt_ha", "mqtt", "With HA", true,
+            Cfg(
+                ("broker_url", "mqtt://no-such-host-drivechill-test.invalid:1883"),
+                ("publish_telemetry", true),
+                ("ha_discovery", true),
+                ("ha_discovery_prefix", "homeassistant")
+            ),
+            CancellationToken.None);
+
+        var readings = new List<TelemetryReading>
+        {
+            new() { SensorId = "cpu0", SensorName = "CPU", SensorType = "temperature", Value = 60.0, Unit = "C" },
+            new() { SensorId = "fan1", SensorName = "Fan 1", SensorType = "fan_speed", Value = 1200, Unit = "RPM" },
+        };
+
+        var published = await _svc.PublishTelemetryAsync(readings, CancellationToken.None);
+        Assert.Equal(0, published);
+    }
 }
