@@ -518,3 +518,15 @@ export interface NoiseProfile {
   created_at: string;
   updated_at: string;
 }
+
+// ─── Report Schedules ─────────────────────────────────────────────────────────
+
+export interface ReportSchedule {
+  id: string;
+  frequency: 'daily' | 'weekly';
+  time_utc: string;
+  timezone: string;
+  enabled: boolean;
+  last_sent_at: string | null;
+  created_at: string;
+}

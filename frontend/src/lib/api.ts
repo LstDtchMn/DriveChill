@@ -655,6 +655,22 @@ export const api = {
       fetchAPI<void>(`/api/noise-profiles/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   },
 
+  // Report Schedules
+  reportSchedules: {
+    list: () =>
+      fetchAPI<{ schedules: import('./types').ReportSchedule[] }>('/api/report-schedules'),
+    create: (body: Partial<import('./types').ReportSchedule>) =>
+      fetchAPI<import('./types').ReportSchedule>('/api/report-schedules', {
+        method: 'POST', body: JSON.stringify(body),
+      }),
+    update: (id: string, body: Partial<import('./types').ReportSchedule>) =>
+      fetchAPI<import('./types').ReportSchedule>(`/api/report-schedules/${encodeURIComponent(id)}`, {
+        method: 'PUT', body: JSON.stringify(body),
+      }),
+    delete: (id: string) =>
+      fetchAPI<void>(`/api/report-schedules/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  },
+
   // Manual fan speed (used by noise profiler sweep)
   setFanSpeed: (fanId: string, percent: number) =>
     fetchAPI<{ success: boolean; fan_id: string; speed: number }>('/api/fans/speed', {

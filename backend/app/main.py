@@ -47,6 +47,7 @@ from app.api.routes import update as update_route
 from app.api.routes import virtual_sensors as virtual_sensors_route
 from app.api.routes import notification_channels as notification_channels_route
 from app.api.routes import noise_profiles as noise_profiles_route
+from app.api.routes import report_schedules as report_schedules_route
 from app.api.websocket import router as ws_router
 from app.db.repositories.drive_repo import DriveRepo
 from app.db.repositories.temperature_target_repo import TemperatureTargetRepo
@@ -54,6 +55,7 @@ from app.services.drive_monitor_service import DriveMonitorService
 from app.services.drive_self_test_service import DriveSelfTestService
 from app.services.temperature_target_service import TemperatureTargetService
 from app.services.virtual_sensor_service import VirtualSensorDef, VirtualSensorService
+from app.services.report_scheduler_service import ReportSchedulerService
 from app.mqtt_telemetry import create_telemetry_publisher
 
 logger = logging.getLogger(__name__)
@@ -279,6 +281,13 @@ async def lifespan(app: FastAPI):
     await drive_self_test_svc.start()
 
     # ------------------------------------------------------------------
+    # Report scheduler service
+    # ------------------------------------------------------------------
+    report_scheduler = ReportSchedulerService(db=db, email_svc=email_svc)
+    app.state.report_scheduler = report_scheduler
+    await report_scheduler.start()
+
+    # ------------------------------------------------------------------
     # Background task: log sensor data every 10 seconds
     # ------------------------------------------------------------------
     async def log_loop():
@@ -430,6 +439,7 @@ async def lifespan(app: FastAPI):
     except (asyncio.CancelledError, asyncio.TimeoutError):
         pass
 
+    await report_scheduler.stop()
     await drive_self_test_svc.stop()
     await drive_monitor.stop()
     await fan_service.stop()
@@ -511,6 +521,7 @@ app.include_router(update_route.router, dependencies=_auth_deps)
 app.include_router(virtual_sensors_route.router, dependencies=_auth_deps)
 app.include_router(notification_channels_route.router, dependencies=_auth_deps)
 app.include_router(noise_profiles_route.router, dependencies=_auth_deps)
+app.include_router(report_schedules_route.router, dependencies=_auth_deps)
 # WebSocket auth is handled inside the endpoint (require_ws_auth) because
 # router-level Depends(require_auth) injects Request, which fails for WS.
 app.include_router(ws_router)

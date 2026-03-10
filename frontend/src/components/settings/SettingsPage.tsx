@@ -12,6 +12,7 @@ import { requestNotificationPermission } from '@/hooks/useNotifications';
 import type { ApiKeyInfo, DriveSettings, MachineInfo, WebhookConfig, WebhookDelivery, PushSubscription, EmailNotificationSettings } from '@/lib/types';
 import { NotificationChannelForm } from './NotificationChannelForm';
 import { NoiseProfiler } from './NoiseProfiler';
+import { ReportScheduleForm } from './ReportScheduleForm';
 import { Save, RefreshCw, Download, Upload, Info, Pencil, X, Check, Bell, BellOff, HardDrive, ArrowUpCircle } from 'lucide-react';
 import { useConfirm } from '@/components/ui/ConfirmDialog';
 import { useToast } from '@/components/ui/ToastProvider';
@@ -1900,6 +1901,9 @@ export function SettingsPage() {
           )}
         </div>
       )}
+
+      {/* Scheduled Reports */}
+      <ReportScheduleForm isAdmin={isAdmin} toast={toast} confirm={confirm} />
 
       {/* Noise Profiler */}
       <NoiseProfiler />
