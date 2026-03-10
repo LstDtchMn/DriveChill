@@ -7,6 +7,8 @@ import { displayTemp, tempUnitSymbol } from '@/lib/tempUnit';
 import { ExportButtons } from './ExportButtons';
 import { Heatmap } from './Heatmap';
 import { CoolingScore } from './CoolingScore';
+import { TrendChart } from './TrendChart';
+import { PeriodComparison } from './PeriodComparison';
 import type { AnalyticsStat, AnalyticsAnomaly, AnalyticsBucket, ThermalRegression, AnalyticsCorrelationSample } from '@/lib/types';
 
 const TIME_OPTIONS = [
@@ -323,6 +325,8 @@ export function AnalyticsPage() {
                 <CoolingScore stats={stats} anomalies={anomalies} regressions={regressions} />
               </div>
             )}
+            {/* Period Comparison — always shown, fetches its own 24h vs prev 24h data */}
+            <PeriodComparison fmt={fmt} />
             {thermalStats.length > 0 && (
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
                 {thermalStats.map((s) => <StatCard key={s.sensor_id} s={s} accentColor="var(--warning)" fmt={fmt} />)}
@@ -432,17 +436,23 @@ export function AnalyticsPage() {
         </div>
       </div>
 
-      {/* Section 4: Temperature History sparklines */}
+      {/* Section 4: Temperature History — interactive trend charts */}
       <div>
         <h3 className="section-title mb-3">Temperature History</h3>
         {Object.keys(tempBuckets).length === 0 ? (
           <div className="card p-6 text-center"><p className="text-sm" style={{ color: 'var(--text-secondary)' }}>No history data.</p></div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="space-y-4">
             {Object.entries(tempBuckets).map(([sensorId, bkts]) => (
               <div key={sensorId} className="card p-4 animate-card-enter">
                 <p className="text-xs font-semibold mb-3" style={{ color: 'var(--text-secondary)' }}>{bkts[0].sensor_name}</p>
-                <Sparkline buckets={bkts} fmt={fmt} />
+                <TrendChart
+                  buckets={bkts}
+                  sensorId={sensorId}
+                  sensorName={bkts[0].sensor_name}
+                  unit={bkts[0].unit}
+                  fmt={fmt}
+                />
               </div>
             ))}
           </div>
