@@ -42,6 +42,9 @@ public sealed class FanService
     private volatile bool _sensorPanic;   // sensor read failure → all fans full
     private volatile bool _tempPanic;     // temperature above panic threshold
 
+    /// <summary>True if the system is in any panic mode (sensor failure or temperature).</summary>
+    public bool IsInPanic => _sensorPanic || _tempPanic;
+
     // Startup safety: run fans at a safe fixed speed until curves are loaded
     // or the safety window expires (15 seconds).
     private volatile bool _startupSafetyActive = true;

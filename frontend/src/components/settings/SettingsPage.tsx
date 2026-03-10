@@ -13,6 +13,7 @@ import type { ApiKeyInfo, DriveSettings, MachineInfo, WebhookConfig, WebhookDeli
 import { NotificationChannelForm } from './NotificationChannelForm';
 import { NoiseProfiler } from './NoiseProfiler';
 import { ReportScheduleForm } from './ReportScheduleForm';
+import { ProfileScheduleEditor } from './ProfileScheduleEditor';
 import { Save, RefreshCw, Download, Upload, Info, Pencil, X, Check, Bell, BellOff, HardDrive, ArrowUpCircle } from 'lucide-react';
 import { useConfirm } from '@/components/ui/ConfirmDialog';
 import { useToast } from '@/components/ui/ToastProvider';
@@ -1901,6 +1902,9 @@ export function SettingsPage() {
           )}
         </div>
       )}
+
+      {/* Profile Schedules */}
+      <ProfileScheduleEditor isAdmin={isAdmin} toast={toast} confirm={confirm} />
 
       {/* Scheduled Reports */}
       <ReportScheduleForm isAdmin={isAdmin} toast={toast} confirm={confirm} />

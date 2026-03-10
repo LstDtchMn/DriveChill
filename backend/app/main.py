@@ -49,6 +49,7 @@ from app.api.routes import notification_channels as notification_channels_route
 from app.api.routes import noise_profiles as noise_profiles_route
 from app.api.routes import report_schedules as report_schedules_route
 from app.api.routes import event_annotations as event_annotations_route
+from app.api.routes import profile_schedules as profile_schedules_route
 from app.api.websocket import router as ws_router
 from app.db.repositories.drive_repo import DriveRepo
 from app.db.repositories.temperature_target_repo import TemperatureTargetRepo
@@ -57,6 +58,7 @@ from app.services.drive_self_test_service import DriveSelfTestService
 from app.services.temperature_target_service import TemperatureTargetService
 from app.services.virtual_sensor_service import VirtualSensorDef, VirtualSensorService
 from app.services.report_scheduler_service import ReportSchedulerService
+from app.services.profile_scheduler_service import ProfileSchedulerService
 from app.mqtt_telemetry import create_telemetry_publisher
 from app.services.mqtt_command_handler import create_mqtt_command_handler
 
@@ -251,6 +253,23 @@ async def lifespan(app: FastAPI):
         alert_service.set_pre_alert_profile(active_profile.id)
     await quiet_hours_service.start()
     await machine_monitor_service.start()
+
+    # ------------------------------------------------------------------
+    # Profile scheduler service (lower priority than quiet hours + alerts)
+    # ------------------------------------------------------------------
+    profile_scheduler = ProfileSchedulerService(db)
+    app.state.profile_scheduler = profile_scheduler
+    profile_scheduler.set_activate_fn(_activate_profile_by_id)
+    profile_scheduler.set_panic_check_fn(
+        lambda: fan_service._sensor_panic or fan_service._temp_panic
+    )
+    profile_scheduler.set_alert_active_check_fn(
+        lambda: alert_service._pre_alert_profile_id is not None
+    )
+    profile_scheduler.set_quiet_hours_check_fn(
+        lambda: quiet_hours_service._active_rule is not None
+    )
+    await profile_scheduler.start()
 
     # ------------------------------------------------------------------
     # Drive monitoring
@@ -452,6 +471,7 @@ async def lifespan(app: FastAPI):
     except (asyncio.CancelledError, asyncio.TimeoutError):
         pass
 
+    await profile_scheduler.stop()
     await report_scheduler.stop()
     await drive_self_test_svc.stop()
     await drive_monitor.stop()
@@ -536,6 +556,7 @@ app.include_router(notification_channels_route.router, dependencies=_auth_deps)
 app.include_router(noise_profiles_route.router, dependencies=_auth_deps)
 app.include_router(report_schedules_route.router, dependencies=_auth_deps)
 app.include_router(event_annotations_route.router, dependencies=_auth_deps)
+app.include_router(profile_schedules_route.router, dependencies=_auth_deps)
 # WebSocket auth is handled inside the endpoint (require_ws_auth) because
 # router-level Depends(require_auth) injects Request, which fails for WS.
 app.include_router(ws_router)

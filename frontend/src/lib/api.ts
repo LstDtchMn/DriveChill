@@ -597,6 +597,22 @@ export const api = {
       fetchAPI<{ success: boolean }>(`/api/quiet-hours/${id}`, { method: 'DELETE' }),
   },
 
+  // Profile Schedules
+  profileSchedules: {
+    list: () =>
+      fetchAPI<{ schedules: import('./types').ProfileSchedule[] }>('/api/profile-schedules'),
+    create: (body: { profile_id: string; start_time: string; end_time: string; days_of_week: string; timezone?: string; enabled?: boolean }) =>
+      fetchAPI<import('./types').ProfileSchedule>('/api/profile-schedules', {
+        method: 'POST', body: JSON.stringify(body),
+      }),
+    update: (id: string, body: { profile_id: string; start_time: string; end_time: string; days_of_week: string; timezone?: string; enabled?: boolean }) =>
+      fetchAPI<{ success: boolean }>(`/api/profile-schedules/${encodeURIComponent(id)}`, {
+        method: 'PUT', body: JSON.stringify(body),
+      }),
+    delete: (id: string) =>
+      fetchAPI<void>(`/api/profile-schedules/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  },
+
   update: {
     check: () =>
       fetchAPI<import('./types').UpdateCheck>('/api/update/check'),

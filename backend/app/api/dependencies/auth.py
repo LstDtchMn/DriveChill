@@ -26,6 +26,7 @@ _API_KEY_SCOPE_PREFIX_RULES: tuple[tuple[str, str], ...] = (
     ("/api/virtual-sensors", "virtual_sensors"),
     ("/api/notification-channels", "notifications"),
     ("/api/webhooks", "webhooks"),
+    ("/api/profile-schedules", "profiles"),
 )
 
 

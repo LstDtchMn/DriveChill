@@ -256,6 +256,17 @@ public sealed class DbService : IDisposable
                     updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
                 );
 
+                CREATE TABLE IF NOT EXISTS profile_schedules (
+                    id           TEXT PRIMARY KEY,
+                    profile_id   TEXT NOT NULL,
+                    start_time   TEXT NOT NULL,
+                    end_time     TEXT NOT NULL,
+                    days_of_week TEXT NOT NULL,
+                    timezone     TEXT NOT NULL DEFAULT 'UTC',
+                    enabled      INTEGER NOT NULL DEFAULT 1,
+                    created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+
                 CREATE TABLE IF NOT EXISTS settings (
                     key        TEXT PRIMARY KEY,
                     value      TEXT NOT NULL,
@@ -1068,6 +1079,88 @@ public sealed class DbService : IDisposable
         await conn.OpenAsync(ct);
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = "DELETE FROM quiet_hours WHERE id = $id";
+        cmd.Parameters.AddWithValue("$id", id);
+        return await cmd.ExecuteNonQueryAsync(ct) > 0;
+    }
+
+    // -----------------------------------------------------------------------
+    // Profile Schedules
+    // -----------------------------------------------------------------------
+
+    public async Task<List<ProfileScheduleRecord>> GetProfileSchedulesAsync(CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT id, profile_id, start_time, end_time, days_of_week, timezone, enabled, created_at FROM profile_schedules ORDER BY created_at";
+        var list = new List<ProfileScheduleRecord>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            list.Add(new ProfileScheduleRecord
+            {
+                Id         = reader.GetString(0),
+                ProfileId  = reader.GetString(1),
+                StartTime  = reader.GetString(2),
+                EndTime    = reader.GetString(3),
+                DaysOfWeek = reader.GetString(4),
+                Timezone   = reader.GetString(5),
+                Enabled    = reader.GetInt32(6) != 0,
+                CreatedAt  = reader.GetString(7),
+            });
+        }
+        return list;
+    }
+
+    public async Task CreateProfileScheduleAsync(ProfileScheduleRecord schedule, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO profile_schedules (id, profile_id, start_time, end_time, days_of_week, timezone, enabled, created_at)
+            VALUES ($id, $pid, $start, $end, $days, $tz, $en, $cat)
+            """;
+        cmd.Parameters.AddWithValue("$id", schedule.Id);
+        cmd.Parameters.AddWithValue("$pid", schedule.ProfileId);
+        cmd.Parameters.AddWithValue("$start", schedule.StartTime);
+        cmd.Parameters.AddWithValue("$end", schedule.EndTime);
+        cmd.Parameters.AddWithValue("$days", schedule.DaysOfWeek);
+        cmd.Parameters.AddWithValue("$tz", schedule.Timezone);
+        cmd.Parameters.AddWithValue("$en", schedule.Enabled ? 1 : 0);
+        cmd.Parameters.AddWithValue("$cat", schedule.CreatedAt);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<bool> UpdateProfileScheduleAsync(string id, ProfileScheduleRecord schedule, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            UPDATE profile_schedules SET profile_id=$pid, start_time=$start, end_time=$end,
+                days_of_week=$days, timezone=$tz, enabled=$en WHERE id=$id
+            """;
+        cmd.Parameters.AddWithValue("$id", id);
+        cmd.Parameters.AddWithValue("$pid", schedule.ProfileId);
+        cmd.Parameters.AddWithValue("$start", schedule.StartTime);
+        cmd.Parameters.AddWithValue("$end", schedule.EndTime);
+        cmd.Parameters.AddWithValue("$days", schedule.DaysOfWeek);
+        cmd.Parameters.AddWithValue("$tz", schedule.Timezone);
+        cmd.Parameters.AddWithValue("$en", schedule.Enabled ? 1 : 0);
+        return await cmd.ExecuteNonQueryAsync(ct) > 0;
+    }
+
+    public async Task<bool> DeleteProfileScheduleAsync(string id, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM profile_schedules WHERE id = $id";
         cmd.Parameters.AddWithValue("$id", id);
         return await cmd.ExecuteNonQueryAsync(ct) > 0;
     }
@@ -2377,6 +2470,19 @@ public sealed class DbService : IDisposable
             UpdatedAt = rdr.IsDBNull(6) ? "" : rdr.GetString(6),
         };
     }
+}
+
+/// <summary>Profile schedule record model.</summary>
+public sealed class ProfileScheduleRecord
+{
+    public string Id { get; set; } = "";
+    public string ProfileId { get; set; } = "";
+    public string StartTime { get; set; } = "00:00";
+    public string EndTime { get; set; } = "00:00";
+    public string DaysOfWeek { get; set; } = "0,1,2,3,4,5,6";
+    public string Timezone { get; set; } = "UTC";
+    public bool Enabled { get; set; } = true;
+    public string CreatedAt { get; set; } = "";
 }
 
 /// <summary>Quiet hours rule model.</summary>

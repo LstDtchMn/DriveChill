@@ -37,6 +37,9 @@ public sealed class AlertService
     /// <summary>Set the callback used to activate a profile by ID.</summary>
     public void SetActivateProfileFn(Func<string, Task> fn) => _activateProfileFn = fn;
 
+    /// <summary>True if an alert-triggered profile switch is currently active.</summary>
+    public bool HasActiveProfileSwitch => _preAlertProfileId != null;
+
     /// <summary>Record the current profile ID so alert-triggered switches can revert.</summary>
     public void SetPreAlertProfile(string profileId) => _preAlertProfileId = profileId;
 

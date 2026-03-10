@@ -252,6 +252,19 @@ export interface QuietHoursRule {
   enabled: boolean;
 }
 
+// ── Profile Schedules ────────────────────────────────────────────────────────
+
+export interface ProfileSchedule {
+  id: string;
+  profile_id: string;
+  start_time: string;    // "HH:MM"
+  end_time: string;      // "HH:MM"
+  days_of_week: string;  // "0,1,2,3,4,5,6"
+  timezone: string;
+  enabled: boolean;
+  created_at: string;
+}
+
 // ── Temperature targets ──────────────────────────────────────────────────────
 
 export interface TemperatureTarget {
