@@ -3,12 +3,32 @@ import { test, expect } from '@playwright/test';
 test.describe('Settings', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
-    await page.waitForFunction(() => !document.body.innerText.includes('Loading...'), { timeout: 15_000 });
+    // Wait for the app to finish initial loading
+    await page.waitForFunction(
+      () => !document.body.innerText.includes('Loading...'),
+      { timeout: 15_000 },
+    );
+
+    // Dismiss the "What's new" banner if present — it can overlay other elements
+    const dismissBtn = page.getByRole('button', { name: /dismiss/i });
+    if (await dismissBtn.isVisible({ timeout: 2_000 }).catch(() => false)) {
+      await dismissBtn.click();
+      await expect(dismissBtn).not.toBeVisible({ timeout: 2_000 });
+    }
 
     // Navigate to settings page
     const settingsLink = page.getByText(/settings/i).first();
     await settingsLink.click();
-    await expect(page.getByText(/sensor poll interval|general/i).first()).toBeVisible({ timeout: 10_000 });
+
+    // Wait for settings-specific content
+    await expect(
+      page.getByRole('heading', { name: /general/i }),
+    ).toBeVisible({ timeout: 10_000 });
+
+    // Wait for the Save Settings button — confirms form is loaded
+    await expect(
+      page.getByRole('button', { name: /save settings/i }),
+    ).toBeVisible({ timeout: 5_000 });
   });
 
   test('settings page loads without error', async ({ page }) => {
@@ -25,23 +45,18 @@ test.describe('Settings', () => {
   });
 
   test('clicking °F toggles the active unit', async ({ page }) => {
-    // Find the F button and click it
     const fButton = page.getByRole('button', { name: /°F/ });
     await expect(fButton).toBeVisible({ timeout: 5_000 });
-    await fButton.click();
 
-    // The F button should now have an active/selected style (ring-2 or similar)
-    // We check that the button is still visible and clickable — full style assertion
-    // would require computed CSS inspection which varies by browser rendering
+    await fButton.click();
     await expect(fButton).toBeVisible();
 
-    // Save the settings
-    const saveButton = page.getByRole('button', { name: /save settings|save/i }).first();
-    if (await saveButton.isVisible()) {
-      await saveButton.click();
-      // A success indicator (e.g. "Saved!") should briefly appear
-      await expect(page.getByText(/saved/i)).toBeVisible({ timeout: 5_000 });
-    }
+    // Save settings and verify success
+    const saveButton = page.getByRole('button', { name: /save settings/i });
+    await expect(saveButton).toBeEnabled({ timeout: 5_000 });
+    await saveButton.click();
+
+    await expect(page.getByText(/saved/i)).toBeVisible({ timeout: 5_000 });
   });
 
   test('poll interval input accepts numeric values', async ({ page }) => {
