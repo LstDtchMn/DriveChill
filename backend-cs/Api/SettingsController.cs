@@ -345,7 +345,7 @@ public sealed class SettingsController : ControllerBase
                     }
                 }
                 if (ssrfBlocked) continue;
-                await _notifChannels.CreateAsync(ch.Id, ch.Type, ch.Name, ch.Enabled, ch.Config, ct);
+                await _notifChannels.CreateAsync(ch.Id, ch.Type, ch.Name, ch.Enabled, ch.Config ?? new Dictionary<string, JsonElement>(), ct);
                 count++;
             }
             imported["notification_channels"] = count;

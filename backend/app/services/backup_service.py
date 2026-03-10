@@ -217,6 +217,8 @@ async def import_backup(db_path: Path, backup_path: Path) -> dict[str, int]:
             await db.execute("DELETE FROM notification_channels")
             notification_channels = data.get("notification_channels", [])
             _URL_KEYS = ("url", "webhook_url")
+            nc_skipped_ids: list[str] = []
+            nc_accepted_ids: list[str] = []
             for nc in notification_channels:
                 # Apply the same SSRF validation that the create/update routes enforce so
                 # import cannot persist URLs that the normal API would reject.
@@ -238,6 +240,7 @@ async def import_backup(db_path: Path, backup_path: Path) -> dict[str, int]:
                             ssrf_blocked = True
                             break
                 if ssrf_blocked:
+                    nc_skipped_ids.append(nc.get("id", ""))
                     continue
                 await db.execute(
                     "INSERT INTO notification_channels "
@@ -247,6 +250,7 @@ async def import_backup(db_path: Path, backup_path: Path) -> dict[str, int]:
                      nc.get("config_json", "{}"),
                      nc.get("created_at", ""), nc.get("updated_at", "")),
                 )
+                nc_accepted_ids.append(nc["id"])
 
             # --- Quiet hours ---
             await db.execute("DELETE FROM quiet_hours")
@@ -286,7 +290,8 @@ async def import_backup(db_path: Path, backup_path: Path) -> dict[str, int]:
         "sensor_labels": len(sensor_labels),
         "alert_rules": len(alert_rules),
         "quiet_hours": len(quiet_hours),
-        "notification_channels": len(notification_channels),
+        "notification_channels": len(nc_accepted_ids),
+        "notification_channels_skipped": len(nc_skipped_ids),
     }
     logger.info("Backup imported: %s", summary)
     return summary

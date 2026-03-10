@@ -13,10 +13,11 @@ test.describe('Fan Curves', () => {
   });
 
   test('shows preset profile cards', async ({ page }) => {
-    // Presets: Balanced, Gaming, Silent, etc.
-    await expect(page.getByText(/balanced/i).first()).toBeVisible();
-    await expect(page.getByText(/gaming/i).first()).toBeVisible();
-    await expect(page.getByText(/silent/i).first()).toBeVisible();
+    // Seeded presets: Silent, Balanced, Performance, Gaming, etc.
+    // Wait for profile cards to load from the API (header "Preset Profiles" renders before cards)
+    await expect(page.getByText(/balanced/i).first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(/gaming/i).first()).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText(/silent/i).first()).toBeVisible({ timeout: 5_000 });
   });
 
   test('shows curve editor when a curve exists', async ({ page }) => {

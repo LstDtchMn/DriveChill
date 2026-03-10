@@ -6,7 +6,7 @@ test.describe('Temperature Targets', () => {
     await page.waitForFunction(() => !document.body.innerText.includes('Loading...'), { timeout: 15_000 });
 
     // Navigate to Temperature Targets page
-    const targetsLink = page.getByText(/temperature targets/i).first();
+    const targetsLink = page.getByText(/temp.*targets/i).first();
     await targetsLink.click();
     await expect(page.locator('main')).toBeVisible({ timeout: 10_000 });
   });
@@ -17,19 +17,19 @@ test.describe('Temperature Targets', () => {
   });
 
   test('shows list/map view toggle buttons', async ({ page }) => {
-    // View switcher buttons: Map and List
-    const mapBtn = page.getByRole('button', { name: /map/i }).first();
-    const listBtn = page.getByRole('button', { name: /list/i }).first();
+    // View switcher buttons contain Lucide icon + text "Map" / "List"
+    const mapBtn = page.locator('button', { hasText: /\bMap\b/ }).first();
+    const listBtn = page.locator('button', { hasText: /\bList\b/ }).first();
     await expect(mapBtn.or(listBtn).first()).toBeVisible({ timeout: 10_000 });
   });
 
   test('can switch between list and map views', async ({ page }) => {
-    const mapBtn = page.getByRole('button', { name: /map/i }).first();
+    const mapBtn = page.locator('button', { hasText: /\bMap\b/ }).first();
     if (await mapBtn.isVisible()) {
       await mapBtn.click();
       await expect(page.locator('main')).toBeVisible();
     }
-    const listBtn = page.getByRole('button', { name: /list/i }).first();
+    const listBtn = page.locator('button', { hasText: /\bList\b/ }).first();
     if (await listBtn.isVisible()) {
       await listBtn.click();
       await expect(page.locator('main')).toBeVisible();

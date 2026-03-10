@@ -54,12 +54,14 @@ test.describe('Drives page', () => {
 
   test('sort buttons are present when drives exist', async ({ page }) => {
     await navigateToDrives(page);
-    // Sort buttons only render when drives.length > 0
-    const hasDrives = await page.getByText(/\d+ drives? detected/i).count() > 0;
+    // Sort buttons only render when drives.length > 0; wait briefly for drives to load
+    const driveCount = page.getByText(/[1-9]\d* drives? detected/i);
+    const hasDrives = await driveCount.isVisible({ timeout: 3_000 }).catch(() => false);
     if (hasDrives) {
-      await expect(page.getByRole('button', { name: /name/i }).first()).toBeVisible();
-      await expect(page.getByRole('button', { name: /temp/i }).first()).toBeVisible();
-      await expect(page.getByRole('button', { name: /health/i }).first()).toBeVisible();
+      // Sort buttons are lowercase text ("name", "temp", "health") with CSS capitalize
+      await expect(page.locator('button', { hasText: /^name$/i }).first()).toBeVisible();
+      await expect(page.locator('button', { hasText: /^temp$/i }).first()).toBeVisible();
+      await expect(page.locator('button', { hasText: /^health$/i }).first()).toBeVisible();
     }
   });
 

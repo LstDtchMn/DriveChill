@@ -18,15 +18,15 @@ test.describe('Settings', () => {
 
   test('temperature unit toggle buttons are visible', async ({ page }) => {
     // Both °C and °F (or C and F) buttons should be present
-    const cButton = page.getByRole('button', { name: /^C$/ }).or(page.getByText('°C').first());
-    const fButton = page.getByRole('button', { name: /^F$/ }).or(page.getByText('°F').first());
+    const cButton = page.getByRole('button', { name: /°C/ }).or(page.getByText('°C').first());
+    const fButton = page.getByRole('button', { name: /°F/ }).or(page.getByText('°F').first());
     await expect(cButton).toBeVisible({ timeout: 5_000 });
     await expect(fButton).toBeVisible({ timeout: 5_000 });
   });
 
   test('clicking °F toggles the active unit', async ({ page }) => {
     // Find the F button and click it
-    const fButton = page.getByRole('button', { name: /^F$/ });
+    const fButton = page.getByRole('button', { name: /°F/ });
     await expect(fButton).toBeVisible({ timeout: 5_000 });
     await fButton.click();
 

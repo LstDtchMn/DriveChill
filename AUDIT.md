@@ -1,6 +1,6 @@
 # DriveChill Feature & Security Audit Document
 
-**Generated:** 2026-03-03 | **Updated:** 2026-03-06 (audit remediation: SSRF, revert_after_clear, C# fan-out wiring, backup completeness, liquidctl dedup; Milestone A+B complete: startup safety, control transparency, virtual sensors, load-based inputs, auth cleanup, Playwright fix, E2E coverage)
+**Generated:** 2026-03-03 | **Updated:** 2026-03-10 (release readiness: import summary accuracy fix, C# nullable warning fix, product decisions documented, E2E pass 40/46; prior: audit remediation, Milestone A+B complete)
 **Version:** 2.3.0-dev (branch: `claude/fan-temperature-controller-kNqMx`)
 **Repo:** DriveChill-1
 
@@ -41,7 +41,7 @@ DriveChill is a PC fan temperature controller with three independently deployabl
 | C# backend | ASP.NET Core 10 + Microsoft.Data.Sqlite | `backend-cs/Program.cs` |
 | Frontend | Next.js 14 static export + Zustand | `frontend/out/` (served by either backend) |
 
-**Database:** SQLite in WAL mode. 13 sequential migrations (`001`–`013`) applied at startup.
+**Database:** SQLite in WAL mode. 14 sequential migrations (`001`–`014`) applied at startup.
 
 **Hardware backends:**
 

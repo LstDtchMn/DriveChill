@@ -27,7 +27,7 @@
 - **Cross-platform E2E**: `cross-env` added for Windows-compatible Playwright dev server startup
 
 ### Features — Alert-Triggered Profile Switching
-- **`revert_after_clear` semantics (both backends)**: when an alert rule's action has `revert_after_clear=false`, the backend no longer reverts to the pre-alert profile on clear; prior implementation always reverted. Runtime behavior is now deterministic: any still-active suppress rule prevents revert.
+- **`revert_after_clear` semantics (both backends)**: when an alert rule's action has `revert_after_clear=false`, the backend no longer reverts to the pre-alert profile on clear; prior implementation always reverted. Runtime behavior is now deterministic: any still-active suppress rule prevents revert. **Accepted as intended product behavior (2026-03-10).**
 - **C# `AlertService.InjectEvent()`**: new public method allows `DriveMonitorService` (and future callers) to inject synthetic `AlertEvent` records into the in-memory event list without going through the threshold-evaluation path; list is capped at 500 entries.
 
 ### Features — SMART Trend Alerting
@@ -41,7 +41,8 @@
 ### Features — Backup / Export Completeness
 - **`action_json` preserved in backup round-trips** (Python): `export_backup` and `import_backup` now include the `action_json` column on `alert_rules`, so alert-triggered profile-switch actions survive export/restore cycles.
 - **`notification_channels` preserved in backup round-trips** (Python): `export_backup` and `import_backup` include the `notification_channels` table; old backups that predate this field import cleanly with zero channel records.
-- **C# settings export/import includes notification channels**: `GET /api/settings/export` serializes all notification channels; `POST /api/settings/import` restores them, skipping duplicates.
+- **Import summary accuracy** (Python): `import_backup` now returns `notification_channels` (accepted count) and `notification_channels_skipped` (skipped count) instead of the raw input length; SSRF-blocked channels are logged with channel ID and reason.
+- **C# settings export/import includes notification channels**: `GET /api/settings/export` serializes all notification channels; `POST /api/settings/import` restores them, skipping duplicates; nullable `Config` handled cleanly.
 
 ### Features — liquidctl USB Controller
 - **Duplicate-device disambiguation**: `_make_id_prefix` now incorporates `device.address` (USB bus/port path) so two identical controller models on different ports produce distinct fan IDs; all `liquidctl status` and `set` calls pass `--address` to target the correct device.
@@ -60,9 +61,10 @@
 
 ### Features — Frontend E2E Coverage (A2.2)
 - **`quiet-hours.spec.ts`**: new Playwright spec for Quiet Hours CRUD (page load, add-rule form, day/time display)
-- **`settings.spec.ts` extended**: export and import config section visibility tests
+- **`settings.spec.ts` extended**: export and import config section visibility tests; °F toggle test
 - **`fan-curves.spec.ts` extended**: benchmark calibration section presence and no-crash test
 - **`temperature-targets.spec.ts` extended**: PID field accessibility test and target temperature input validation
+- **E2E release pass**: 40 passed, 6 skipped (drive-detail tests require mock data) across dashboard, fan curves, quiet hours, settings, temperature targets, alerts, drives, analytics
 
 ### Tests
 - Python: 537 passing, 13 skipped (startup safety + control transparency tests in `test_fan_service_startup_safety.py`; virtual sensor service tests; all prior passing)
