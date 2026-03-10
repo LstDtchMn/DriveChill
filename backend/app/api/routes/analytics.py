@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import csv
+import io
+import json
 import math
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from starlette.responses import Response
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 
@@ -767,3 +771,107 @@ async def get_report(
         "top_anomalous_sensors": top_anomalous,
         "regressions": regression_response["regressions"],
     }
+
+
+# ---------------------------------------------------------------------------
+# GET /api/analytics/export
+# ---------------------------------------------------------------------------
+
+@router.get("/export")
+async def export_data(
+    request: Request,
+    format: str = Query(default="csv", pattern="^(csv|json)$"),
+    hours: float | None = Query(default=None, ge=0.1, le=8760.0),
+    start: str | None = Query(default=None),
+    end: str | None = Query(default=None),
+    sensor_id: str | None = Query(default=None),
+    sensor_ids: str | None = Query(default=None),
+):
+    """Export analytics history data as CSV or JSON for download."""
+    start_dt, end_dt = _resolve_range(hours, start, end)
+
+    # Retention gate
+    ret_hours = await _retention_hours(request)
+    retention_limit = datetime.now(timezone.utc) - timedelta(hours=float(ret_hours))
+    effective_start = max(start_dt, retention_limit)
+
+    ids = _parse_sensor_ids(sensor_id, sensor_ids)
+    fmt_str = "%Y-%m-%d %H:%M:%S"
+    duration = (end_dt - effective_start).total_seconds()
+    bucket = _auto_bucket_seconds(duration)
+
+    base_params: list = [bucket, effective_start.strftime(fmt_str), end_dt.strftime(fmt_str)]
+    sensor_clause = ""
+    if ids:
+        clause, extra = _sensor_in_clause(ids)
+        sensor_clause = f"AND {clause}"
+        base_params.extend(extra)
+
+    sql = f"""
+        SELECT
+          sensor_id,
+          MAX(sensor_name) AS sensor_name,
+          MAX(sensor_type) AS sensor_type,
+          MAX(unit) AS unit,
+          CAST(strftime('%s', timestamp) AS INTEGER) / ? AS bucket_epoch,
+          AVG(CAST(value AS REAL)) AS avg_value,
+          MIN(CAST(value AS REAL)) AS min_value,
+          MAX(CAST(value AS REAL)) AS max_value,
+          COUNT(*) AS sample_count
+        FROM sensor_log
+        WHERE timestamp >= ? AND timestamp <= ?
+          {sensor_clause}
+        GROUP BY sensor_id, bucket_epoch
+        ORDER BY sensor_id, bucket_epoch ASC
+    """
+
+    db = request.app.state.db
+    rows = await _fetchall_as_dicts(db, sql, base_params)
+
+    # Build flat records
+    records: list[dict] = []
+    for row in rows:
+        ts = datetime.fromtimestamp(
+            row["bucket_epoch"] * bucket, tz=timezone.utc
+        ).isoformat()
+        records.append({
+            "timestamp_utc": ts,
+            "sensor_id": row["sensor_id"],
+            "sensor_name": row["sensor_name"],
+            "sensor_type": row["sensor_type"],
+            "unit": row["unit"],
+            "avg_value": round(row["avg_value"], 4),
+            "min_value": round(row["min_value"], 4),
+            "max_value": round(row["max_value"], 4),
+            "sample_count": row["sample_count"],
+        })
+
+    now_tag = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+
+    if format == "json":
+        content = json.dumps(records, indent=2)
+        return Response(
+            content=content,
+            media_type="application/json",
+            headers={
+                "Content-Disposition": f'attachment; filename="drivechill-export-{now_tag}.json"',
+            },
+        )
+
+    # CSV format
+    columns = [
+        "timestamp_utc", "sensor_id", "sensor_name", "sensor_type",
+        "unit", "avg_value", "min_value", "max_value", "sample_count",
+    ]
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=columns)
+    writer.writeheader()
+    writer.writerows(records)
+
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="drivechill-export-{now_tag}.csv"',
+        },
+    )

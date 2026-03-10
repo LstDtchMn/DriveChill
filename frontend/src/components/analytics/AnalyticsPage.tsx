@@ -4,6 +4,9 @@ import { useState, useEffect, useCallback } from 'react';
 import { api } from '@/lib/api';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { displayTemp, tempUnitSymbol } from '@/lib/tempUnit';
+import { ExportButtons } from './ExportButtons';
+import { Heatmap } from './Heatmap';
+import { CoolingScore } from './CoolingScore';
 import type { AnalyticsStat, AnalyticsAnomaly, AnalyticsBucket, ThermalRegression, AnalyticsCorrelationSample } from '@/lib/types';
 
 const TIME_OPTIONS = [
@@ -244,6 +247,15 @@ export function AnalyticsPage() {
         </div>
       </div>
 
+      {/* Export buttons */}
+      <ExportButtons
+        hours={hours}
+        customStart={customStart}
+        customEnd={customEnd}
+        selectedSensorIds={selectedSensorIds}
+        data={{ stats, anomalies, history, regressions }}
+      />
+
       {/* Sensor filter chips */}
       {allSensorOptions.length > 0 && (
         <div className="p-3 rounded" style={{ background: 'var(--card-bg)', border: '1px solid var(--border)' }}>
@@ -305,6 +317,12 @@ export function AnalyticsPage() {
           <div className="card p-6 text-center"><p className="text-sm" style={{ color: 'var(--text-secondary)' }}>No data in this time window.</p></div>
         ) : (
           <div className="space-y-4">
+            {/* Cooling Score gauge */}
+            {stats && anomalies && regressions && (
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+                <CoolingScore stats={stats} anomalies={anomalies} regressions={regressions} />
+              </div>
+            )}
             {thermalStats.length > 0 && (
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
                 {thermalStats.map((s) => <StatCard key={s.sensor_id} s={s} accentColor="var(--warning)" fmt={fmt} />)}
@@ -431,7 +449,12 @@ export function AnalyticsPage() {
         )}
       </div>
 
-      {/* Section 5: Correlation */}
+      {/* Section 5: Heatmap */}
+      {history && history.length > 0 && (
+        <Heatmap buckets={history} fmt={fmt} />
+      )}
+
+      {/* Section 6: Correlation */}
       {allSensorOptions.length >= 2 && (
         <div>
           <h3 className="section-title mb-3">Sensor Correlation</h3>

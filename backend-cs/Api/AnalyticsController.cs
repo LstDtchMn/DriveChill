@@ -1,3 +1,5 @@
+using System.Text;
+using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using DriveChill.Services;
 
@@ -248,6 +250,79 @@ public sealed class AnalyticsController : ControllerBase
             samples,
             requested_range         = RangeMeta(startDt, endDt),
         });
+    }
+
+    [HttpGet("export")]
+    public async Task<IActionResult> Export(
+        [FromQuery] string   format    = "csv",
+        [FromQuery] double?  hours     = null,
+        [FromQuery] string?  start     = null,
+        [FromQuery] string?  end       = null,
+        [FromQuery(Name = "sensor_id")]  string? sensorId  = null,
+        [FromQuery(Name = "sensor_ids")] string? sensorIds = null,
+        CancellationToken ct = default)
+    {
+        if (format != "csv" && format != "json")
+            return BadRequest(new { detail = "format must be csv or json" });
+
+        if (!string.IsNullOrEmpty(sensorId) && !string.IsNullOrEmpty(sensorIds))
+            return BadRequest(new { detail = "Use sensor_id or sensor_ids, not both" });
+
+        var (startDt, endDt) = ResolveRange(hours ?? 24, start, end);
+        var ids    = ParseSensorIds(sensorId, sensorIds);
+        var bucket = AutoBucketSeconds(startDt, endDt, null);
+
+        // Clamp to retention window
+        var earliestAvail  = DateTimeOffset.UtcNow.AddHours(-_store.RetentionDays * 24.0);
+        var effectiveStart = startDt < earliestAvail ? earliestAvail : startDt;
+
+        var bucketList = await _db.GetAnalyticsHistoryAsync(effectiveStart, endDt, ids, bucket, ct);
+
+        var nowTag = DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss");
+
+        if (format == "json")
+        {
+            var records = bucketList.Select(b => new
+            {
+                timestamp_utc = b.TimestampUtc,
+                sensor_id     = b.SensorId,
+                sensor_name   = b.SensorName,
+                sensor_type   = b.SensorType,
+                unit          = b.Unit,
+                avg_value     = Math.Round(b.AvgValue, 4),
+                min_value     = Math.Round(b.MinValue, 4),
+                max_value     = Math.Round(b.MaxValue, 4),
+                sample_count  = b.SampleCount,
+            }).ToList();
+            var jsonBytes = JsonSerializer.SerializeToUtf8Bytes(records, new JsonSerializerOptions { WriteIndented = true });
+            return File(jsonBytes, "application/json", $"drivechill-export-{nowTag}.json");
+        }
+
+        // CSV format
+        var sb = new StringBuilder();
+        sb.AppendLine("timestamp_utc,sensor_id,sensor_name,sensor_type,unit,avg_value,min_value,max_value,sample_count");
+        foreach (var b in bucketList)
+        {
+            sb.AppendLine(string.Join(",",
+                CsvEscape(b.TimestampUtc),
+                CsvEscape(b.SensorId),
+                CsvEscape(b.SensorName),
+                CsvEscape(b.SensorType),
+                CsvEscape(b.Unit),
+                Math.Round(b.AvgValue, 4),
+                Math.Round(b.MinValue, 4),
+                Math.Round(b.MaxValue, 4),
+                b.SampleCount));
+        }
+        var csvBytes = Encoding.UTF8.GetBytes(sb.ToString());
+        return File(csvBytes, "text/csv", $"drivechill-export-{nowTag}.csv");
+    }
+
+    private static string CsvEscape(string value)
+    {
+        if (value.Contains(',') || value.Contains('"') || value.Contains('\n'))
+            return $"\"{value.Replace("\"", "\"\"")}\"";
+        return value;
     }
 
     [HttpGet("report")]

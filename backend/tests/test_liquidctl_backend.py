@@ -14,6 +14,8 @@ from app.hardware.liquidctl_backend import (
     _sanitize,
     _extract_channel_name,
     _make_id_prefix,
+    _match_device_profile,
+    DEVICE_PROFILES,
 )
 
 
@@ -326,4 +328,134 @@ class TestDuplicateDeviceIdentity:
                 assert len(fan_ids) > 0
                 # ID includes the address
                 assert "usb:1:2" in fan_ids[0]
+        _run(_test())
+
+
+# ---------------------------------------------------------------------------
+# Device profile tests
+# ---------------------------------------------------------------------------
+
+class TestDeviceProfiles:
+    def test_kraken_profile_matches(self):
+        profile = _match_device_profile("NZXT Kraken X63")
+        assert profile is not None
+        assert profile["friendly_prefix"] == "Kraken"
+
+    def test_commander_profile_matches(self):
+        profile = _match_device_profile("Corsair Commander Pro")
+        assert profile is not None
+        assert profile["friendly_prefix"] == "Commander"
+
+    def test_aquacomputer_profile_matches(self):
+        profile = _match_device_profile("Aquacomputer D5 Next")
+        assert profile is not None
+        assert profile["friendly_prefix"] == "Aquacomputer"
+
+    def test_corsair_hydro_matches(self):
+        profile = _match_device_profile("Corsair Hydro H100i RGB")
+        assert profile is not None
+        assert profile["friendly_prefix"] == "Corsair AIO"
+
+    def test_unknown_device_no_profile(self):
+        profile = _match_device_profile("Some Random USB Device")
+        assert profile is None
+
+    def test_profile_assigned_during_discovery(self):
+        async def _test():
+            with patch("shutil.which", return_value="/usr/bin/liquidctl"), \
+                 patch("asyncio.create_subprocess_exec", side_effect=_mock_subprocess(
+                     list_json=SAMPLE_LIST, status_json=SAMPLE_STATUS_TRIPLES)):
+                backend = LiquidctlBackend()
+                await backend.initialize()
+                dev = backend._devices[0]
+                assert dev.profile is not None
+                assert dev.profile["friendly_prefix"] == "Kraken"
+        _run(_test())
+
+
+# ---------------------------------------------------------------------------
+# Device reconnect tests
+# ---------------------------------------------------------------------------
+
+class TestDeviceReconnect:
+    def test_device_goes_offline_after_failures(self):
+        """Device marked offline after 3 consecutive empty status responses."""
+        call_count = 0
+
+        async def failing_subprocess(*args, **kwargs):
+            nonlocal call_count
+            cmd_args = list(args)
+            for a in cmd_args:
+                if a == "list":
+                    return _FakeProcess(json.dumps(SAMPLE_LIST))
+                elif a == "status":
+                    call_count += 1
+                    if call_count > 1:  # First call succeeds (discovery), rest fail
+                        return _FakeProcess("[]")
+                    return _FakeProcess(json.dumps(SAMPLE_STATUS_TRIPLES))
+                elif a == "initialize":
+                    return _FakeProcess("")
+            return _FakeProcess("")
+
+        async def _test():
+            nonlocal call_count
+            call_count = 0
+            with patch("shutil.which", return_value="/usr/bin/liquidctl"), \
+                 patch("asyncio.create_subprocess_exec", side_effect=failing_subprocess):
+                backend = LiquidctlBackend()
+                await backend.initialize()
+                assert backend._devices[0].status == "ok"
+
+                # Simulate 3 failed polls
+                for _ in range(3):
+                    await backend.get_sensor_readings()
+
+                assert backend._devices[0].status == "offline"
+                assert backend._devices[0].consecutive_failures >= 3
+        _run(_test())
+
+    def test_device_status_default_ok(self):
+        async def _test():
+            with patch("shutil.which", return_value="/usr/bin/liquidctl"), \
+                 patch("asyncio.create_subprocess_exec", side_effect=_mock_subprocess(
+                     list_json=SAMPLE_LIST, status_json=SAMPLE_STATUS_TRIPLES)):
+                backend = LiquidctlBackend()
+                await backend.initialize()
+                assert backend._devices[0].status == "ok"
+                assert backend._devices[0].consecutive_failures == 0
+        _run(_test())
+
+
+# ---------------------------------------------------------------------------
+# Device info tests
+# ---------------------------------------------------------------------------
+
+class TestDeviceInfo:
+    def test_get_device_info(self):
+        async def _test():
+            with patch("shutil.which", return_value="/usr/bin/liquidctl"), \
+                 patch("asyncio.create_subprocess_exec", side_effect=_mock_subprocess(
+                     list_json=SAMPLE_LIST, status_json=SAMPLE_STATUS_TRIPLES)):
+                backend = LiquidctlBackend()
+                await backend.initialize()
+                info = backend.get_device_info()
+                assert len(info) == 1
+                assert info[0]["description"] == "NZXT Kraken X63"
+                assert info[0]["family"] == "Kraken"
+                assert info[0]["status"] == "ok"
+                assert isinstance(info[0]["fan_channels"], list)
+                assert isinstance(info[0]["temp_channels"], list)
+        _run(_test())
+
+    def test_backend_name_with_offline_device(self):
+        async def _test():
+            with patch("shutil.which", return_value="/usr/bin/liquidctl"), \
+                 patch("asyncio.create_subprocess_exec", side_effect=_mock_subprocess(
+                     list_json=SAMPLE_LIST, status_json=SAMPLE_STATUS_TRIPLES)):
+                backend = LiquidctlBackend()
+                await backend.initialize()
+                backend._devices[0].status = "offline"
+                name = backend.get_backend_name()
+                assert "0 online" in name
+                assert "1 offline" in name
         _run(_test())

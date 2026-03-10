@@ -160,7 +160,7 @@ class TestToDict:
 
 class TestValidTypes:
     def test_valid_types(self):
-        assert VALID_CHANNEL_TYPES == {"ntfy", "discord", "slack", "generic_webhook"}
+        assert VALID_CHANNEL_TYPES == {"ntfy", "discord", "slack", "generic_webhook", "mqtt"}
 
 
 class TestSendAlertAll:
@@ -304,5 +304,126 @@ class TestSSRFDelivery:
 
             # validate_outbound_url_at_request_time called once per enabled channel
             assert len(calls) == 2
+            await db.close()
+        _run(_test())
+
+
+# ---------------------------------------------------------------------------
+# MQTT channel tests
+# ---------------------------------------------------------------------------
+
+class TestMQTTChannel:
+    """MQTT channel CRUD and delivery tests."""
+
+    def test_create_mqtt_channel(self):
+        async def _test():
+            svc, db = await _make_svc()
+            ch = await svc.create_channel(
+                "mqtt_1", "mqtt", "Home MQTT", True,
+                {
+                    "broker_url": "mqtt://192.168.1.100:1883",
+                    "topic_prefix": "drivechill",
+                    "username": "user",
+                    "password": "pass",
+                    "client_id": "dc-test",
+                    "qos": 1,
+                    "retain": False,
+                    "publish_telemetry": True,
+                },
+            )
+            assert ch.id == "mqtt_1"
+            assert ch.type == "mqtt"
+            assert ch.config["broker_url"] == "mqtt://192.168.1.100:1883"
+            assert ch.config["topic_prefix"] == "drivechill"
+            assert ch.config["publish_telemetry"] is True
+            await db.close()
+        _run(_test())
+
+    def test_mqtt_send_without_aiomqtt_graceful(self):
+        """MQTT send fails gracefully when aiomqtt is not importable."""
+        async def _test():
+            svc, db = await _make_svc()
+            await svc.create_channel(
+                "mqtt_1", "mqtt", "Test MQTT", True,
+                {"broker_url": "mqtt://localhost:1883", "topic_prefix": "test"},
+            )
+            # Mock aiomqtt import to fail
+            with patch.dict("sys.modules", {"aiomqtt": None}):
+                count = await svc.send_alert_all("CPU", 90.0, 80.0)
+            assert count == 0
+            await db.close()
+        _run(_test())
+
+    def test_mqtt_send_connection_failure_graceful(self):
+        """MQTT channel handles connection failure without crashing."""
+        async def _test():
+            svc, db = await _make_svc()
+            await svc.create_channel(
+                "mqtt_1", "mqtt", "Bad Broker", True,
+                {"broker_url": "mqtt://nonexistent.invalid:1883", "topic_prefix": "test"},
+            )
+            # Connection will fail — should return 0 not raise
+            count = await svc.send_alert_all("CPU", 90.0, 80.0)
+            assert count == 0
+            await db.close()
+        _run(_test())
+
+    def test_mqtt_disabled_channel_skipped(self):
+        async def _test():
+            svc, db = await _make_svc()
+            await svc.create_channel(
+                "mqtt_1", "mqtt", "Disabled MQTT", False,
+                {"broker_url": "mqtt://localhost:1883", "topic_prefix": "test"},
+            )
+            count = await svc.send_alert_all("CPU", 90.0, 80.0)
+            assert count == 0
+            await db.close()
+        _run(_test())
+
+    def test_mqtt_empty_broker_url_returns_false(self):
+        """MQTT channel with empty broker_url skips send."""
+        async def _test():
+            svc, db = await _make_svc()
+            await svc.create_channel(
+                "mqtt_1", "mqtt", "No Broker", True,
+                {"broker_url": "", "topic_prefix": "test"},
+            )
+            count = await svc.send_alert_all("CPU", 90.0, 80.0)
+            assert count == 0
+            await db.close()
+        _run(_test())
+
+    def test_publish_telemetry_no_mqtt_channels(self):
+        """publish_telemetry returns 0 when no MQTT channels exist."""
+        async def _test():
+            svc, db = await _make_svc()
+            await svc.create_channel("nc_1", "discord", "D", True, {"webhook_url": "http://example.com"})
+            count = await svc.publish_telemetry([{"id": "s1", "value": 42}])
+            assert count == 0
+            await db.close()
+        _run(_test())
+
+    def test_publish_telemetry_skips_non_telemetry_channels(self):
+        """MQTT channels without publish_telemetry=True are skipped."""
+        async def _test():
+            svc, db = await _make_svc()
+            await svc.create_channel(
+                "mqtt_1", "mqtt", "Alerts Only", True,
+                {"broker_url": "mqtt://localhost:1883", "topic_prefix": "test", "publish_telemetry": False},
+            )
+            count = await svc.publish_telemetry([{"id": "s1", "value": 42}])
+            assert count == 0
+            await db.close()
+        _run(_test())
+
+    def test_close_mqtt_clients(self):
+        """close method clears MQTT client cache."""
+        async def _test():
+            svc, db = await _make_svc()
+            # Manually add a mock client to the cache
+            svc._mqtt_clients["fake"] = "placeholder"
+            assert len(svc._mqtt_clients) == 1
+            await svc._close_mqtt_clients()
+            assert len(svc._mqtt_clients) == 0
             await db.close()
         _run(_test())

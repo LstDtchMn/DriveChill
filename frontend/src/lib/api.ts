@@ -542,6 +542,17 @@ export const api = {
         regressions: import('./types').ThermalRegression[];
       }>(`/api/analytics/report?${p}`);
     },
+    exportUrl: (
+      format: 'csv' | 'json',
+      hours: number,
+      opts?: { start?: string; end?: string; sensorIds?: string[] },
+    ) => {
+      const p = new URLSearchParams({ format, hours: String(hours) });
+      if (opts?.start) p.set('start', opts.start);
+      if (opts?.end)   p.set('end',   opts.end);
+      if (opts?.sensorIds?.length) p.set('sensor_ids', opts.sensorIds.join(','));
+      return `${API_BASE}/api/analytics/export?${p}`;
+    },
     getRegression: (
       baselineDays = 30,
       recentHours = 24,

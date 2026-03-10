@@ -90,7 +90,22 @@ export function MachineDrillIn({ machine, onClose }: Props) {
         <span className="text-sm font-semibold" style={{ color: 'var(--text)', flexShrink: 0 }}>
           {machine.name}
         </span>
-        <span className={`badge ${badgeClass}`}>{machine.status}</span>
+        <span className={`badge ${badgeClass}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          <span style={{
+            display: 'inline-block',
+            width: 6,
+            height: 6,
+            borderRadius: '50%',
+            background: machine.status === 'online' ? 'var(--success)'
+              : machine.status === 'offline' || machine.status === 'auth_error' ? 'var(--danger)'
+              : machine.status === 'unknown' ? 'var(--text-secondary)'
+              : 'var(--warning)',
+          }} />
+          {machine.status === 'online' ? 'Online'
+            : machine.status === 'offline' ? 'Offline'
+            : machine.status === 'unknown' ? 'Unknown'
+            : machine.status.replace('_', ' ')}
+        </span>
         <span
           className="text-xs truncate"
           style={{ color: 'var(--text-secondary)', maxWidth: '240px' }}

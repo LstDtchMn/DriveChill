@@ -104,8 +104,21 @@ export function SystemOverview() {
                     <p className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
                       {machine.name}
                     </p>
-                    <span className={`badge ${statusBadgeClass[machine.status] || 'badge-warning'}`}>
-                      {machine.status}
+                    <span className={`badge ${statusBadgeClass[machine.status] || 'badge-warning'}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                      <span style={{
+                        display: 'inline-block',
+                        width: 6,
+                        height: 6,
+                        borderRadius: '50%',
+                        background: machine.status === 'online' ? 'var(--success)'
+                          : machine.status === 'offline' || machine.status === 'auth_error' ? 'var(--danger)'
+                          : machine.status === 'unknown' ? 'var(--text-secondary)'
+                          : 'var(--warning)',
+                      }} />
+                      {machine.status === 'online' ? 'Online'
+                        : machine.status === 'offline' ? 'Offline'
+                        : machine.status === 'unknown' ? 'Unknown'
+                        : machine.status.replace('_', ' ')}
                     </span>
                   </div>
                   <p className="text-xs mb-3 truncate" style={{ color: 'var(--text-secondary)' }}>

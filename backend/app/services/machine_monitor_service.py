@@ -216,6 +216,77 @@ class MachineMonitorService:
             return "version_mismatch"
         return "degraded"
 
+    async def check_machine_health(self) -> dict[str, dict]:
+        """One-shot health check of all enabled machines.
+
+        Pings each machine's /api/health endpoint and updates status in the DB.
+        Returns a dict mapping machine_id to {status, last_seen_at, last_error}.
+        """
+        machines = await self._repo.list_enabled()
+        results: dict[str, dict] = {}
+
+        for machine in machines:
+            machine_id = machine["id"]
+            try:
+                if not self._client:
+                    raise RuntimeError("Machine monitor client is not initialized")
+
+                base_url = machine["base_url"].rstrip("/")
+                timeout = max(0.2, float(machine["timeout_ms"]) / 1000.0)
+                headers: dict[str, str] = {}
+                if machine.get("api_key"):
+                    headers["Authorization"] = f"Bearer {machine['api_key']}"
+
+                ok, reason = await validate_outbound_url_at_request_time(
+                    base_url,
+                    allow_private=settings.allow_private_outbound_targets,
+                )
+                if not ok:
+                    raise RuntimeError(f"URL blocked: {reason}")
+
+                resp = await self._client.get(
+                    f"{base_url}/api/health", headers=headers, timeout=timeout
+                )
+                resp.raise_for_status()
+
+                ts = datetime.now(timezone.utc).isoformat()
+                await self._repo.update_health(
+                    machine_id,
+                    status="online",
+                    last_seen_at=ts,
+                    last_error=None,
+                    consecutive_failures=0,
+                )
+                self._backoff_seconds[machine_id] = 2.0
+                self._next_allowed_poll[machine_id] = 0.0
+                results[machine_id] = {"status": "online", "last_seen_at": ts, "last_error": None}
+
+            except Exception as exc:
+                classified = self._classify_failure(exc)
+                failures = await self._repo.increment_failures(
+                    machine_id,
+                    status=classified,
+                    last_error=_redact_error(exc),
+                )
+                if classified not in {"auth_error", "version_mismatch"}:
+                    final_status = "offline" if failures >= 3 else "degraded"
+                    if final_status != classified:
+                        await self._repo.update_health(
+                            machine_id,
+                            status=final_status,
+                            last_seen_at=machine.get("last_seen_at"),
+                            last_error=_redact_error(exc),
+                            consecutive_failures=failures,
+                        )
+                        classified = final_status
+                results[machine_id] = {
+                    "status": classified,
+                    "last_seen_at": machine.get("last_seen_at"),
+                    "last_error": _redact_error(exc),
+                }
+
+        return results
+
     async def send_command(
         self,
         machine: dict,

@@ -1,4 +1,4 @@
-"""Notification channel service: ntfy.sh, Discord, Slack, generic webhook."""
+"""Notification channel service: ntfy.sh, Discord, Slack, generic webhook, MQTT."""
 from __future__ import annotations
 
 import json
@@ -11,7 +11,7 @@ from app.utils.url_security import validate_outbound_url_at_request_time
 
 logger = logging.getLogger(__name__)
 
-VALID_CHANNEL_TYPES = {"ntfy", "discord", "slack", "generic_webhook"}
+VALID_CHANNEL_TYPES = {"ntfy", "discord", "slack", "generic_webhook", "mqtt"}
 
 
 class NotificationChannel:
@@ -46,6 +46,7 @@ class NotificationChannelService:
     def __init__(self, db: aiosqlite.Connection) -> None:
         self._db = db
         self._http_session: Any = None  # lazily created aiohttp.ClientSession
+        self._mqtt_clients: dict[str, Any] = {}  # channel_id -> aiomqtt.Client
 
     async def _ensure_session(self) -> Any:
         if self._http_session is None:
@@ -65,6 +66,7 @@ class NotificationChannelService:
         if self._http_session:
             await self._http_session.close()
             self._http_session = None
+        await self._close_mqtt_clients()
 
     # ── CRUD ─────────────────────────────────────────────────────────────
 
@@ -164,6 +166,8 @@ class NotificationChannelService:
             return await self._send_slack(ch.config, sensor_name, value, threshold, test)
         elif ch.type == "generic_webhook":
             return await self._send_generic(ch.config, sensor_name, value, threshold, test)
+        elif ch.type == "mqtt":
+            return await self._send_mqtt(ch, sensor_name, value, threshold, test)
         else:
             logger.warning("Unknown channel type: %s", ch.type)
             return False
@@ -275,6 +279,145 @@ class NotificationChannelService:
             return False
         async with session.post(url, data=body, headers=headers) as resp:
             return 200 <= resp.status < 300
+
+    # ── MQTT ───────────────────────────────────────────────────────────
+
+    async def _get_mqtt_client(self, channel: NotificationChannel) -> Any:
+        """Get or create a cached MQTT client for a channel."""
+        existing = self._mqtt_clients.get(channel.id)
+        if existing is not None:
+            return existing
+
+        try:
+            import aiomqtt
+        except ImportError:
+            logger.warning(
+                "aiomqtt is not installed — MQTT delivery is unavailable. "
+                "Install it with: pip install aiomqtt"
+            )
+            return None
+
+        broker_url = channel.config.get("broker_url", "")
+        if not broker_url:
+            return None
+
+        # Parse broker URL: mqtt://host:port or mqtts://host:port
+        from urllib.parse import urlparse
+        parsed = urlparse(broker_url)
+        hostname = parsed.hostname or "localhost"
+        port = parsed.port or (8883 if parsed.scheme == "mqtts" else 1883)
+        use_tls = parsed.scheme in ("mqtts", "ssl")
+
+        username = channel.config.get("username") or None
+        password = channel.config.get("password") or None
+        client_id = channel.config.get("client_id") or f"drivechill-{channel.id[:8]}"
+
+        try:
+            tls_params = aiomqtt.TLSParameters() if use_tls else None
+            client = aiomqtt.Client(
+                hostname=hostname,
+                port=port,
+                username=username,
+                password=password,
+                identifier=client_id,
+                tls_params=tls_params,
+            )
+            await client.__aenter__()
+            self._mqtt_clients[channel.id] = client
+            logger.info("MQTT connected to %s:%d for channel %s", hostname, port, channel.name)
+            return client
+        except Exception as exc:
+            logger.warning("MQTT connection failed for channel %s: %s", channel.name, exc)
+            return None
+
+    async def _send_mqtt(self, channel: NotificationChannel, sensor_name: str,
+                         value: float, threshold: float, test: bool) -> bool:
+        """Publish an alert message to the MQTT broker."""
+        client = await self._get_mqtt_client(channel)
+        if client is None:
+            return False
+
+        topic_prefix = channel.config.get("topic_prefix", "drivechill")
+        qos = int(channel.config.get("qos", 1))
+        retain = bool(channel.config.get("retain", False))
+
+        payload = json.dumps({
+            "source": "drivechill",
+            "type": "test_alert" if test else "alert",
+            "sensor_name": sensor_name,
+            "value": value,
+            "threshold": threshold,
+            "message": f"{sensor_name}: {value}°C (threshold: {threshold}°C)",
+        })
+
+        try:
+            await client.publish(
+                f"{topic_prefix}/alerts",
+                payload=payload.encode(),
+                qos=qos,
+                retain=retain,
+            )
+            return True
+        except Exception as exc:
+            logger.warning("MQTT publish failed for channel %s: %s", channel.name, exc)
+            # Evict broken client so next attempt reconnects
+            self._mqtt_clients.pop(channel.id, None)
+            try:
+                await client.__aexit__(None, None, None)
+            except Exception:
+                pass
+            return False
+
+    async def publish_telemetry(self, readings: list[dict]) -> int:
+        """Publish sensor telemetry to all MQTT channels with publish_telemetry enabled.
+
+        Returns count of successful channel publishes.
+        """
+        channels = await self.list_channels()
+        successes = 0
+        for ch in channels:
+            if not ch.enabled or ch.type != "mqtt":
+                continue
+            if not ch.config.get("publish_telemetry", False):
+                continue
+
+            client = await self._get_mqtt_client(ch)
+            if client is None:
+                continue
+
+            topic_prefix = ch.config.get("topic_prefix", "drivechill")
+            qos = int(ch.config.get("qos", 0))
+            retain = bool(ch.config.get("retain", False))
+
+            try:
+                for reading in readings:
+                    sensor_id = reading.get("id", reading.get("sensor_id", "unknown"))
+                    payload = json.dumps(reading)
+                    await client.publish(
+                        f"{topic_prefix}/sensors/{sensor_id}",
+                        payload=payload.encode(),
+                        qos=qos,
+                        retain=retain,
+                    )
+                successes += 1
+            except Exception as exc:
+                logger.warning("MQTT telemetry publish failed for channel %s: %s", ch.name, exc)
+                self._mqtt_clients.pop(ch.id, None)
+                try:
+                    await client.__aexit__(None, None, None)
+                except Exception:
+                    pass
+
+        return successes
+
+    async def _close_mqtt_clients(self) -> None:
+        """Disconnect all cached MQTT clients."""
+        for cid, client in list(self._mqtt_clients.items()):
+            try:
+                await client.__aexit__(None, None, None)
+            except Exception:
+                pass
+        self._mqtt_clients.clear()
 
     @staticmethod
     def _row_to_channel(row: tuple) -> NotificationChannel:

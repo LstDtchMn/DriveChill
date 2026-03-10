@@ -5,6 +5,9 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using DriveChill.Utils;
 using Microsoft.Extensions.Logging;
+using MQTTnet;
+using MQTTnet.Client;
+using MQTTnet.Protocol;
 
 namespace DriveChill.Services;
 
@@ -25,10 +28,11 @@ public sealed class NotificationChannel
 /// </summary>
 public sealed class NotificationChannelService
 {
-    private static readonly HashSet<string> ValidTypes = ["ntfy", "discord", "slack", "generic_webhook"];
+    private static readonly HashSet<string> ValidTypes = ["ntfy", "discord", "slack", "generic_webhook", "mqtt"];
     private readonly DbService _db;
     private readonly IHttpClientFactory _httpFactory;
     private readonly ILogger<NotificationChannelService> _logger;
+    private readonly Dictionary<string, MqttClientWrapper> _mqttClients = new();
 
     public NotificationChannelService(DbService db, IHttpClientFactory httpFactory,
                                        ILogger<NotificationChannelService> logger)
@@ -109,6 +113,7 @@ public sealed class NotificationChannelService
             "discord"         => await SendDiscordAsync(ch.Config, sensorName, value, threshold, test, ct),
             "slack"           => await SendSlackAsync(ch.Config, sensorName, value, threshold, test, ct),
             "generic_webhook" => await SendGenericAsync(ch.Config, sensorName, value, threshold, test, ct),
+            "mqtt"            => await SendMqttAsync(ch, sensorName, value, threshold, test, ct),
             _ => false,
         };
     }
@@ -215,6 +220,178 @@ public sealed class NotificationChannelService
         return resp.IsSuccessStatusCode;
     }
 
+    // ── MQTT ─────────────────────────────────────────────────────────────
+
+    private async Task<MqttClientWrapper?> GetOrCreateMqttClientAsync(NotificationChannel ch, CancellationToken ct)
+    {
+        if (_mqttClients.TryGetValue(ch.Id, out var existing) && existing.IsConnected)
+            return existing;
+
+        var brokerUrl = GetStr(ch.Config, "broker_url") ?? "";
+        if (string.IsNullOrEmpty(brokerUrl)) return null;
+
+        try
+        {
+            var uri = new Uri(brokerUrl);
+            var hostname = uri.Host;
+            var port = uri.Port > 0 ? uri.Port : (uri.Scheme == "mqtts" ? 8883 : 1883);
+            var useTls = uri.Scheme is "mqtts" or "ssl";
+            var username = GetStr(ch.Config, "username");
+            var password = GetStr(ch.Config, "password");
+            var clientId = GetStr(ch.Config, "client_id") ?? $"drivechill-{ch.Id[..Math.Min(8, ch.Id.Length)]}";
+
+            var factory = new MqttFactory();
+            var client = factory.CreateMqttClient();
+
+            var optionsBuilder = new MqttClientOptionsBuilder()
+                .WithTcpServer(hostname, port)
+                .WithClientId(clientId);
+
+            if (useTls)
+                optionsBuilder.WithTlsOptions(o => { });
+
+            if (!string.IsNullOrEmpty(username))
+                optionsBuilder.WithCredentials(username, password ?? "");
+
+            await client.ConnectAsync(optionsBuilder.Build(), ct);
+            var wrapper = new MqttClientWrapper(client);
+            _mqttClients[ch.Id] = wrapper;
+            _logger.LogInformation("MQTT connected to {Host}:{Port} for channel {Name}", hostname, port, ch.Name);
+            return wrapper;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "MQTT connection failed for channel {Name}", ch.Name);
+            return null;
+        }
+    }
+
+    private async Task<bool> SendMqttAsync(NotificationChannel ch, string sensorName,
+        double value, double threshold, bool test, CancellationToken ct)
+    {
+        var wrapper = await GetOrCreateMqttClientAsync(ch, ct);
+        if (wrapper is null) return false;
+
+        var topicPrefix = GetStr(ch.Config, "topic_prefix") ?? "drivechill";
+        var qos = GetInt(ch.Config, "qos", 1);
+        var retain = GetBool(ch.Config, "retain", false);
+
+        var payload = JsonSerializer.Serialize(new
+        {
+            source = "drivechill",
+            type = test ? "test_alert" : "alert",
+            sensor_name = sensorName,
+            value,
+            threshold,
+            message = $"{sensorName}: {value}°C (threshold: {threshold}°C)",
+        });
+
+        try
+        {
+            var msg = new MqttApplicationMessageBuilder()
+                .WithTopic($"{topicPrefix}/alerts")
+                .WithPayload(Encoding.UTF8.GetBytes(payload))
+                .WithQualityOfServiceLevel((MqttQualityOfServiceLevel)qos)
+                .WithRetainFlag(retain)
+                .Build();
+
+            await wrapper.Client.PublishAsync(msg, ct);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "MQTT publish failed for channel {Name}", ch.Name);
+            _mqttClients.Remove(ch.Id);
+            try { await wrapper.Client.DisconnectAsync(new MqttClientDisconnectOptionsBuilder().Build(), ct); } catch { }
+            return false;
+        }
+    }
+
+    public async Task<int> PublishTelemetryAsync(IReadOnlyList<TelemetryReading> readings, CancellationToken ct = default)
+    {
+        var channels = await ListAsync(ct);
+        int successes = 0;
+        foreach (var ch in channels)
+        {
+            if (!ch.Enabled || ch.Type != "mqtt") continue;
+            if (!GetBool(ch.Config, "publish_telemetry", false)) continue;
+
+            var wrapper = await GetOrCreateMqttClientAsync(ch, ct);
+            if (wrapper is null) continue;
+
+            var topicPrefix = GetStr(ch.Config, "topic_prefix") ?? "drivechill";
+            var qos = GetInt(ch.Config, "qos", 0);
+            var retain = GetBool(ch.Config, "retain", false);
+
+            try
+            {
+                foreach (var r in readings)
+                {
+                    var payload = JsonSerializer.Serialize(r);
+                    var msg = new MqttApplicationMessageBuilder()
+                        .WithTopic($"{topicPrefix}/sensors/{r.SensorId}")
+                        .WithPayload(Encoding.UTF8.GetBytes(payload))
+                        .WithQualityOfServiceLevel((MqttQualityOfServiceLevel)qos)
+                        .WithRetainFlag(retain)
+                        .Build();
+                    await wrapper.Client.PublishAsync(msg, ct);
+                }
+                successes++;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "MQTT telemetry publish failed for channel {Name}", ch.Name);
+                _mqttClients.Remove(ch.Id);
+                try { await wrapper.Client.DisconnectAsync(new MqttClientDisconnectOptionsBuilder().Build(), ct); } catch { }
+            }
+        }
+        return successes;
+    }
+
+    public async Task CloseMqttClientsAsync()
+    {
+        foreach (var (_, wrapper) in _mqttClients)
+        {
+            try { await wrapper.Client.DisconnectAsync(new MqttClientDisconnectOptionsBuilder().Build()); } catch { }
+        }
+        _mqttClients.Clear();
+    }
+
     private static string? GetStr(Dictionary<string, JsonElement> config, string key)
         => config.TryGetValue(key, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+
+    private static int GetInt(Dictionary<string, JsonElement> config, string key, int defaultValue)
+    {
+        if (config.TryGetValue(key, out var v))
+        {
+            if (v.ValueKind == JsonValueKind.Number) return v.GetInt32();
+            if (v.ValueKind == JsonValueKind.String && int.TryParse(v.GetString(), out var parsed)) return parsed;
+        }
+        return defaultValue;
+    }
+
+    private static bool GetBool(Dictionary<string, JsonElement> config, string key, bool defaultValue)
+    {
+        if (config.TryGetValue(key, out var v))
+        {
+            if (v.ValueKind is JsonValueKind.True or JsonValueKind.False) return v.GetBoolean();
+            if (v.ValueKind == JsonValueKind.String && bool.TryParse(v.GetString(), out var parsed)) return parsed;
+        }
+        return defaultValue;
+    }
+}
+
+internal sealed class MqttClientWrapper(IMqttClient client)
+{
+    public IMqttClient Client { get; } = client;
+    public bool IsConnected => Client.IsConnected;
+}
+
+public sealed class TelemetryReading
+{
+    [JsonPropertyName("sensor_id")]   public string SensorId { get; set; } = "";
+    [JsonPropertyName("sensor_name")] public string SensorName { get; set; } = "";
+    [JsonPropertyName("sensor_type")] public string SensorType { get; set; } = "";
+    [JsonPropertyName("value")]       public double Value { get; set; }
+    [JsonPropertyName("unit")]        public string Unit { get; set; } = "";
 }

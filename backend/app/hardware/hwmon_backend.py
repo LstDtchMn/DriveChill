@@ -22,6 +22,10 @@ PWM_ENABLE_MANUAL = "1"
 PWM_ENABLE_AUTO = "2"  # most common auto value; some chips use 0 or 5
 
 
+WRITE_TIMEOUT_SECONDS = 2.0
+MAX_RETRY_ON_EIO = 1
+
+
 @dataclass
 class HwmonFanNode:
     """A discovered writable PWM fan node."""
@@ -32,6 +36,7 @@ class HwmonFanNode:
     enable_path: Path | None  # e.g. /sys/class/hwmon/hwmon3/pwm1_enable
     fan_id: str               # e.g. "hwmon_nct6775_pwm1"
     original_enable: str | None = None  # saved for restore on release
+    status: str = "ok"        # ok | degraded | error
 
 
 class HwmonBackend(LmSensorsBackend):
@@ -104,8 +109,30 @@ class HwmonBackend(LmSensorsBackend):
         self._write_supported = len(self._fans) > 0
         if self._write_supported:
             logger.info("hwmon fan write: %d controllable fans found", len(self._fans))
+            # Permission pre-check: verify we can actually write
+            await self._verify_write_permissions()
         else:
             logger.info("hwmon fan write: no writable pwm nodes found")
+
+    async def _verify_write_permissions(self) -> None:
+        """Test-write current value back to each fan to verify permissions early."""
+        for fan_id, node in list(self._fans.items()):
+            try:
+                current = _read_sysfs(node.pwm_path)
+                if current is not None:
+                    await _write_sysfs_async(node.pwm_path, current)
+                    logger.debug("Permission check passed for %s", fan_id)
+            except PermissionError:
+                node.status = "error"
+                logger.error(
+                    "Fan %s: permission denied on %s during startup check. "
+                    "Fan will be unavailable for control. "
+                    "Fix: sudo chmod g+w %s && sudo chgrp $(id -gn) %s",
+                    fan_id, node.pwm_path, node.pwm_path, node.pwm_path,
+                )
+            except OSError as exc:
+                node.status = "degraded"
+                logger.warning("Fan %s: startup write check failed: %s", fan_id, exc)
 
     @property
     def fan_write_supported(self) -> bool:
@@ -115,19 +142,43 @@ class HwmonBackend(LmSensorsBackend):
         node = self._fans.get(fan_id)
         if node is None:
             return False
+        if node.status == "error":
+            return False
 
         speed_percent = max(0.0, min(100.0, speed_percent))
         pwm_value = round(speed_percent * 255 / 100)
 
-        try:
-            # Ensure manual mode before writing
-            if node.enable_path:
-                await _write_sysfs_async(node.enable_path, PWM_ENABLE_MANUAL)
-            await _write_sysfs_async(node.pwm_path, str(pwm_value))
-            return True
-        except OSError as exc:
-            logger.warning("Failed to set fan %s to %d%%: %s", fan_id, speed_percent, exc)
-            return False
+        for attempt in range(1 + MAX_RETRY_ON_EIO):
+            try:
+                # Ensure manual mode before writing
+                if node.enable_path:
+                    await _write_sysfs_async(node.enable_path, PWM_ENABLE_MANUAL)
+                await _write_sysfs_async(node.pwm_path, str(pwm_value))
+                # Successful write — restore status if previously degraded
+                if node.status == "degraded":
+                    node.status = "ok"
+                    logger.info("Fan %s recovered from degraded state", fan_id)
+                return True
+            except OSError as exc:
+                is_eio = getattr(exc, "errno", None) == 5  # EIO
+                if is_eio and attempt < MAX_RETRY_ON_EIO:
+                    logger.debug("Fan %s got EIO, retrying (%d/%d)", fan_id, attempt + 1, MAX_RETRY_ON_EIO)
+                    await asyncio.sleep(0.1)
+                    continue
+                # Mark degraded on permission errors or repeated failures
+                if getattr(exc, "errno", None) == 13:  # EACCES
+                    node.status = "error"
+                    logger.error(
+                        "Fan %s: permission denied writing to %s. "
+                        "Ensure the DriveChill process has write access to sysfs pwm nodes. "
+                        "Try: sudo chmod g+w %s && sudo chgrp $(id -gn) %s",
+                        fan_id, node.pwm_path, node.pwm_path, node.pwm_path,
+                    )
+                else:
+                    node.status = "degraded"
+                    logger.warning("Failed to set fan %s to %d%%: %s", fan_id, speed_percent, exc)
+                return False
+        return False
 
     async def release_fan_control(self) -> None:
         """Restore all fans to their original enable mode (typically auto)."""
@@ -165,9 +216,32 @@ class HwmonBackend(LmSensorsBackend):
         await self.release_fan_control()
         await super().shutdown()
 
+    def get_fan_status(self) -> dict[str, dict]:
+        """Return per-fan health status for frontend display.
+
+        Returns:
+            Dict keyed by fan_id with {status, chip_name, pwm_path} per fan.
+        """
+        result: dict[str, dict] = {}
+        for fan_id, node in self._fans.items():
+            result[fan_id] = {
+                "status": node.status,
+                "chip_name": node.chip_name,
+                "pwm_path": str(node.pwm_path),
+            }
+        return result
+
     def get_backend_name(self) -> str:
+        ok_count = sum(1 for n in self._fans.values() if n.status == "ok")
+        degraded_count = sum(1 for n in self._fans.values() if n.status == "degraded")
+        error_count = sum(1 for n in self._fans.values() if n.status == "error")
         if self._write_supported:
-            return f"hwmon (Linux, {len(self._fans)} writable fans)"
+            parts = [f"{ok_count} ok"]
+            if degraded_count:
+                parts.append(f"{degraded_count} degraded")
+            if error_count:
+                parts.append(f"{error_count} error")
+            return f"hwmon (Linux, {', '.join(parts)})"
         return "lm-sensors (Linux, read-only)"
 
 
@@ -180,6 +254,12 @@ def _read_sysfs(path: Path) -> str | None:
 
 
 async def _write_sysfs_async(path: Path, value: str) -> None:
-    """Write a value to a sysfs node asynchronously."""
+    """Write a value to a sysfs node asynchronously with timeout."""
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, path.write_text, value)
+    try:
+        await asyncio.wait_for(
+            loop.run_in_executor(None, path.write_text, value),
+            timeout=WRITE_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        raise OSError(f"Timeout writing to {path} after {WRITE_TIMEOUT_SECONDS}s")

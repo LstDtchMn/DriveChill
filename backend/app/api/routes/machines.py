@@ -183,6 +183,14 @@ async def get_machine_snapshot(machine_id: str, request: Request):
     return {"machine_id": machine_id, "snapshot": snapshot}
 
 
+@router.post("/health-check", dependencies=[Depends(require_csrf)])
+async def health_check_all(request: Request):
+    """Trigger a one-shot health check of all enabled machines."""
+    monitor = request.app.state.machine_monitor_service
+    results = await monitor.check_machine_health()
+    return {"results": results}
+
+
 @router.post("/{machine_id}/verify", dependencies=[Depends(require_csrf)])
 async def verify_machine(machine_id: str, request: Request):
     repo = request.app.state.machine_repo

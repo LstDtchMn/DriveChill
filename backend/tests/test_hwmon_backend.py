@@ -208,7 +208,7 @@ class TestBackendName:
             await backend.initialize()
             name = backend.get_backend_name()
             assert "hwmon" in name
-            assert "2 writable fans" in name
+            assert "2 ok" in name
         _run(_test())
 
     def test_name_without_fans(self, tmp_path):
@@ -219,4 +219,72 @@ class TestBackendName:
             await backend.initialize()
             name = backend.get_backend_name()
             assert "read-only" in name
+        _run(_test())
+
+
+class TestFanStatus:
+    def test_get_fan_status_all_ok(self, tmp_path):
+        hwmon_root = _make_hwmon_tree(tmp_path, num_fans=2)
+
+        async def _test():
+            backend = HwmonBackend(hwmon_root=hwmon_root)
+            await backend.initialize()
+            status = backend.get_fan_status()
+            assert len(status) == 2
+            for fan_id, info in status.items():
+                assert info["status"] == "ok"
+                assert "chip_name" in info
+                assert "pwm_path" in info
+        _run(_test())
+
+    def test_degraded_fan_status(self, tmp_path):
+        hwmon_root = _make_hwmon_tree(tmp_path, num_fans=1)
+
+        async def _test():
+            backend = HwmonBackend(hwmon_root=hwmon_root)
+            await backend.initialize()
+            # Manually mark degraded
+            fan_id = list(backend._fans.keys())[0]
+            backend._fans[fan_id].status = "degraded"
+            status = backend.get_fan_status()
+            assert status[fan_id]["status"] == "degraded"
+        _run(_test())
+
+    def test_error_fan_rejected(self, tmp_path):
+        hwmon_root = _make_hwmon_tree(tmp_path, num_fans=1)
+
+        async def _test():
+            backend = HwmonBackend(hwmon_root=hwmon_root)
+            await backend.initialize()
+            fan_id = list(backend._fans.keys())[0]
+            # Mark as error — set_fan_speed should refuse
+            backend._fans[fan_id].status = "error"
+            ok = await backend.set_fan_speed(fan_id, 50.0)
+            assert ok is False
+        _run(_test())
+
+    def test_degraded_recovers_on_success(self, tmp_path):
+        hwmon_root = _make_hwmon_tree(tmp_path, num_fans=1)
+
+        async def _test():
+            backend = HwmonBackend(hwmon_root=hwmon_root)
+            await backend.initialize()
+            fan_id = list(backend._fans.keys())[0]
+            backend._fans[fan_id].status = "degraded"
+            ok = await backend.set_fan_speed(fan_id, 50.0)
+            assert ok is True
+            assert backend._fans[fan_id].status == "ok"
+        _run(_test())
+
+    def test_backend_name_shows_degraded(self, tmp_path):
+        hwmon_root = _make_hwmon_tree(tmp_path, num_fans=2)
+
+        async def _test():
+            backend = HwmonBackend(hwmon_root=hwmon_root)
+            await backend.initialize()
+            fan_ids = list(backend._fans.keys())
+            backend._fans[fan_ids[0]].status = "degraded"
+            name = backend.get_backend_name()
+            assert "1 ok" in name
+            assert "1 degraded" in name
         _run(_test())

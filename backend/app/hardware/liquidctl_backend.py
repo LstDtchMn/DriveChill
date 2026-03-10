@@ -18,6 +18,50 @@ from app.models.sensors import SensorReading, SensorType
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Known device family profiles for optimized channel parsing
+# ---------------------------------------------------------------------------
+
+DEVICE_PROFILES: dict[str, dict] = {
+    # NZXT Kraken X/Z series (2 fan channels + 1 pump + liquid temp)
+    "kraken": {
+        "match_keywords": ["kraken"],
+        "expected_fans": ["fan", "pump"],
+        "expected_temps": ["liquid"],
+        "friendly_prefix": "Kraken",
+    },
+    # Corsair Commander Pro / Core (6 fan channels + 2 temp probes)
+    "commander": {
+        "match_keywords": ["commander"],
+        "expected_fans": [f"fan{i}" for i in range(1, 7)],
+        "expected_temps": ["temp1", "temp2"],
+        "friendly_prefix": "Commander",
+    },
+    # Corsair Hydro / iCUE Elite (pump + fan + liquid temp)
+    "corsair_hydro": {
+        "match_keywords": ["hydro", "h100", "h115", "h150", "elite"],
+        "expected_fans": ["fan", "pump"],
+        "expected_temps": ["liquid", "temp"],
+        "friendly_prefix": "Corsair AIO",
+    },
+    # Aquacomputer D5 Next / Quadro / Octo
+    "aquacomputer": {
+        "match_keywords": ["aquacomputer", "d5 next", "quadro", "octo"],
+        "expected_fans": [f"fan{i}" for i in range(1, 9)],
+        "expected_temps": [f"temp{i}" for i in range(1, 5)],
+        "friendly_prefix": "Aquacomputer",
+    },
+}
+
+
+def _match_device_profile(description: str) -> dict | None:
+    """Match a device description to a known profile."""
+    desc_lower = description.lower()
+    for profile in DEVICE_PROFILES.values():
+        if any(kw in desc_lower for kw in profile["match_keywords"]):
+            return profile
+    return None
+
 
 @dataclass
 class LiquidctlDevice:
@@ -28,6 +72,10 @@ class LiquidctlDevice:
     product_id: str
     fan_channels: list[str] = field(default_factory=list)  # e.g. ["fan1", "pump"]
     temp_channels: list[str] = field(default_factory=list)  # e.g. ["liquid"]
+    firmware_version: str | None = None  # parsed from status if available
+    profile: dict | None = None          # matched device family profile
+    status: str = "ok"                   # ok | offline | error
+    consecutive_failures: int = 0
 
 
 class LiquidctlBackend(HardwareBackend):
@@ -68,18 +116,24 @@ class LiquidctlBackend(HardwareBackend):
             vid = entry.get("vendor_id", "")
             pid = entry.get("product_id", "")
 
+            profile = _match_device_profile(desc)
+
             device = LiquidctlDevice(
                 address=str(addr),
                 description=desc,
                 vendor_id=str(vid),
                 product_id=str(pid),
+                profile=profile,
             )
 
             # Read initial status to discover channels
             status = await self._get_device_status(device)
             for key, value in status.items():
                 key_lower = key.lower()
-                if "fan" in key_lower or "pump" in key_lower:
+                # Capture firmware version if present
+                if "firmware" in key_lower or "version" in key_lower:
+                    device.firmware_version = str(value) if isinstance(value, (int, float)) else key
+                elif "fan" in key_lower or "pump" in key_lower:
                     if "speed" in key_lower or "rpm" in key_lower or "duty" in key_lower:
                         channel = _extract_channel_name(key)
                         if channel and channel not in device.fan_channels:
@@ -90,8 +144,10 @@ class LiquidctlBackend(HardwareBackend):
                         device.temp_channels.append(channel)
 
             self._devices.append(device)
-            logger.info("Discovered liquidctl device: %s (%s) fans=%s temps=%s",
-                        desc, addr, device.fan_channels, device.temp_channels)
+            profile_name = profile["friendly_prefix"] if profile else "Generic"
+            fw_info = f" fw={device.firmware_version}" if device.firmware_version else ""
+            logger.info("Discovered liquidctl device: %s [%s] (%s) fans=%s temps=%s%s",
+                        desc, profile_name, addr, device.fan_channels, device.temp_channels, fw_info)
 
     async def _get_device_status(self, device: LiquidctlDevice) -> dict[str, float]:
         """Get status readings from a specific device, targeted by address."""
@@ -132,6 +188,37 @@ class LiquidctlBackend(HardwareBackend):
 
         for device in self._devices:
             status = await self._get_device_status(device)
+
+            # Handle device disconnect/reconnect
+            if not status and device.status == "ok":
+                device.consecutive_failures += 1
+                if device.consecutive_failures >= 3:
+                    device.status = "offline"
+                    logger.warning("Device %s (%s) marked offline after %d failures",
+                                   device.description, device.address, device.consecutive_failures)
+                continue
+            elif not status and device.status == "offline":
+                # Try re-initialization periodically (every 10th poll)
+                device.consecutive_failures += 1
+                if device.consecutive_failures % 10 == 0:
+                    logger.info("Attempting to reconnect device %s (%s)", device.description, device.address)
+                    await self._run_cmd("initialize", "--address", device.address)
+                    status = await self._get_device_status(device)
+                    if not status:
+                        continue
+                    # Reconnected!
+                    device.status = "ok"
+                    device.consecutive_failures = 0
+                    logger.info("Device %s (%s) reconnected", device.description, device.address)
+                else:
+                    continue
+            elif status and device.status == "offline":
+                device.status = "ok"
+                device.consecutive_failures = 0
+                logger.info("Device %s (%s) recovered", device.description, device.address)
+            elif status:
+                device.consecutive_failures = 0
+
             self._last_status[device.address] = status
             dev_prefix = _make_id_prefix(device)
 
@@ -210,10 +297,30 @@ class LiquidctlBackend(HardwareBackend):
                 result.append(f"{dev_prefix}_{channel}")
         return result
 
+    def get_device_info(self) -> list[dict]:
+        """Return device info for frontend display."""
+        result = []
+        for device in self._devices:
+            profile_name = device.profile["friendly_prefix"] if device.profile else "Generic"
+            result.append({
+                "address": device.address,
+                "description": device.description,
+                "family": profile_name,
+                "status": device.status,
+                "firmware_version": device.firmware_version,
+                "fan_channels": device.fan_channels,
+                "temp_channels": device.temp_channels,
+            })
+        return result
+
     def get_backend_name(self) -> str:
         if not self._available:
             return "liquidctl (not available)"
         n = len(self._devices)
+        online = sum(1 for d in self._devices if d.status == "ok")
+        offline = n - online
+        if offline:
+            return f"liquidctl ({online} online, {offline} offline)"
         return f"liquidctl ({n} device{'s' if n != 1 else ''})"
 
     # ── Subprocess helpers ────────────────────────────────────────────────
