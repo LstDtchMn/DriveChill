@@ -52,7 +52,7 @@ class TestCreateSession:
         async def run():
             await svc.create_user("alice", "password1")
             user = await svc.get_user("alice")
-            session_token, csrf_token = await svc._create_session(
+            session_token, csrf_token = await svc.create_session(
                 user["id"], "127.0.0.1", "test-agent"
             )
             assert len(session_token) == 64
@@ -67,7 +67,7 @@ class TestCreateSession:
         async def run():
             await svc.create_user("bob", "password1")
             user = await svc.get_user("bob")
-            session_token, _ = await svc._create_session(user["id"], "127.0.0.1", "ua")
+            session_token, _ = await svc.create_session(user["id"], "127.0.0.1", "ua")
             session = await svc.validate_session(session_token)
             assert session is not None
             assert session["username"] == "bob"
@@ -80,8 +80,8 @@ class TestCreateSession:
         async def run():
             await svc.create_user("carol", "password1")
             user = await svc.get_user("carol")
-            tok1, csrf1 = await svc._create_session(user["id"], "127.0.0.1", "ua")
-            tok2, csrf2 = await svc._create_session(user["id"], "127.0.0.1", "ua")
+            tok1, csrf1 = await svc.create_session(user["id"], "127.0.0.1", "ua")
+            tok2, csrf2 = await svc.create_session(user["id"], "127.0.0.1", "ua")
             assert tok1 != tok2
             assert csrf1 != csrf2
 
@@ -124,7 +124,7 @@ class TestSelfPasswordChange:
             user = await svc.get_user("frank")
 
             # Simulate an existing login session
-            old_token, _ = await svc._create_session(user["id"], "127.0.0.1", "ua")
+            old_token, _ = await svc.create_session(user["id"], "127.0.0.1", "ua")
             assert await svc.validate_session(old_token) is not None
 
             # Verify current password (endpoint would 403 if this fails)
@@ -146,7 +146,7 @@ class TestSelfPasswordChange:
             assert await svc.validate_session(old_token) is None
 
             # Issue a new session
-            new_token, new_csrf = await svc._create_session(user["id"], "127.0.0.1", "ua")
+            new_token, new_csrf = await svc.create_session(user["id"], "127.0.0.1", "ua")
             session = await svc.validate_session(new_token)
             assert session is not None
             assert session["username"] == "frank"
@@ -166,9 +166,9 @@ class TestSelfPasswordChange:
             await svc.create_user("grace", "password1")
             user = await svc.get_user("grace")
 
-            tok_a, _ = await svc._create_session(user["id"], "192.168.1.1", "browser-a")
-            tok_b, _ = await svc._create_session(user["id"], "192.168.1.2", "browser-b")
-            tok_c, _ = await svc._create_session(user["id"], "192.168.1.3", "browser-c")
+            tok_a, _ = await svc.create_session(user["id"], "192.168.1.1", "browser-a")
+            tok_b, _ = await svc.create_session(user["id"], "192.168.1.2", "browser-b")
+            tok_c, _ = await svc.create_session(user["id"], "192.168.1.3", "browser-c")
 
             # Simulate password change + bulk session wipe
             await db.execute("DELETE FROM sessions WHERE user_id = ?", (user["id"],))

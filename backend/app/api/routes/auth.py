@@ -35,8 +35,8 @@ class ChangePasswordRequest(BaseModel):
 
 
 class SelfPasswordChangeRequest(BaseModel):
-    current_password: str
-    new_password: str = Field(min_length=8, max_length=256)
+    current_password: str = Field(..., max_length=256)
+    new_password: str = Field(..., min_length=8, max_length=256)
 
 
 class CreateApiKeyRequest(BaseModel):
@@ -263,21 +263,14 @@ async def change_my_password(body: SelfPasswordChangeRequest, request: Request, 
         raise HTTPException(status_code=403, detail="Current password is incorrect")
 
     pw_hash = auth_service.hash_password(body.new_password)
-    await auth_service._db.execute(
-        "UPDATE users SET password_hash = ?, updated_at = datetime('now') WHERE id = ?",
-        (pw_hash, user["id"]),
-    )
-    await auth_service._db.commit()
+    await auth_service.change_user_password(user["id"], pw_hash)
 
     # Invalidate ALL sessions for this user (including the current one)
-    await auth_service._db.execute(
-        "DELETE FROM sessions WHERE user_id = ?", (user["id"],)
-    )
-    await auth_service._db.commit()
+    await auth_service.delete_all_sessions_for_user(user["id"])
 
     # Issue a fresh session so the client stays logged in
     ip = request.client.host if request.client else "unknown"
-    new_session_token, new_csrf_token = await auth_service._create_session(
+    new_session_token, new_csrf_token = await auth_service.create_session(
         user["id"], ip, request.headers.get("user-agent", ""),
     )
 

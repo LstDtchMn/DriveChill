@@ -20,17 +20,20 @@ async def _do_publish(
     snapshot,
 ) -> None:
     """Publish a single snapshot's readings to MQTT channels."""
-    readings = [
-        {
-            "sensor_id": r.id,
-            "sensor_name": r.name,
-            "sensor_type": r.sensor_type,
-            "value": r.value,
-            "unit": r.unit,
-        }
-        for r in snapshot.readings
-    ]
-    await channel_svc.publish_telemetry(readings)
+    try:
+        readings = [
+            {
+                "sensor_id": r.id,
+                "sensor_name": r.name,
+                "sensor_type": r.sensor_type,
+                "value": r.value,
+                "unit": r.unit,
+            }
+            for r in snapshot.readings
+        ]
+        await channel_svc.publish_telemetry(readings)
+    except Exception:
+        logger.debug("MQTT telemetry publish failed", exc_info=True)
 
 
 async def create_telemetry_publisher(

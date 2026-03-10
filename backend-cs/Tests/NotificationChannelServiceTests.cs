@@ -15,7 +15,6 @@ namespace DriveChill.Tests;
 /// Tests for <see cref="NotificationChannelService"/> focusing on
 /// SSRF rejection at save time (controller) and send time (service).
 /// </summary>
-[Collection("Sequential")]
 public sealed class NotificationChannelServiceTests : IDisposable
 {
     private readonly string _tempDir;

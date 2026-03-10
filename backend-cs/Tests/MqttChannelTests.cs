@@ -16,7 +16,6 @@ namespace DriveChill.Tests;
 /// Network I/O is not exercised — invalid broker URLs cause connection failure paths
 /// which are caught and returned as false/0.
 /// </summary>
-[Collection("Sequential")]
 public sealed class MqttChannelTests : IDisposable
 {
     private readonly string _tempDir;

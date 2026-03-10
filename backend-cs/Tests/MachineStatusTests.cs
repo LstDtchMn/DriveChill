@@ -12,7 +12,6 @@ namespace DriveChill.Tests;
 /// Tests for machine status tracking: consecutive_failures increments, recovery resets,
 /// last_seen_at updates, last_command_at, and default field values after creation.
 /// </summary>
-[Collection("Sequential")]
 public sealed class MachineStatusTests : IDisposable
 {
     private readonly string    _tempDir;

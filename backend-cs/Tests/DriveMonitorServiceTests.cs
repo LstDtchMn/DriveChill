@@ -14,7 +14,6 @@ namespace DriveChill.Tests;
 /// Tests for <see cref="DriveMonitorService"/> using <see cref="MockDriveProvider"/>.
 /// No smartctl required — all drive data is injected via the mock.
 /// </summary>
-[Collection("Sequential")]
 public sealed class DriveMonitorServiceTests : IDisposable
 {
     private readonly string _tempDir;

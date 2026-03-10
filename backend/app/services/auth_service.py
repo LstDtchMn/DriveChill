@@ -375,9 +375,22 @@ class AuthService:
         )
         await self._db.commit()
 
+    async def change_user_password(self, user_id: int, new_hash: str) -> None:
+        """Update a user's password hash."""
+        await self._db.execute(
+            "UPDATE users SET password_hash = ?, updated_at = datetime('now') WHERE id = ?",
+            (new_hash, user_id),
+        )
+        await self._db.commit()
+
+    async def delete_all_sessions_for_user(self, user_id: int) -> None:
+        """Delete all sessions for a given user ID."""
+        await self._db.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+        await self._db.commit()
+
     # --- Session creation ---
 
-    async def _create_session(self, user_id: int, ip: str, user_agent: str) -> tuple[str, str]:
+    async def create_session(self, user_id: int, ip: str, user_agent: str) -> tuple[str, str]:
         """Create a new session and return (session_token, csrf_token)."""
         session_token = secrets.token_hex(32)
         csrf_token = secrets.token_hex(32)
@@ -418,7 +431,7 @@ class AuthService:
 
         # Success
         await self._clear_failed_attempts(user["id"])
-        session_token, csrf_token = await self._create_session(user["id"], ip, user_agent)
+        session_token, csrf_token = await self.create_session(user["id"], ip, user_agent)
         await self._log_auth_event("login_success", ip, username, "success", None)
         return session_token, csrf_token
 

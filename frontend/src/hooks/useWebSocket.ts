@@ -11,7 +11,7 @@ const RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 15000];
 let _globalWsRef: WebSocket | null = null;
 
 export function closeWebSocket() {
-  if (_globalWsRef && _globalWsRef.readyState === WebSocket.OPEN) {
+  if (_globalWsRef && (_globalWsRef.readyState === WebSocket.OPEN || _globalWsRef.readyState === WebSocket.CONNECTING)) {
     _globalWsRef.close();
   }
 }
