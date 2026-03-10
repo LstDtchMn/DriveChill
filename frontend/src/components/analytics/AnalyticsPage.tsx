@@ -175,7 +175,7 @@ export function AnalyticsPage() {
     try {
       const r = await api.analytics.getCorrelation(corrX, corrY, hours, buildOpts());
       setCorrResult({ coeff: r.correlation_coefficient, samples: r.samples, count: r.sample_count });
-    } catch { /* ignore */ }
+    } catch { setError('Correlation request failed.'); }
     finally { setCorrLoading(false); }
   };
 
@@ -192,14 +192,14 @@ export function AnalyticsPage() {
       setAnnLabel('');
       setAnnDescription('');
       setShowAnnotationForm(false);
-    } catch { /* ignore */ }
+    } catch { setError('Failed to create annotation.'); }
   };
 
   const handleDeleteAnnotation = async (id: string) => {
     try {
       await api.annotations.delete(id);
       setAnnotations((prev) => prev.filter((a) => a.id !== id));
-    } catch { /* ignore */ }
+    } catch { setError('Failed to delete annotation.'); }
   };
 
   const toggleSensor = (id: string) => {

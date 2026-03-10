@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.api.dependencies.auth import require_csrf
 
@@ -14,10 +14,21 @@ router = APIRouter(prefix="/api/annotations", tags=["annotations"])
 class AnnotationBody(BaseModel):
     timestamp_utc: str = Field(min_length=1)
     label: str = Field(min_length=1, max_length=200)
-    description: str | None = None
+    description: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("timestamp_utc")
+    @classmethod
+    def validate_timestamp(cls, v: str) -> str:
+        try:
+            dt = datetime.fromisoformat(v.replace("Z", "+00:00"))
+            return dt.astimezone(timezone.utc).isoformat()
+        except (ValueError, TypeError):
+            raise ValueError("timestamp_utc must be a valid ISO-8601 datetime")
 
 
 def _row_to_dict(row) -> dict:
+    # Columns: id(0), event_type(1), timestamp_utc(2), label(3),
+    # description(4), metadata_json(5), created_at(6)
     return {
         "id": row[0],
         "timestamp_utc": row[2],
@@ -61,13 +72,13 @@ async def create_annotation(body: AnnotationBody, request: Request):
         (annotation_id, body.timestamp_utc, body.label, body.description, now),
     )
     await db.commit()
-    cursor = await db.execute(
-        "SELECT id, event_type, timestamp_utc, label, description, metadata_json, created_at "
-        "FROM event_log WHERE id = ?",
-        (annotation_id,),
-    )
-    row = await cursor.fetchone()
-    return _row_to_dict(row)
+    return {
+        "id": annotation_id,
+        "timestamp_utc": body.timestamp_utc,
+        "label": body.label,
+        "description": body.description,
+        "created_at": now,
+    }
 
 
 @router.delete("/{annotation_id}", dependencies=[Depends(require_csrf)], status_code=204)
