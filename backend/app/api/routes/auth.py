@@ -250,8 +250,12 @@ async def revoke_api_key(key_id: str, request: Request):
 async def change_my_password(body: SelfPasswordChangeRequest, request: Request, response: Response):
     """Change the current user's own password. Rotates session token on success."""
     auth_service = request.app.state.auth_service
-    session_token = request.cookies.get("drivechill_session")
-    session = await auth_service.validate_session(session_token)
+
+    # Password change requires session auth (not API key)
+    auth_info = getattr(request.state, "auth_info", None)
+    if not auth_info or auth_info.get("auth_type") != "session":
+        raise HTTPException(status_code=403, detail="Password change requires session auth")
+    session = auth_info.get("session")
     if not session:
         raise HTTPException(status_code=401, detail="Invalid session")
 
@@ -275,7 +279,7 @@ async def change_my_password(body: SelfPasswordChangeRequest, request: Request, 
     )
 
     await auth_service._log_auth_event(
-        "self_password_changed", ip, user["username"], "success", "",
+        "self_password_changed", ip, user["username"], "success", None,
     )
 
     _set_session_cookies(

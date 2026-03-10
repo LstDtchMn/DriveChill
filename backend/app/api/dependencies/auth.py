@@ -229,7 +229,7 @@ async def require_csrf(
     # Logout is exempt so viewers can always end their session.
     assert session is not None
     path = request.url.path.rstrip("/")
-    if path != "/api/auth/logout":
+    if path not in ("/api/auth/logout", "/api/auth/me/password"):
         role = session.get("role", "admin")
         if role != "admin":
             raise HTTPException(status_code=403, detail="Write access requires admin role")
