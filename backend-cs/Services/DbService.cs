@@ -1417,6 +1417,20 @@ public sealed class DbService : IDisposable
         return await cmd.ExecuteNonQueryAsync(ct) > 0;
     }
 
+    /// <summary>Update password for a user identified by username — used by self-password-change.</summary>
+    public async Task SetUserPasswordByUsernameAsync(string username, string passwordHash, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE users SET password_hash = $h, updated_at = $t WHERE username = $u";
+        cmd.Parameters.AddWithValue("$h", passwordHash);
+        cmd.Parameters.AddWithValue("$t", DateTimeOffset.UtcNow.ToString("o"));
+        cmd.Parameters.AddWithValue("$u", username);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
     /// <summary>Delete all sessions for a user by username — called after password change (GAP-2).</summary>
     public async Task DeleteUserSessionsByUsernameAsync(string username, CancellationToken ct = default)
     {

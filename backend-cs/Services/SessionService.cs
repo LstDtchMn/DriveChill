@@ -98,12 +98,26 @@ public sealed class SessionService
         _lockouts.TryRemove(username, out _);
 
         // Create session
-        var sessionToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
-        var csrfToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
-        await _db.CreateSessionAsync(sessionToken, csrfToken, username, ip, userAgent, SessionTtl, ct);
+        var tokens = await CreateSessionDirectAsync(username, ip, userAgent, ct);
         _ = _db.LogAuthEventAsync("login", ip, username, "success", null);
+        return tokens;
+    }
+
+    /// <summary>
+    /// Create a new session directly (without password verification).
+    /// Used after self-password-change to issue a fresh session after rotating out old ones.
+    /// </summary>
+    public async Task<(string SessionToken, string CsrfToken)> CreateSessionDirectAsync(
+        string username, string? ip, string? userAgent, CancellationToken ct = default)
+    {
+        var sessionToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
+        var csrfToken    = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
+        await _db.CreateSessionAsync(sessionToken, csrfToken, username, ip, userAgent, SessionTtl, ct);
         return (sessionToken, csrfToken);
     }
+
+    /// <summary>Public wrapper for password verification — used by self-password-change endpoint.</summary>
+    public bool VerifyPasswordPublic(string password, string stored) => VerifyPassword(password, stored);
 
     /// <summary>Validate a session token. Returns username, csrf token, and role if valid.</summary>
     public async Task<(string Username, string CsrfToken, string Role)?> ValidateSessionAsync(

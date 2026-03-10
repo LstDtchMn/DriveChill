@@ -203,6 +203,48 @@ public sealed class AuthController : ControllerBase
     }
 
     // -----------------------------------------------------------------------
+    // Self-service password change
+    // -----------------------------------------------------------------------
+
+    /// <summary>POST /api/auth/me/password — change own password with current-password verification.</summary>
+    [HttpPost("me/password")]
+    public async Task<IActionResult> ChangeMyPassword([FromBody] SelfPasswordChangeRequest req, CancellationToken ct = default)
+    {
+        var sessionToken = Request.Cookies[SessionCookieName];
+        if (string.IsNullOrEmpty(sessionToken))
+            return Unauthorized(new { detail = "Not authenticated" });
+
+        var session = await _sessions.ValidateSessionAsync(sessionToken, ct);
+        if (session is null)
+            return Unauthorized(new { detail = "Invalid session" });
+
+        if (string.IsNullOrWhiteSpace(req.NewPassword) || req.NewPassword.Length < 8 || req.NewPassword.Length > 256)
+            return BadRequest(new { detail = "New password must be 8-256 characters" });
+
+        var user = await _db.GetUserAsync(session.Value.Username, ct);
+        if (user is null)
+            return NotFound(new { detail = "User not found" });
+
+        if (!_sessions.VerifyPasswordPublic(req.CurrentPassword, user.Value.PasswordHash))
+            return StatusCode(403, new { detail = "Current password is incorrect" });
+
+        var newHash = SessionService.HashPassword(req.NewPassword);
+        await _db.SetUserPasswordByUsernameAsync(session.Value.Username, newHash, ct);
+
+        // Invalidate all existing sessions then issue a fresh one (session rotation).
+        await _db.DeleteUserSessionsByUsernameAsync(session.Value.Username, ct);
+
+        var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
+        var (newSessionToken, newCsrfToken) = await _sessions.CreateSessionDirectAsync(
+            session.Value.Username, ip, Request.Headers.UserAgent.ToString(), ct);
+
+        _ = _db.LogAuthEventAsync("self_password_changed", ip, session.Value.Username, "success", "");
+
+        SetSessionCookies(newSessionToken, newCsrfToken);
+        return Ok(new { success = true });
+    }
+
+    // -----------------------------------------------------------------------
     // API keys
     // -----------------------------------------------------------------------
 
@@ -317,4 +359,10 @@ public sealed class LoginRequest
 {
     public string Username { get; set; } = "";
     public string Password { get; set; } = "";
+}
+
+public sealed class SelfPasswordChangeRequest
+{
+    public string CurrentPassword { get; set; } = "";
+    public string NewPassword     { get; set; } = "";
 }
