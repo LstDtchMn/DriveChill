@@ -46,6 +46,7 @@ from app.api.routes import temperature_targets as temperature_targets_route
 from app.api.routes import update as update_route
 from app.api.routes import virtual_sensors as virtual_sensors_route
 from app.api.routes import notification_channels as notification_channels_route
+from app.api.routes import noise_profiles as noise_profiles_route
 from app.api.websocket import router as ws_router
 from app.db.repositories.drive_repo import DriveRepo
 from app.db.repositories.temperature_target_repo import TemperatureTargetRepo
@@ -509,6 +510,7 @@ app.include_router(temperature_targets_route.router, dependencies=_auth_deps)
 app.include_router(update_route.router, dependencies=_auth_deps)
 app.include_router(virtual_sensors_route.router, dependencies=_auth_deps)
 app.include_router(notification_channels_route.router, dependencies=_auth_deps)
+app.include_router(noise_profiles_route.router, dependencies=_auth_deps)
 # WebSocket auth is handled inside the endpoint (require_ws_auth) because
 # router-level Depends(require_auth) injects Request, which fails for WS.
 app.include_router(ws_router)

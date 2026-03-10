@@ -11,6 +11,7 @@ import type { TempUnit } from '@/lib/tempUnit';
 import { requestNotificationPermission } from '@/hooks/useNotifications';
 import type { ApiKeyInfo, DriveSettings, MachineInfo, WebhookConfig, WebhookDelivery, PushSubscription, EmailNotificationSettings } from '@/lib/types';
 import { NotificationChannelForm } from './NotificationChannelForm';
+import { NoiseProfiler } from './NoiseProfiler';
 import { Save, RefreshCw, Download, Upload, Info, Pencil, X, Check, Bell, BellOff, HardDrive, ArrowUpCircle } from 'lucide-react';
 import { useConfirm } from '@/components/ui/ConfirmDialog';
 import { useToast } from '@/components/ui/ToastProvider';
@@ -1899,6 +1900,9 @@ export function SettingsPage() {
           )}
         </div>
       )}
+
+      {/* Noise Profiler */}
+      <NoiseProfiler />
 
       {/* Help */}
       <div className="card p-4 flex items-start gap-3 animate-card-enter" style={{ background: 'var(--accent-muted)' }}>

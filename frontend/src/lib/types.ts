@@ -504,3 +504,17 @@ export interface UpdateApplyResult {
   message?: string;
   command?: string;
 }
+
+export interface NoiseDataPoint {
+  rpm: number;
+  db: number;
+}
+
+export interface NoiseProfile {
+  id: string;
+  fan_id: string;
+  mode: 'quick' | 'precise';
+  data: NoiseDataPoint[];
+  created_at: string;
+  updated_at: string;
+}

@@ -639,4 +639,26 @@ export const api = {
     delete: (id: string) =>
       fetchAPI<{ success: boolean }>(`/api/virtual-sensors/${id}`, { method: 'DELETE' }),
   },
+
+  // Noise Profiles
+  noiseProfiles: {
+    list: () =>
+      fetchAPI<{ profiles: import('./types').NoiseProfile[] }>('/api/noise-profiles'),
+    get: (id: string) =>
+      fetchAPI<import('./types').NoiseProfile>(`/api/noise-profiles/${encodeURIComponent(id)}`),
+    create: (body: { fan_id: string; mode: string; data: import('./types').NoiseDataPoint[] }) =>
+      fetchAPI<import('./types').NoiseProfile>('/api/noise-profiles', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    delete: (id: string) =>
+      fetchAPI<void>(`/api/noise-profiles/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  },
+
+  // Manual fan speed (used by noise profiler sweep)
+  setFanSpeed: (fanId: string, percent: number) =>
+    fetchAPI<{ success: boolean; fan_id: string; speed: number }>('/api/fans/speed', {
+      method: 'POST',
+      body: JSON.stringify({ fan_id: fanId, speed: percent }),
+    }),
 };
