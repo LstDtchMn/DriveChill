@@ -58,6 +58,7 @@ from app.services.temperature_target_service import TemperatureTargetService
 from app.services.virtual_sensor_service import VirtualSensorDef, VirtualSensorService
 from app.services.report_scheduler_service import ReportSchedulerService
 from app.mqtt_telemetry import create_telemetry_publisher
+from app.services.mqtt_command_handler import create_mqtt_command_handler
 
 logger = logging.getLogger(__name__)
 
@@ -266,6 +267,12 @@ async def lifespan(app: FastAPI):
         create_telemetry_publisher(sensor_service, notification_channel_svc)
     )
 
+    mqtt_cmd_task = asyncio.create_task(
+        create_mqtt_command_handler(
+            notification_channel_svc, backend, fan_service, profile_repo
+        )
+    )
+
     drive_monitor = DriveMonitorService(db, settings_repo)
     drive_monitor.set_sensor_service(sensor_service)
     drive_monitor.set_smart_trend_service(smart_trend_svc)
@@ -423,6 +430,7 @@ async def lifespan(app: FastAPI):
     auth_cleanup_task.cancel()
     retention_prune_task.cancel()
     telemetry_task.cancel()
+    mqtt_cmd_task.cancel()
     try:
         await log_task
     except asyncio.CancelledError:
@@ -437,6 +445,10 @@ async def lifespan(app: FastAPI):
         pass
     try:
         await asyncio.wait_for(telemetry_task, timeout=2.0)
+    except (asyncio.CancelledError, asyncio.TimeoutError):
+        pass
+    try:
+        await asyncio.wait_for(mqtt_cmd_task, timeout=2.0)
     except (asyncio.CancelledError, asyncio.TimeoutError):
         pass
 

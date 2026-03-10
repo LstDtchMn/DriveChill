@@ -196,6 +196,8 @@ internal static class Program
         builder.Services.AddHostedService<SensorWorker>();
         // Background worker: drive monitoring (polls smartctl, publishes hdd_temp sensors)
         builder.Services.AddHostedService<DriveMonitorWorker>();
+        // Background worker: subscribes to MQTT command topics for external control
+        builder.Services.AddHostedService<MqttCommandHandler>();
 
         // CORS for Next.js dev server.
         // AllowCredentials() is required for session cookies to be forwarded on
