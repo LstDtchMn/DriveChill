@@ -375,6 +375,24 @@ class AuthService:
         )
         await self._db.commit()
 
+    # --- Session creation ---
+
+    async def _create_session(self, user_id: int, ip: str, user_agent: str) -> tuple[str, str]:
+        """Create a new session and return (session_token, csrf_token)."""
+        session_token = secrets.token_hex(32)
+        csrf_token = secrets.token_hex(32)
+        now = datetime.now(timezone.utc)
+        expires_at = now + timedelta(seconds=self._session_ttl)
+        await self._db.execute(
+            "INSERT INTO sessions (token, user_id, csrf_token, created_at, "
+            "last_active, expires_at, ip_address, user_agent) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (session_token, user_id, csrf_token, now.isoformat(),
+             now.isoformat(), expires_at.isoformat(), ip, user_agent),
+        )
+        await self._db.commit()
+        return session_token, csrf_token
+
     # --- Login ---
 
     async def login(
@@ -400,19 +418,7 @@ class AuthService:
 
         # Success
         await self._clear_failed_attempts(user["id"])
-        session_token = secrets.token_hex(32)  # 32 bytes = 64 hex chars
-        csrf_token = secrets.token_hex(32)
-        now = datetime.now(timezone.utc)
-        expires_at = now + timedelta(seconds=self._session_ttl)
-
-        await self._db.execute(
-            "INSERT INTO sessions (token, user_id, csrf_token, created_at, "
-            "last_active, expires_at, ip_address, user_agent) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (session_token, user["id"], csrf_token, now.isoformat(),
-             now.isoformat(), expires_at.isoformat(), ip, user_agent),
-        )
-        await self._db.commit()
+        session_token, csrf_token = await self._create_session(user["id"], ip, user_agent)
         await self._log_auth_event("login_success", ip, username, "success", None)
         return session_token, csrf_token
 

@@ -34,6 +34,11 @@ class ChangePasswordRequest(BaseModel):
     password: str = Field(min_length=8, max_length=256)
 
 
+class SelfPasswordChangeRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8, max_length=256)
+
+
 class CreateApiKeyRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     scopes: list[str] | None = Field(default=None, max_length=32)
@@ -235,6 +240,54 @@ async def revoke_api_key(key_id: str, request: Request):
     await auth_service._log_auth_event(
         "api_key_revoked", ip, None, "success",
         f"key_id={key_id}",
+    )
+    return {"success": True}
+
+
+# ── Self-service password change ────────────────────────────────────────────
+
+@router.post("/me/password", dependencies=[Depends(require_auth), Depends(require_csrf)])
+async def change_my_password(body: SelfPasswordChangeRequest, request: Request, response: Response):
+    """Change the current user's own password. Rotates session token on success."""
+    auth_service = request.app.state.auth_service
+    session_token = request.cookies.get("drivechill_session")
+    session = await auth_service.validate_session(session_token)
+    if not session:
+        raise HTTPException(status_code=401, detail="Invalid session")
+
+    user = await auth_service.get_user(session["username"])
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if not auth_service.verify_password(body.current_password, user["password_hash"]):
+        raise HTTPException(status_code=403, detail="Current password is incorrect")
+
+    pw_hash = auth_service.hash_password(body.new_password)
+    await auth_service._db.execute(
+        "UPDATE users SET password_hash = ?, updated_at = datetime('now') WHERE id = ?",
+        (pw_hash, user["id"]),
+    )
+    await auth_service._db.commit()
+
+    # Invalidate ALL sessions for this user (including the current one)
+    await auth_service._db.execute(
+        "DELETE FROM sessions WHERE user_id = ?", (user["id"],)
+    )
+    await auth_service._db.commit()
+
+    # Issue a fresh session so the client stays logged in
+    ip = request.client.host if request.client else "unknown"
+    new_session_token, new_csrf_token = await auth_service._create_session(
+        user["id"], ip, request.headers.get("user-agent", ""),
+    )
+
+    await auth_service._log_auth_event(
+        "self_password_changed", ip, user["username"], "success", "",
+    )
+
+    _set_session_cookies(
+        response, new_session_token, new_csrf_token,
+        secure=_is_secure_request(request),
     )
     return {"success": True}
 
