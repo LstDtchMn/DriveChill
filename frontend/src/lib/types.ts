@@ -478,7 +478,7 @@ export interface VirtualSensorRequest {
 
 // ─── Notification Channels ────────────────────────────────────────────────────
 
-export type NotificationChannelType = 'discord' | 'slack' | 'ntfy' | 'generic_webhook';
+export type NotificationChannelType = 'discord' | 'slack' | 'ntfy' | 'generic_webhook' | 'mqtt';
 
 export interface NotificationChannel {
   id: string;

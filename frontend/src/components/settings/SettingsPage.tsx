@@ -8,7 +8,8 @@ import { useSettingsStore } from '@/stores/settingsStore';
 import { useSensors } from '@/hooks/useSensors';
 import type { TempUnit } from '@/lib/tempUnit';
 import { requestNotificationPermission } from '@/hooks/useNotifications';
-import type { ApiKeyInfo, DriveSettings, MachineInfo, WebhookConfig, WebhookDelivery, PushSubscription, EmailNotificationSettings, NotificationChannel, NotificationChannelType } from '@/lib/types';
+import type { ApiKeyInfo, DriveSettings, MachineInfo, WebhookConfig, WebhookDelivery, PushSubscription, EmailNotificationSettings } from '@/lib/types';
+import { NotificationChannelForm } from './NotificationChannelForm';
 import { Save, RefreshCw, Download, Upload, Info, Pencil, X, Check, Bell, BellOff, HardDrive, ArrowUpCircle } from 'lucide-react';
 import { useConfirm } from '@/components/ui/ConfirmDialog';
 import { useToast } from '@/components/ui/ToastProvider';
@@ -83,16 +84,6 @@ export function SettingsPage() {
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<Record<string, number> | null>(null);
 
-  // Notification channels
-  const [notifChannels, setNotifChannels] = useState<NotificationChannel[]>([]);
-  const [ncName, setNcName] = useState('');
-  const [ncType, setNcType] = useState<NotificationChannelType>('discord');
-  const [ncEnabled, setNcEnabled] = useState(true);
-  const [ncConfig, setNcConfig] = useState('');
-  const [ncEditId, setNcEditId] = useState<string | null>(null);
-  const [ncBusy, setNcBusy] = useState(false);
-  const [ncTestingId, setNcTestingId] = useState<string | null>(null);
-
   // Virtual sensors
   const [virtualSensors, setVirtualSensors] = useState<import('@/lib/types').VirtualSensor[]>([]);
   const [vsName, setVsName] = useState('');
@@ -103,10 +94,6 @@ export function SettingsPage() {
   const [vsOffset, setVsOffset] = useState('0');
   const [vsEditId, setVsEditId] = useState<string | null>(null);
   const [vsBusy, setVsBusy] = useState(false);
-
-  useEffect(() => {
-    api.notificationChannels.list().then(r => setNotifChannels(r.channels)).catch(() => {});
-  }, []);
 
   useEffect(() => {
     api.virtualSensors.list().then(r => setVirtualSensors(r.virtual_sensors)).catch(() => {});
@@ -1562,166 +1549,7 @@ export function SettingsPage() {
       </div>
 
       {/* Notification Channels */}
-      <div className="card p-6 animate-card-enter">
-        <h3 className="text-base font-semibold mb-4" style={{ color: 'var(--text)' }}>Notification Channels</h3>
-        <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
-          Send alert notifications to Discord, Slack, ntfy.sh, or a generic webhook endpoint.
-          Channels are used alongside existing push/email notifications.
-        </p>
-
-        {/* Existing channels list */}
-        {notifChannels.length > 0 && (
-          <div className="space-y-2 mb-4">
-            {notifChannels.map(ch => (
-              <div key={ch.id} className="flex items-center justify-between p-3 rounded text-xs"
-                style={{ background: 'var(--surface-200)', color: 'var(--text)' }}>
-                <div className="flex-1 min-w-0">
-                  <div className="font-medium flex items-center gap-2">
-                    {ch.name}
-                    <span className="badge" style={{ fontSize: '0.65rem' }}>{ch.type.replace('_', ' ')}</span>
-                    {ch.enabled
-                      ? <span className="badge badge-success" style={{ fontSize: '0.6rem' }}>ON</span>
-                      : <span className="badge badge-danger" style={{ fontSize: '0.6rem' }}>OFF</span>}
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 ml-2 shrink-0">
-                  <button className="btn-secondary text-xs px-2 py-1"
-                    disabled={ncTestingId === ch.id}
-                    onClick={async () => {
-                      setNcTestingId(ch.id);
-                      try {
-                        const r = await api.notificationChannels.test(ch.id);
-                        if (r.success) toast('Test notification sent!');
-                        else toast(r.error || 'Test failed.', 'error');
-                      } catch (err: any) {
-                        toast(err?.message || 'Test failed.', 'error');
-                      } finally {
-                        setNcTestingId(null);
-                      }
-                    }}>
-                    {ncTestingId === ch.id ? '...' : 'Test'}
-                  </button>
-                  {isAdmin && (
-                    <>
-                      <button className="btn-secondary text-xs px-2 py-1"
-                        onClick={() => {
-                          setNcEditId(ch.id);
-                          setNcName(ch.name);
-                          setNcType(ch.type);
-                          setNcEnabled(ch.enabled);
-                          setNcConfig(JSON.stringify(ch.config, null, 2));
-                        }}>
-                        <Pencil size={12} />
-                      </button>
-                      <button className="btn-secondary text-xs px-2 py-1"
-                        style={{ color: 'var(--danger)' }}
-                        onClick={async () => {
-                          const confirmed = await confirm(`Delete channel "${ch.name}"?`);
-                          if (!confirmed) return;
-                          try {
-                            await api.notificationChannels.delete(ch.id);
-                            setNotifChannels(prev => prev.filter(c => c.id !== ch.id));
-                            toast('Channel deleted.');
-                          } catch (err: any) {
-                            toast(err?.message || 'Delete failed.', 'error');
-                          }
-                        }}>
-                        <X size={12} />
-                      </button>
-                    </>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Create/Edit form — admin only */}
-        {isAdmin && (
-          <div className="space-y-3 p-4 rounded" style={{ background: 'var(--surface-200)' }}>
-            <div className="text-xs font-medium" style={{ color: 'var(--text)' }}>
-              {ncEditId ? 'Edit Channel' : 'Add Channel'}
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs block mb-1" style={{ color: 'var(--text-secondary)' }}>Name</label>
-                <input className="w-full p-2 rounded text-xs" style={{ background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)' }}
-                  value={ncName} onChange={e => setNcName(e.target.value)} placeholder="My Discord Alert" />
-              </div>
-              <div>
-                <label className="text-xs block mb-1" style={{ color: 'var(--text-secondary)' }}>Type</label>
-                <select className="w-full p-2 rounded text-xs" style={{ background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)' }}
-                  value={ncType} onChange={e => setNcType(e.target.value as NotificationChannelType)}
-                  disabled={!!ncEditId}>
-                  <option value="discord">Discord</option>
-                  <option value="slack">Slack</option>
-                  <option value="ntfy">ntfy.sh</option>
-                  <option value="generic_webhook">Generic Webhook</option>
-                </select>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <input type="checkbox" id="nc-enabled" checked={ncEnabled} onChange={e => setNcEnabled(e.target.checked)} />
-              <label htmlFor="nc-enabled" className="text-xs" style={{ color: 'var(--text-secondary)' }}>Enabled</label>
-            </div>
-            <div>
-              <label className="text-xs block mb-1" style={{ color: 'var(--text-secondary)' }}>
-                Config (JSON)
-                <span style={{ opacity: 0.6, marginLeft: 4 }}>
-                  {ncType === 'discord' && '— { "webhook_url": "https://discord.com/api/webhooks/..." }'}
-                  {ncType === 'slack' && '— { "webhook_url": "https://hooks.slack.com/services/..." }'}
-                  {ncType === 'ntfy' && '— { "topic": "my-alerts", "url": "https://ntfy.sh" }'}
-                  {ncType === 'generic_webhook' && '— { "url": "https://...", "hmac_secret": "optional" }'}
-                </span>
-              </label>
-              <textarea className="w-full p-2 rounded text-xs font-mono" rows={4}
-                style={{ background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', resize: 'vertical' }}
-                value={ncConfig} onChange={e => setNcConfig(e.target.value)}
-                placeholder={ncType === 'discord' ? '{ "webhook_url": "" }' :
-                  ncType === 'slack' ? '{ "webhook_url": "" }' :
-                  ncType === 'ntfy' ? '{ "topic": "", "url": "https://ntfy.sh" }' :
-                  '{ "url": "" }'} />
-            </div>
-            <div className="flex gap-2">
-              <button className="btn-primary text-xs px-4 py-2" disabled={ncBusy || !ncName.trim()}
-                onClick={async () => {
-                  let config: Record<string, unknown>;
-                  try {
-                    config = ncConfig.trim() ? JSON.parse(ncConfig) : {};
-                  } catch {
-                    toast('Config must be valid JSON.', 'error');
-                    return;
-                  }
-                  setNcBusy(true);
-                  try {
-                    if (ncEditId) {
-                      await api.notificationChannels.update(ncEditId, { name: ncName.trim(), enabled: ncEnabled, config });
-                      toast('Channel updated.');
-                    } else {
-                      await api.notificationChannels.create({ type: ncType, name: ncName.trim(), enabled: ncEnabled, config });
-                      toast('Channel created.');
-                    }
-                    const r = await api.notificationChannels.list();
-                    setNotifChannels(r.channels);
-                    setNcEditId(null); setNcName(''); setNcType('discord'); setNcEnabled(true); setNcConfig('');
-                  } catch (err: any) {
-                    toast(err?.message || 'Save failed.', 'error');
-                  } finally {
-                    setNcBusy(false);
-                  }
-                }}>
-                {ncBusy ? 'Saving...' : ncEditId ? 'Update' : 'Create'}
-              </button>
-              {ncEditId && (
-                <button className="btn-secondary text-xs px-4 py-2"
-                  onClick={() => { setNcEditId(null); setNcName(''); setNcType('discord'); setNcEnabled(true); setNcConfig(''); }}>
-                  Cancel
-                </button>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
+      <NotificationChannelForm isAdmin={isAdmin} toast={toast} confirm={confirm} />
 
       {/* Virtual Sensors */}
       <div className="card p-6 animate-card-enter">
