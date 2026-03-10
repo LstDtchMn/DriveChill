@@ -10,7 +10,8 @@ import { CoolingScore } from './CoolingScore';
 import { TrendChart } from './TrendChart';
 import { PeriodComparison } from './PeriodComparison';
 import { NoiseAdvisor } from './NoiseAdvisor';
-import type { AnalyticsStat, AnalyticsAnomaly, AnalyticsBucket, ThermalRegression, AnalyticsCorrelationSample } from '@/lib/types';
+import { useCanWrite } from '@/hooks/useCanWrite';
+import type { AnalyticsStat, AnalyticsAnomaly, AnalyticsBucket, ThermalRegression, AnalyticsCorrelationSample, Annotation } from '@/lib/types';
 
 const TIME_OPTIONS = [
   { label: '1h',  hours: 1 },
@@ -100,6 +101,12 @@ export function AnalyticsPage() {
   const [regressions, setRegressions] = useState<ThermalRegression[] | null>(null);
   const [retentionLimited, setRetentionLimited] = useState(false);
 
+  const [annotations, setAnnotations] = useState<Annotation[]>([]);
+  const [showAnnotationForm, setShowAnnotationForm] = useState(false);
+  const [annTimestamp, setAnnTimestamp] = useState('');
+  const [annLabel, setAnnLabel] = useState('');
+  const [annDescription, setAnnDescription] = useState('');
+
   const [loading, setLoading]       = useState(false);
   const [error, setError]           = useState<string | null>(null);
 
@@ -109,6 +116,7 @@ export function AnalyticsPage() {
   const [corrResult, setCorrResult] = useState<{ coeff: number; samples: AnalyticsCorrelationSample[]; count: number } | null>(null);
   const [corrLoading, setCorrLoading] = useState(false);
 
+  const canWrite = useCanWrite();
   const { tempUnit } = useSettingsStore();
 
   const fmt = useCallback<FmtFn>((v, unit) => {
@@ -144,14 +152,16 @@ export function AnalyticsPage() {
       api.analytics.getAnomalies(hours, 3.0, opts),
       api.analytics.getHistory(hours, undefined, undefined, opts),
       api.analytics.getRegression(30, Math.min(hours, 168), 5.0, opts),
+      api.annotations.list(opts.start, opts.end),
     ])
-      .then(([sR, aR, hR, rR]) => {
+      .then(([sR, aR, hR, rR, annR]) => {
         if (cancelled) return;
         setStats(sR.stats);
         setAnomalies(aR.anomalies);
         setHistory(hR.buckets);
         setRegressions(rR.regressions);
         setRetentionLimited(hR.retention_limited);
+        setAnnotations(annR);
       })
       .catch(() => { if (!cancelled) setError('Failed to load analytics data.'); })
       .finally(() => { if (!cancelled) setLoading(false); });
@@ -167,6 +177,29 @@ export function AnalyticsPage() {
       setCorrResult({ coeff: r.correlation_coefficient, samples: r.samples, count: r.sample_count });
     } catch { /* ignore */ }
     finally { setCorrLoading(false); }
+  };
+
+  const handleCreateAnnotation = async () => {
+    if (!annTimestamp || !annLabel.trim()) return;
+    try {
+      const created = await api.annotations.create({
+        timestamp_utc: new Date(annTimestamp).toISOString(),
+        label: annLabel.trim(),
+        description: annDescription.trim() || undefined,
+      });
+      setAnnotations((prev) => [created, ...prev]);
+      setAnnTimestamp('');
+      setAnnLabel('');
+      setAnnDescription('');
+      setShowAnnotationForm(false);
+    } catch { /* ignore */ }
+  };
+
+  const handleDeleteAnnotation = async (id: string) => {
+    try {
+      await api.annotations.delete(id);
+      setAnnotations((prev) => prev.filter((a) => a.id !== id));
+    } catch { /* ignore */ }
   };
 
   const toggleSensor = (id: string) => {
@@ -444,7 +477,58 @@ export function AnalyticsPage() {
 
       {/* Section 4: Temperature History — interactive trend charts */}
       <div>
-        <h3 className="section-title mb-3">Temperature History</h3>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="section-title" style={{ marginBottom: 0 }}>Temperature History</h3>
+          {canWrite && (
+            <button
+              onClick={() => setShowAnnotationForm(!showAnnotationForm)}
+              className="btn-secondary text-xs"
+              style={{ minHeight: 28 }}
+            >
+              {showAnnotationForm ? 'Cancel' : '+ Add Annotation'}
+            </button>
+          )}
+        </div>
+        {showAnnotationForm && (
+          <div className="card p-4 mb-4 space-y-3 animate-fade-in" style={{ borderColor: 'var(--warning)' }}>
+            <p className="text-xs font-semibold" style={{ color: 'var(--warning)' }}>New Annotation</p>
+            <div className="flex items-center gap-3 flex-wrap">
+              <input
+                type="datetime-local"
+                value={annTimestamp}
+                onChange={(e) => setAnnTimestamp(e.target.value)}
+                className="text-xs px-2 py-1 rounded"
+                style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', color: 'var(--text)', minHeight: 32 }}
+                placeholder="Timestamp"
+              />
+              <input
+                type="text"
+                value={annLabel}
+                onChange={(e) => setAnnLabel(e.target.value)}
+                placeholder="Label (e.g. 'Repasted CPU')"
+                className="text-xs px-2 py-1 rounded"
+                style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', color: 'var(--text)', minHeight: 32, minWidth: 200, flex: 1 }}
+                maxLength={200}
+              />
+            </div>
+            <input
+              type="text"
+              value={annDescription}
+              onChange={(e) => setAnnDescription(e.target.value)}
+              placeholder="Description (optional)"
+              className="text-xs px-2 py-1 rounded"
+              style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', color: 'var(--text)', minHeight: 32, width: '100%' }}
+            />
+            <button
+              onClick={handleCreateAnnotation}
+              disabled={!annTimestamp || !annLabel.trim()}
+              className="btn-primary text-xs"
+              style={{ minHeight: 28 }}
+            >
+              Save Annotation
+            </button>
+          </div>
+        )}
         {Object.keys(tempBuckets).length === 0 ? (
           <div className="card p-6 text-center"><p className="text-sm" style={{ color: 'var(--text-secondary)' }}>No history data.</p></div>
         ) : (
@@ -458,6 +542,8 @@ export function AnalyticsPage() {
                   sensorName={bkts[0].sensor_name}
                   unit={bkts[0].unit}
                   fmt={fmt}
+                  annotations={annotations}
+                  onDeleteAnnotation={canWrite ? handleDeleteAnnotation : undefined}
                 />
               </div>
             ))}

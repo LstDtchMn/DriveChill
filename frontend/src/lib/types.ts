@@ -519,6 +519,16 @@ export interface NoiseProfile {
   updated_at: string;
 }
 
+// ─── Event Annotations ────────────────────────────────────────────────────
+
+export interface Annotation {
+  id: string;
+  timestamp_utc: string;
+  label: string;
+  description?: string;
+  created_at: string;
+}
+
 // ─── Report Schedules ─────────────────────────────────────────────────────────
 
 export interface ReportSchedule {

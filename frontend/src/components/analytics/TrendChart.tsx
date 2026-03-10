@@ -2,7 +2,7 @@
 
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { lttbDownsample, type DataPoint } from '@/lib/downsample';
-import type { AnalyticsBucket } from '@/lib/types';
+import type { AnalyticsBucket, Annotation } from '@/lib/types';
 
 export interface TrendChartProps {
   buckets: AnalyticsBucket[];
@@ -10,6 +10,8 @@ export interface TrendChartProps {
   sensorName: string;
   unit: string;
   fmt: (v: number, unit: string) => string;
+  annotations?: Annotation[];
+  onDeleteAnnotation?: (id: string) => void;
 }
 
 const PAD = { top: 16, right: 16, bottom: 32, left: 52 };
@@ -39,7 +41,7 @@ interface TooltipState {
   epoch: number;
 }
 
-export function TrendChart({ buckets, sensorId: _sensorId, unit, fmt }: TrendChartProps) {
+export function TrendChart({ buckets, sensorId: _sensorId, unit, fmt, annotations, onDeleteAnnotation }: TrendChartProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [svgWidth, setSvgWidth] = useState(600);
@@ -50,6 +52,7 @@ export function TrendChart({ buckets, sensorId: _sensorId, unit, fmt }: TrendCha
   const [dragStart, setDragStart] = useState<number | null>(null); // SVG x px
   const [dragEnd, setDragEnd] = useState<number | null>(null);     // SVG x px
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
+  const [activeAnnotationId, setActiveAnnotationId] = useState<string | null>(null);
 
   // Observe container width
   useEffect(() => {
@@ -282,6 +285,14 @@ export function TrendChart({ buckets, sensorId: _sensorId, unit, fmt }: TrendCha
     setTooltip(null);
   };
 
+  // Visible annotations within current range
+  const visibleAnnotations = useMemo(() => {
+    if (!annotations || annotations.length === 0 || pts.length === 0) return [];
+    return annotations
+      .map((a) => ({ ...a, epoch: new Date(a.timestamp_utc).getTime() }))
+      .filter((a) => a.epoch >= xMin && a.epoch <= xMax);
+  }, [annotations, pts.length, xMin, xMax]);
+
   const dragRectLeft   = dragStart !== null && dragEnd !== null ? Math.min(dragStart, dragEnd) : 0;
   const dragRectWidth  = dragStart !== null && dragEnd !== null ? Math.abs(dragEnd - dragStart) : 0;
   const isDragging     = dragStart !== null && dragRectWidth > 2;
@@ -386,6 +397,24 @@ export function TrendChart({ buckets, sensorId: _sensorId, unit, fmt }: TrendCha
         <line x1={PAD.left} y1={PAD.top} x2={PAD.left} y2={PAD.top + innerH} stroke="var(--border)" strokeWidth="1" />
         <line x1={PAD.left} y1={PAD.top + innerH} x2={PAD.left + innerW} y2={PAD.top + innerH} stroke="var(--border)" strokeWidth="1" />
 
+        {/* Annotation markers */}
+        {visibleAnnotations.map((a) => {
+          const ax = toSvgX(a.epoch);
+          return (
+            <g key={a.id} style={{ cursor: 'pointer' }} onClick={(e) => { e.stopPropagation(); setActiveAnnotationId(activeAnnotationId === a.id ? null : a.id); }}>
+              <line
+                x1={ax} y1={PAD.top}
+                x2={ax} y2={PAD.top + innerH}
+                stroke="var(--warning)" strokeWidth="1" strokeDasharray="5,3" opacity="0.7"
+              />
+              <polygon
+                points={`${ax},${PAD.top - 2} ${ax - 5},${PAD.top - 9} ${ax},${PAD.top - 16} ${ax + 5},${PAD.top - 9}`}
+                fill="var(--warning)" stroke="var(--card-bg)" strokeWidth="1"
+              />
+            </g>
+          );
+        })}
+
         {/* Drag selection rectangle */}
         {isDragging && (
           <rect
@@ -445,6 +474,64 @@ export function TrendChart({ buckets, sensorId: _sensorId, unit, fmt }: TrendCha
             <div style={{ color: 'var(--text-secondary)' }}>
               Min: {fmt(tooltip.min, unit)} / Max: {fmt(tooltip.max, unit)}
             </div>
+          </div>
+        );
+      })()}
+
+      {/* Annotation tooltip */}
+      {activeAnnotationId && (() => {
+        const a = visibleAnnotations.find((ann) => ann.id === activeAnnotationId);
+        if (!a) return null;
+        const ax = toSvgX(a.epoch);
+        const tipW = 180;
+        const margin = 8;
+        const tipX = ax + tipW + margin > svgWidth ? ax - tipW - margin : ax + margin;
+        return (
+          <div
+            style={{
+              position: 'absolute',
+              left: tipX,
+              top: PAD.top,
+              background: 'var(--card-bg)',
+              border: '1px solid var(--warning)',
+              borderRadius: 6,
+              padding: '8px 12px',
+              fontSize: 11,
+              lineHeight: 1.6,
+              zIndex: 20,
+              boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
+              minWidth: tipW,
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+              <div style={{ color: 'var(--warning)', fontWeight: 700, fontSize: 13 }}>{a.label}</div>
+              <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                {onDeleteAnnotation && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onDeleteAnnotation(a.id); setActiveAnnotationId(null); }}
+                    style={{
+                      background: 'none', border: 'none', cursor: 'pointer',
+                      color: 'var(--danger)', fontSize: 14, lineHeight: 1, padding: '0 2px',
+                    }}
+                    title="Delete annotation"
+                  >
+                    ×
+                  </button>
+                )}
+                <button
+                  onClick={(e) => { e.stopPropagation(); setActiveAnnotationId(null); }}
+                  style={{
+                    background: 'none', border: 'none', cursor: 'pointer',
+                    color: 'var(--text-secondary)', fontSize: 14, lineHeight: 1, padding: '0 2px',
+                  }}
+                  title="Close"
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+            {a.description && <div style={{ color: 'var(--text)', marginTop: 2 }}>{a.description}</div>}
+            <div style={{ color: 'var(--text-secondary)', marginTop: 4 }}>{new Date(a.epoch).toLocaleString()}</div>
           </div>
         );
       })()}

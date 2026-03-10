@@ -655,6 +655,24 @@ export const api = {
       fetchAPI<void>(`/api/noise-profiles/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   },
 
+  // Annotations
+  annotations: {
+    list: (start?: string, end?: string) => {
+      const p = new URLSearchParams();
+      if (start) p.set('start', start);
+      if (end) p.set('end', end);
+      const qs = p.toString();
+      return fetchAPI<import('./types').Annotation[]>(`/api/annotations${qs ? `?${qs}` : ''}`);
+    },
+    create: (data: { timestamp_utc: string; label: string; description?: string }) =>
+      fetchAPI<import('./types').Annotation>('/api/annotations', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    delete: (id: string) =>
+      fetchAPI<void>(`/api/annotations/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  },
+
   // Report Schedules
   reportSchedules: {
     list: () =>
