@@ -8,6 +8,14 @@ import { api, getWsUrl } from '@/lib/api';
 const WS_URL = getWsUrl();
 const RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 15000];
 
+let _globalWsRef: WebSocket | null = null;
+
+export function closeWebSocket() {
+  if (_globalWsRef && _globalWsRef.readyState === WebSocket.OPEN) {
+    _globalWsRef.close();
+  }
+}
+
 export function useWebSocket(enabled = true) {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectAttempt = useRef(0);
@@ -56,6 +64,7 @@ export function useWebSocket(enabled = true) {
     try {
       const ws = new WebSocket(WS_URL);
       wsRef.current = ws;
+      _globalWsRef = ws;
 
       ws.onopen = async () => {
         setConnected(true);
@@ -108,6 +117,7 @@ export function useWebSocket(enabled = true) {
       };
 
       ws.onclose = () => {
+        _globalWsRef = null;
         setConnected(false);
         setBackendName('Disconnected');
         // Only reconnect if still enabled — prevents reconnect churn

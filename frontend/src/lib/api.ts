@@ -172,6 +172,11 @@ export const authApi = {
     }),
   status: () =>
     fetchAPI<{ auth_enabled: boolean }>('/api/auth/status'),
+  changeMyPassword: (currentPassword: string, newPassword: string) =>
+    fetchAPI<{ success: boolean }>('/api/auth/me/password', {
+      method: 'POST',
+      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+    }),
 };
 
 export const api = {

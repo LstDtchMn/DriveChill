@@ -6,6 +6,7 @@ import { useAuthStore } from '@/stores/authStore';
 import { useAppStore } from '@/stores/appStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useSensors } from '@/hooks/useSensors';
+import { closeWebSocket } from '@/hooks/useWebSocket';
 import type { TempUnit } from '@/lib/tempUnit';
 import { requestNotificationPermission } from '@/hooks/useNotifications';
 import type { ApiKeyInfo, DriveSettings, MachineInfo, WebhookConfig, WebhookDelivery, PushSubscription, EmailNotificationSettings } from '@/lib/types';
@@ -83,6 +84,10 @@ export function SettingsPage() {
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<Record<string, number> | null>(null);
+
+  const [myCurrentPw, setMyCurrentPw] = useState('');
+  const [myNewPw, setMyNewPw] = useState('');
+  const [myPwBusy, setMyPwBusy] = useState(false);
 
   // Virtual sensors
   const [virtualSensors, setVirtualSensors] = useState<import('@/lib/types').VirtualSensor[]>([]);
@@ -1149,6 +1154,60 @@ export function SettingsPage() {
           ))}
         </div>
       </div>}
+
+      {/* Change My Password */}
+      <div className="card p-6 animate-card-enter">
+        <h3 className="text-base font-semibold mb-4" style={{ color: 'var(--text)' }}>
+          Change My Password
+        </h3>
+        <div className="space-y-3">
+          <input
+            type="password"
+            value={myCurrentPw}
+            onChange={(e) => setMyCurrentPw(e.target.value)}
+            placeholder="Current password"
+            className="w-full px-3 py-2 rounded-lg text-sm border outline-none"
+            style={{ background: 'var(--bg)', borderColor: 'var(--border)', color: 'var(--text)' }}
+          />
+          <input
+            type="password"
+            value={myNewPw}
+            onChange={(e) => setMyNewPw(e.target.value)}
+            placeholder="New password (min 8 chars)"
+            className="w-full px-3 py-2 rounded-lg text-sm border outline-none"
+            style={{ background: 'var(--bg)', borderColor: 'var(--border)', color: 'var(--text)' }}
+          />
+          <button
+            className="btn-primary text-xs px-4 py-2"
+            disabled={myPwBusy || !myCurrentPw || myNewPw.length < 8}
+            onClick={async () => {
+              setMyPwBusy(true);
+              try {
+                await authApi.changeMyPassword(myCurrentPw, myNewPw);
+                toast('Password changed successfully.');
+                setMyCurrentPw('');
+                setMyNewPw('');
+                closeWebSocket();
+                const session = await authApi.checkSession();
+                if (session) {
+                  useAuthStore.getState().setAuth(
+                    session.auth_required,
+                    session.authenticated,
+                    session.username,
+                    session.role,
+                  );
+                }
+              } catch (err: any) {
+                toast(err?.message || 'Password change failed.', 'error');
+              } finally {
+                setMyPwBusy(false);
+              }
+            }}
+          >
+            {myPwBusy ? 'Changing...' : 'Change Password'}
+          </button>
+        </div>
+      </div>
 
       {/* User Management (admin only) */}
       {isAdmin && (
