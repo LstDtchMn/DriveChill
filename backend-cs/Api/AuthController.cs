@@ -218,6 +218,9 @@ public sealed class AuthController : ControllerBase
         if (session is null)
             return Unauthorized(new { detail = "Invalid session" });
 
+        if (string.IsNullOrWhiteSpace(req.CurrentPassword))
+            return BadRequest(new { detail = "Current password is required" });
+
         if (string.IsNullOrWhiteSpace(req.NewPassword) || req.NewPassword.Length < 8 || req.NewPassword.Length > 256)
             return BadRequest(new { detail = "New password must be 8-256 characters" });
 
