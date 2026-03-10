@@ -90,6 +90,7 @@ export function SettingsPage() {
 
   const [myCurrentPw, setMyCurrentPw] = useState('');
   const [myNewPw, setMyNewPw] = useState('');
+  const [myConfirmPw, setMyConfirmPw] = useState('');
   const [myPwBusy, setMyPwBusy] = useState(false);
 
   // Virtual sensors
@@ -1166,6 +1167,7 @@ export function SettingsPage() {
         <div className="space-y-3">
           <input
             type="password"
+            autoComplete="current-password"
             value={myCurrentPw}
             onChange={(e) => setMyCurrentPw(e.target.value)}
             placeholder="Current password"
@@ -1174,22 +1176,33 @@ export function SettingsPage() {
           />
           <input
             type="password"
+            autoComplete="new-password"
             value={myNewPw}
             onChange={(e) => setMyNewPw(e.target.value)}
             placeholder="New password (min 8 chars)"
             className="w-full px-3 py-2 rounded-lg text-sm border outline-none"
             style={{ background: 'var(--bg)', borderColor: 'var(--border)', color: 'var(--text)' }}
           />
+          <input
+            type="password"
+            autoComplete="new-password"
+            value={myConfirmPw}
+            onChange={(e) => setMyConfirmPw(e.target.value)}
+            placeholder="Confirm new password"
+            className="w-full px-3 py-2 rounded-lg text-sm border outline-none"
+            style={{ background: 'var(--bg)', borderColor: 'var(--border)', color: 'var(--text)' }}
+          />
+          {myNewPw && myConfirmPw && myNewPw !== myConfirmPw && (
+            <p style={{ color: 'var(--danger)', fontSize: '12px', margin: '2px 0 0' }}>Passwords do not match</p>
+          )}
           <button
             className="btn-primary text-xs px-4 py-2"
-            disabled={myPwBusy || !myCurrentPw || myNewPw.length < 8}
+            disabled={myPwBusy || !myCurrentPw || myNewPw.length < 8 || myNewPw !== myConfirmPw}
             onClick={async () => {
               setMyPwBusy(true);
               try {
                 await authApi.changeMyPassword(myCurrentPw, myNewPw);
                 toast('Password changed successfully.');
-                setMyCurrentPw('');
-                setMyNewPw('');
                 closeWebSocket();
                 const session = await authApi.checkSession();
                 if (session) {
@@ -1203,6 +1216,9 @@ export function SettingsPage() {
               } catch (err: any) {
                 toast(err?.message || 'Password change failed.', 'error');
               } finally {
+                setMyCurrentPw('');
+                setMyNewPw('');
+                setMyConfirmPw('');
                 setMyPwBusy(false);
               }
             }}

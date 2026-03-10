@@ -46,7 +46,7 @@ export function NotificationChannelForm({ isAdmin, toast, confirm }: Notificatio
   const [testingId, setTestingId] = useState<string | null>(null);
 
   useEffect(() => {
-    api.notificationChannels.list().then(r => setChannels(r.channels)).catch(() => {});
+    api.notificationChannels.list().then(r => setChannels(r.channels)).catch(() => toast('Failed to load notification channels.', 'error'));
   }, []);
 
   const resetForm = () => {
@@ -112,7 +112,7 @@ export function NotificationChannelForm({ isAdmin, toast, confirm }: Notificatio
                 </div>
               </div>
               <div className="flex items-center gap-2 ml-2 shrink-0">
-                <button className="btn-secondary text-xs px-2 py-1"
+                {isAdmin && <button className="btn-secondary text-xs px-2 py-1"
                   disabled={testingId === ch.id}
                   onClick={async () => {
                     setTestingId(ch.id);
@@ -127,7 +127,7 @@ export function NotificationChannelForm({ isAdmin, toast, confirm }: Notificatio
                     }
                   }}>
                   {testingId === ch.id ? '...' : 'Test'}
-                </button>
+                </button>}
                 {isAdmin && (
                   <>
                     <button className="btn-secondary text-xs px-2 py-1"

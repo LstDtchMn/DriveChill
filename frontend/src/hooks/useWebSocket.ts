@@ -13,6 +13,7 @@ let _globalWsRef: WebSocket | null = null;
 export function closeWebSocket() {
   if (_globalWsRef && (_globalWsRef.readyState === WebSocket.OPEN || _globalWsRef.readyState === WebSocket.CONNECTING)) {
     _globalWsRef.close();
+    _globalWsRef = null;
   }
 }
 
