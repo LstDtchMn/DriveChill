@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import '../styles/print.css';
 
 export const metadata: Metadata = {
   title: 'DriveChill — Fan Controller',

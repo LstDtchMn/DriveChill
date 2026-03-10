@@ -57,13 +57,20 @@ export function ExportButtons({ hours, customStart, customEnd, selectedSensorIds
     URL.revokeObjectURL(url);
   };
 
+  const handlePdfExport = () => {
+    window.print();
+  };
+
   return (
-    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+    <div className="export-buttons-row" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
       <button onClick={handleCsvExport} className="btn-secondary text-xs" style={{ minHeight: 28 }}>
         Export CSV
       </button>
       <button onClick={handleJsonExport} className="btn-secondary text-xs" style={{ minHeight: 28 }}>
         Export JSON
+      </button>
+      <button onClick={handlePdfExport} className="btn-secondary text-xs" style={{ minHeight: 28 }} title="Print or save as PDF">
+        Export PDF
       </button>
     </div>
   );

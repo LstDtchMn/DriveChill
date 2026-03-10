@@ -232,8 +232,20 @@ export function AnalyticsPage() {
     : 'var(--text-secondary)'
     : 'var(--text)';
 
+  const windowLabel = customStart && customEnd
+    ? `${new Date(customStart).toLocaleDateString()} - ${new Date(customEnd).toLocaleDateString()}`
+    : TIME_OPTIONS.find((o) => o.hours === hours)?.label ?? `${hours}h`;
+
   return (
     <div className="space-y-6 animate-fade-in">
+      {/* Print-only header (hidden on screen, visible when printing) */}
+      <div className="print-header">
+        <h1>DriveChill Analytics Report</h1>
+        <div className="print-meta">
+          Generated: {new Date().toLocaleString()} | Window: {windowLabel}
+        </div>
+      </div>
+
       {/* Time window picker */}
       <div className="space-y-3">
         <div className="flex items-center gap-2 flex-wrap">
@@ -294,7 +306,7 @@ export function AnalyticsPage() {
 
       {/* Sensor filter chips */}
       {allSensorOptions.length > 0 && (
-        <div className="p-3 rounded" style={{ background: 'var(--card-bg)', border: '1px solid var(--border)' }}>
+        <div className="sensor-filter-panel p-3 rounded" style={{ background: 'var(--card-bg)', border: '1px solid var(--border)' }}>
           <p className="text-xs font-medium mb-2" style={{ color: 'var(--text)' }}>
             Sensor Filter
             {selectedSensorIds.length > 0 && (
@@ -476,7 +488,7 @@ export function AnalyticsPage() {
       </div>
 
       {/* Section 4: Temperature History — interactive trend charts */}
-      <div>
+      <div className="print-page-break">
         <div className="flex items-center justify-between mb-3">
           <h3 className="section-title" style={{ marginBottom: 0 }}>Temperature History</h3>
           {canWrite && (
@@ -490,7 +502,7 @@ export function AnalyticsPage() {
           )}
         </div>
         {showAnnotationForm && (
-          <div className="card p-4 mb-4 space-y-3 animate-fade-in" style={{ borderColor: 'var(--warning)' }}>
+          <div className="annotation-form card p-4 mb-4 space-y-3 animate-fade-in" style={{ borderColor: 'var(--warning)' }}>
             <p className="text-xs font-semibold" style={{ color: 'var(--warning)' }}>New Annotation</p>
             <div className="flex items-center gap-3 flex-wrap">
               <input

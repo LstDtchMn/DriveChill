@@ -1,0 +1,140 @@
+/* Print-optimized stylesheet for DriveChill analytics PDF export */
+
+/* Hide print header on screen */
+.print-header {
+  display: none !important;
+}
+
+@media print {
+  /* Hide non-content elements */
+  nav, .sidebar, .mobile-nav, .toast-container,
+  button, input, select,
+  .customize-panel, .btn-primary, .btn-secondary,
+  .viewer-banner, .modal-overlay,
+  .sensor-filter-panel, .annotation-form,
+  .export-buttons-row {
+    display: none !important;
+  }
+
+  /* Allow print-include buttons to remain (not used now, but future-proof) */
+  button.print-include {
+    display: inline-flex !important;
+  }
+
+  /* Reset background for print */
+  body, html, main, .page-content {
+    background: white !important;
+    color: black !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* Remove dark-mode CSS variable overrides for readability */
+  * {
+    color-adjust: exact !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Cards: borders instead of shadows */
+  .card {
+    box-shadow: none !important;
+    border: 1px solid #ddd !important;
+    background: white !important;
+    break-inside: avoid;
+    margin-bottom: 12pt !important;
+  }
+
+  /* Print header — visible only in print */
+  .print-header {
+    display: block !important;
+    text-align: center;
+    border-bottom: 2px solid #333;
+    padding-bottom: 8pt;
+    margin-bottom: 16pt;
+  }
+
+  .print-header h1 {
+    font-size: 18pt;
+    margin: 0;
+    color: #333 !important;
+  }
+
+  .print-header .print-meta {
+    font-size: 9pt;
+    color: #666 !important;
+    margin-top: 4pt;
+  }
+
+  /* SVG charts: darker colors for print */
+  svg text {
+    fill: #333 !important;
+  }
+
+  svg line, svg path {
+    stroke-opacity: 1 !important;
+  }
+
+  /* Remove interactive chart elements */
+  .chart-tooltip, .chart-crosshair, .zoom-controls,
+  .annotation-tooltip {
+    display: none !important;
+  }
+
+  /* Page breaks between major sections */
+  .print-page-break {
+    break-before: page;
+  }
+
+  /* Ensure full width for charts */
+  .analytics-content, .trend-chart-container {
+    width: 100% !important;
+    max-width: none !important;
+  }
+
+  /* Section titles */
+  .section-title {
+    color: #222 !important;
+    font-size: 14pt !important;
+    border-bottom: 1px solid #ccc;
+    padding-bottom: 4pt;
+    margin-bottom: 8pt !important;
+  }
+
+  /* Badges */
+  .badge {
+    border: 1px solid #999 !important;
+    background: transparent !important;
+    color: #333 !important;
+  }
+
+  .badge-danger {
+    border-color: #c00 !important;
+    color: #c00 !important;
+  }
+
+  .badge-warning {
+    border-color: #a60 !important;
+    color: #a60 !important;
+  }
+
+  /* Tables */
+  table {
+    border-collapse: collapse !important;
+  }
+
+  th, td {
+    border-bottom: 1px solid #ddd !important;
+    color: #333 !important;
+  }
+
+  th {
+    font-weight: 700 !important;
+  }
+
+  /* A4 page margins */
+  @page {
+    margin: 15mm;
+    size: A4;
+  }
+}
