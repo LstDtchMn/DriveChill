@@ -298,7 +298,7 @@ internal static class Program
                 if (!_readMethods.Contains(context.Request.Method))
                 {
                     var requestPath = context.Request.Path.Value ?? "";
-                    if (keyMeta.Role != "admin" && requestPath != "/api/auth/logout")
+                    if (keyMeta.Role != "admin" && requestPath is not "/api/auth/logout" and not "/api/auth/me/password")
                     {
                         await Reject(context, 403, "Write access requires admin role");
                         return;
@@ -333,7 +333,7 @@ internal static class Program
                 // Viewer-role sessions are read-only.
                 // Logout is exempt so viewers can always end their own session.
                 var requestPath = context.Request.Path.Value ?? "";
-                if (session.Value.Role != "admin" && requestPath != "/api/auth/logout")
+                if (session.Value.Role != "admin" && requestPath is not "/api/auth/logout" and not "/api/auth/me/password")
                 {
                     await Reject(context, 403, "Write access requires admin role");
                     return;
