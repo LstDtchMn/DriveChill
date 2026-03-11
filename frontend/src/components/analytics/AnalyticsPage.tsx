@@ -89,6 +89,12 @@ function CorrelationScatter({ samples, labelX }: { samples: AnalyticsCorrelation
   );
 }
 
+/**
+ * Analytics dashboard.  Fetches stats, anomalies, history buckets, and thermal
+ * regressions for the selected time window.  Supports custom date ranges,
+ * per-sensor filtering, trend charts with annotations, heatmap, sensor
+ * correlation scatter plots, period comparison, and CSV/JSON export.
+ */
 export function AnalyticsPage() {
   const [hours, setHours] = useState(24);
   const [customStart, setCustomStart] = useState('');

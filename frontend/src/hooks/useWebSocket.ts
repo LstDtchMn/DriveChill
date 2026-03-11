@@ -6,10 +6,16 @@ import type { WSMessage } from '@/lib/types';
 import { api, getWsUrl } from '@/lib/api';
 
 const WS_URL = getWsUrl();
+
+/**
+ * Exponential backoff delays (ms) for WebSocket reconnection attempts.
+ * After exhausting all entries the last value (15s) is reused indefinitely.
+ */
 const RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 15000];
 
 let _globalWsRef: WebSocket | null = null;
 
+/** Imperatively close the singleton WebSocket (e.g. on logout). */
 export function closeWebSocket() {
   if (_globalWsRef && (_globalWsRef.readyState === WebSocket.OPEN || _globalWsRef.readyState === WebSocket.CONNECTING)) {
     _globalWsRef.close();
@@ -17,6 +23,13 @@ export function closeWebSocket() {
   }
 }
 
+/**
+ * Maintains a singleton WebSocket connection to the backend sensor stream.
+ * Dispatches incoming sensor updates, alerts, fan test progress, and safe-mode
+ * status into the Zustand app store.  Reconnects automatically with exponential
+ * backoff (see {@link RECONNECT_DELAYS}).  Pass `enabled = false` to tear down
+ * the connection (e.g. when auth expires).
+ */
 export function useWebSocket(enabled = true) {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectAttempt = useRef(0);

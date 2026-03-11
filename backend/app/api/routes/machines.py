@@ -1,3 +1,5 @@
+"""Machine registry API — CRUD, health checks, and proxied remote commands."""
+
 from __future__ import annotations
 
 import re

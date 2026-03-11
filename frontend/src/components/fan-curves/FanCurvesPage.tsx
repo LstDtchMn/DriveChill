@@ -29,6 +29,7 @@ const COOLING_CURVE_POINTS: FanCurvePoint[] = [
   { temp: 65, speed: 100 },
 ];
 
+/** Extract human-readable warning messages from a 409 "dangerous curve" API error body. */
 function formatDangerWarnings(detail: unknown): string[] {
   if (!detail || typeof detail !== 'object') return [];
   const d = detail as { detail?: { warnings?: Array<{ temp?: number; speed?: number; message?: string }> } };
@@ -39,6 +40,12 @@ function formatDangerWarnings(detail: unknown): string[] {
   });
 }
 
+/**
+ * Fan curve management page.  Shows preset profile selector, custom curve
+ * editor with composite multi-sensor support, and per-fan benchmark panels.
+ * Supports navigation intents from the Drives page ("New cooling curve" and
+ * "Use for cooling") via Zustand store flags.
+ */
 export function FanCurvesPage() {
   const confirm = useConfirm();
   const toast = useToast();

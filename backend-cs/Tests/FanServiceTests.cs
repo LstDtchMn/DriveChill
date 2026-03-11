@@ -206,6 +206,8 @@ public sealed class FanServiceTests : IDisposable
     public async Task ApplyCurves_ZeroRpmCapable_AllowsZero()
     {
         var hw = new StubHardware("fan1");
+        // Disable ramp rate so speed changes are instant (tests run with no elapsed time)
+        _store.FanRampRatePctPerSec = 0;
         var svc = new FanService(hw, _store);
 
         // Curve: 0% at ≤30°C, 100% at 80°C

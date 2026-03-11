@@ -1,3 +1,5 @@
+"""Alert service — monitors sensor readings and fires threshold-based alerts."""
+
 from __future__ import annotations
 
 import asyncio
@@ -145,6 +147,7 @@ class AlertService:
         return list(self._active_alerts)
 
     async def add_rule(self, rule: AlertRule) -> None:
+        """Persist and activate an alert rule, replacing any existing rule with the same ID."""
         await self._persist_rule(rule)
         # Only mutate in-memory state after the DB write succeeds.
         self._rules = [r for r in self._rules if r.id != rule.id]
@@ -173,6 +176,7 @@ class AlertService:
         return found
 
     def set_rules(self, rules: list[AlertRule]) -> None:
+        """Replace all in-memory rules (does not persist to DB)."""
         self._rules = list(rules)
 
     def set_pre_alert_profile(self, profile_id: str) -> None:
@@ -376,6 +380,7 @@ class AlertService:
             )
 
     def clear_events(self) -> None:
+        """Clear all recorded events and reset active alert tracking."""
         self._events.clear()
         self._active_alerts.clear()
         self._suppress_revert = False

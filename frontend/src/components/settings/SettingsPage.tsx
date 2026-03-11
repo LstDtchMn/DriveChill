@@ -37,6 +37,12 @@ function isValidHttpUrl(value: string): boolean {
   }
 }
 
+/**
+ * Application settings page.  Manages polling interval, retention, temp unit,
+ * fan ramp rate, user accounts (RBAC), API keys, webhooks, push/email
+ * notifications, drive monitoring settings, multi-machine hub, profile
+ * schedules, noise profiling, report schedules, and config import/export.
+ */
 export function SettingsPage() {
   const confirm = useConfirm();
   const toast = useToast();

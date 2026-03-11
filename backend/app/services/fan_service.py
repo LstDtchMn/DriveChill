@@ -1,3 +1,5 @@
+"""Fan control service — evaluates curves and manages fan speeds."""
+
 from __future__ import annotations
 
 import asyncio
@@ -201,6 +203,7 @@ class FanService:
         self._hyst.clear()
 
     def set_curves(self, curves: list[FanCurve]) -> None:
+        """Replace all fan curves and reset hysteresis state."""
         self._curves = list(curves)
         self._clear_hysteresis()
 
@@ -216,6 +219,7 @@ class FanService:
         self._curves.append(curve)
 
     def remove_curve(self, curve_id: str) -> None:
+        """Remove a curve by ID and clear its hysteresis entry."""
         for c in self._curves:
             if c.id == curve_id:
                 self._hyst.pop((c.fan_id, c.sensor_id), None)
@@ -277,6 +281,7 @@ class FanService:
         self._test_locked_fans.add(fan_id)
 
     def unlock_from_test(self, fan_id: str) -> None:
+        """Re-enable curve control for a fan after a benchmark run."""
         self._test_locked_fans.discard(fan_id)
 
     # ------------------------------------------------------------------
@@ -292,6 +297,7 @@ class FanService:
         self._task = asyncio.create_task(self._control_loop())
 
     async def stop(self) -> None:
+        """Cancel the control loop and unsubscribe from sensor updates."""
         if self._task:
             self._task.cancel()
             try:

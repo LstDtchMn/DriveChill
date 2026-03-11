@@ -8,6 +8,10 @@ const DEFAULT_WS_URL =
     ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/api/ws`
     : 'ws://localhost:8085/api/ws';
 
+/**
+ * Normalise malformed loopback addresses (e.g. 127.0.01, 127.0.1) to 127.0.0.1
+ * so that URL parsing and same-origin checks work correctly.
+ */
 function normalizeLoopbackHost(value: string): string {
   // Guard against malformed loopback forms like 127.0.01 or 127.0.1.
   // Use regex with word boundary / port-colon / slash / end-of-string to avoid
@@ -17,6 +21,10 @@ function normalizeLoopbackHost(value: string): string {
     .replace(/:\/\/127\.0\.1(?=[:/]|$)/, '://127.0.0.1');
 }
 
+/**
+ * Resolve the HTTP API base URL from an optional env/user override.
+ * Falls back to `window.location.origin` in the browser or localhost during SSR.
+ */
 function resolveApiBase(raw?: string): string {
   const candidate = normalizeLoopbackHost((raw ?? '').trim());
   if (!candidate) return DEFAULT_API_BASE;
@@ -29,6 +37,7 @@ function resolveApiBase(raw?: string): string {
   }
 }
 
+/** Resolve the WebSocket URL from an optional override, deriving it from the API base if absent. */
 function resolveWsUrl(raw: string | undefined, apiBase: string): string {
   const candidate = normalizeLoopbackHost((raw ?? '').trim());
   if (candidate) {
@@ -54,14 +63,17 @@ function resolveWsUrl(raw: string | undefined, apiBase: string): string {
 const API_BASE = resolveApiBase(process.env.NEXT_PUBLIC_API_URL);
 const WS_URL = resolveWsUrl(process.env.NEXT_PUBLIC_WS_URL, API_BASE);
 
+/** Return the resolved HTTP API base URL (no trailing slash). */
 export function getApiBaseUrl(): string {
   return API_BASE;
 }
 
+/** Return the resolved WebSocket URL for the sensor stream endpoint. */
 export function getWsUrl(): string {
   return WS_URL;
 }
 
+/** Typed error thrown by {@link fetchAPI} on non-2xx responses. */
 export class APIError extends Error {
   status: number;
   detail: unknown;
@@ -84,6 +96,12 @@ function getCsrfToken(): string | null {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
+/**
+ * Central fetch wrapper for all backend API calls.
+ * Automatically injects CSRF tokens on mutating methods, includes session
+ * credentials, and dispatches `drivechill:auth-expired` / `drivechill:forbidden`
+ * window events on 401/403 responses.  Returns parsed JSON or `undefined` for 204.
+ */
 async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
   const method = (options?.method ?? 'GET').toUpperCase();
   const headers: Record<string, string> = {

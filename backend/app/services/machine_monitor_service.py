@@ -61,11 +61,13 @@ class MachineMonitorService:
         self._client: httpx.AsyncClient | None = None
 
     async def start(self) -> None:
+        """Start the background polling loop for all enabled machines."""
         self._running = True
         self._client = httpx.AsyncClient(follow_redirects=False)
         self._task = asyncio.create_task(self._poll_loop())
 
     async def stop(self) -> None:
+        """Stop the polling loop and close the HTTP client."""
         self._running = False
         if self._task:
             self._task.cancel()
@@ -78,9 +80,11 @@ class MachineMonitorService:
             self._client = None
 
     def get_snapshot(self, machine_id: str) -> dict | None:
+        """Return the latest cached snapshot for a machine, or None if not yet polled."""
         return self._snapshots.get(machine_id)
 
     def forget_machine(self, machine_id: str) -> None:
+        """Remove all cached state for a deleted machine."""
         self._snapshots.pop(machine_id, None)
         self._last_polled.pop(machine_id, None)
         self._next_allowed_poll.pop(machine_id, None)
@@ -129,6 +133,7 @@ class MachineMonitorService:
             return {"success": False, "status": classified, "error": _redact_error(exc)}
 
     async def poll_once(self) -> None:
+        """Run a single poll cycle across all enabled machines that are due."""
         machines = await self._repo.list_enabled()
         if not machines:
             return
