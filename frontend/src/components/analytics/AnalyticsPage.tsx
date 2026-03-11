@@ -175,7 +175,7 @@ export function AnalyticsPage() {
     try {
       const r = await api.analytics.getCorrelation(corrX, corrY, hours, buildOpts());
       setCorrResult({ coeff: r.correlation_coefficient, samples: r.samples, count: r.sample_count });
-    } catch { setError('Correlation request failed.'); }
+    } catch { setCorrResult({ coeff: NaN, samples: [], count: 0 }); }
     finally { setCorrLoading(false); }
   };
 
@@ -611,6 +611,9 @@ export function AnalyticsPage() {
             </div>
             {corrResult && (
               <div className="mt-3 flex gap-6 flex-wrap items-start">
+                {Number.isNaN(corrResult.coeff) ? (
+                  <p className="text-sm" style={{ color: 'var(--danger)' }}>Correlation request failed.</p>
+                ) : (<>
                 <div>
                   <p className="text-xs mb-1" style={{ color: 'var(--text-secondary)' }}>Pearson r</p>
                   <p className="text-3xl font-mono font-bold" style={{ color: coeffColor }}>
@@ -630,6 +633,7 @@ export function AnalyticsPage() {
                   <p className="text-xs mb-1" style={{ color: 'var(--text-secondary)' }}>Scatter plot</p>
                   <CorrelationScatter samples={corrResult.samples} labelX={corrXName} labelY={corrYName} />
                 </div>
+                </>)}
               </div>
             )}
           </div>

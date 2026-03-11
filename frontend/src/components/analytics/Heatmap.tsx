@@ -70,6 +70,8 @@ export function Heatmap({ buckets, fmt }: HeatmapProps) {
         <svg
           viewBox={`0 0 ${W} ${H}`}
           width="100%"
+          role="img"
+          aria-label="Temperature heatmap"
           style={{ maxWidth: W, display: 'block', minWidth: 400 }}
         >
           {/* Hour labels */}

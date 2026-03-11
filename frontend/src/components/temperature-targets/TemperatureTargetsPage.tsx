@@ -508,6 +508,7 @@ export function TemperatureTargetsPage() {
   const [editing, setEditing] = useState<TemperatureTarget | null>(null);
   const [creating, setCreating] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [pageError, setPageError] = useState<string | null>(null);
 
   const drives = readings.filter(r => r.sensor_type === 'hdd_temp');
   // Use controllable fan IDs (strip _rpm suffix) — backend expects fan_cpu, not fan_cpu_rpm
@@ -528,27 +529,43 @@ export function TemperatureTargetsPage() {
   useEffect(() => { load(); }, [load]);
 
   const handleCreate = async (data: any) => {
-    await api.temperatureTargets.create(data);
-    setCreating(false);
-    load();
+    try {
+      await api.temperatureTargets.create(data);
+      setCreating(false);
+      load();
+    } catch (e: any) {
+      setPageError(e?.message || 'Failed to create target');
+    }
   };
 
   const handleUpdate = async (data: any) => {
     if (!editing) return;
-    await api.temperatureTargets.update(editing.id, data);
-    setEditing(null);
-    load();
+    try {
+      await api.temperatureTargets.update(editing.id, data);
+      setEditing(null);
+      load();
+    } catch (e: any) {
+      setPageError(e?.message || 'Failed to update target');
+    }
   };
 
   const handleToggle = async (t: TemperatureTarget) => {
-    await api.temperatureTargets.toggle(t.id, !t.enabled);
-    load();
+    try {
+      await api.temperatureTargets.toggle(t.id, !t.enabled);
+      load();
+    } catch (e: any) {
+      setPageError(e?.message || 'Failed to toggle target');
+    }
   };
 
   const handleDelete = async (t: TemperatureTarget) => {
     if (!(await confirm(`Delete target "${t.name || t.sensor_id}"?`))) return;
-    await api.temperatureTargets.delete(t.id);
-    load();
+    try {
+      await api.temperatureTargets.delete(t.id);
+      load();
+    } catch (e: any) {
+      setPageError(e?.message || 'Failed to delete target');
+    }
   };
 
   if (loading) {
@@ -558,6 +575,12 @@ export function TemperatureTargetsPage() {
   return (
     <div className="space-y-4 max-w-4xl mx-auto animate-fade-in">
       <ViewerBanner />
+      {pageError && (
+        <div className="card p-3 text-sm" style={{ borderColor: 'var(--danger)', color: 'var(--danger)' }}>
+          {pageError}
+          <button onClick={() => setPageError(null)} className="ml-2 underline text-xs">dismiss</button>
+        </div>
+      )}
       {/* Header bar */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">

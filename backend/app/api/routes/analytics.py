@@ -244,6 +244,9 @@ async def get_stats(
     sensor_ids: str | None = Query(default=None),
 ):
     start_dt, end_dt = _resolve_range(hours, start, end)
+    ret_hours = await _retention_hours(request)
+    retention_limit = datetime.now(timezone.utc) - timedelta(hours=float(ret_hours))
+    start_dt = max(start_dt, retention_limit)
     ids = _parse_sensor_ids(sensor_id, sensor_ids)
     fmt = "%Y-%m-%d %H:%M:%S"
 
@@ -347,6 +350,9 @@ async def get_anomalies(
     if hours is None and start is None:
         hours = 24.0
     start_dt, end_dt = _resolve_range(hours, start, end)
+    ret_hours = await _retention_hours(request)
+    retention_limit = datetime.now(timezone.utc) - timedelta(hours=float(ret_hours))
+    start_dt = max(start_dt, retention_limit)
     z_score_threshold = _clamp(z_score_threshold, 1.0, 10.0)
     ids = _parse_sensor_ids(sensor_id, sensor_ids)
     fmt = "%Y-%m-%d %H:%M:%S"
@@ -458,6 +464,8 @@ async def get_regression(
     recent_hours = _clamp(recent_hours, 1.0, 168.0)
     threshold_delta = _clamp(threshold_delta, 1.0, 50.0)
     ids = _parse_sensor_ids(sensor_id, sensor_ids)
+    ret_hours = await _retention_hours(request)
+    retention_limit = datetime.now(timezone.utc) - timedelta(hours=float(ret_hours))
 
     sensor_clause = ""
     sensor_params: list = []
@@ -488,6 +496,9 @@ async def get_regression(
     else:
         baseline_since = (now - timedelta(days=baseline_days)).strftime(fmt)
         recent_since = (now - timedelta(hours=recent_hours)).strftime(fmt)
+
+    # Clamp baseline to retention limit
+    baseline_since = max(baseline_since, retention_limit.strftime(fmt))
 
     db = request.app.state.db
 

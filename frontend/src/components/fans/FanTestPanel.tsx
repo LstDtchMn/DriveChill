@@ -324,7 +324,7 @@ export function FanTestPanel({ fanId, fanName }: Props) {
                 try {
                   await api.updateFanSettings(fanId, newSettings);
                   setFanSettings({ ...fanSettings, ...newSettings });
-                } catch { /* ignore */ }
+                } catch (e: any) { setError(e?.message || 'Failed to apply calibration'); }
                 setSettingsSaving(false);
               }}
               className="btn-primary text-xs px-3 py-1"
@@ -377,7 +377,7 @@ export function FanTestPanel({ fanId, fanName }: Props) {
                       min_speed_pct: fanSettings.min_speed_pct,
                       zero_rpm_capable: fanSettings.zero_rpm_capable,
                     });
-                  } catch { /* ignore */ }
+                  } catch (e: any) { setError(e?.message || 'Failed to save settings'); }
                   setSettingsSaving(false);
                 }}
                 className="btn-primary text-xs px-3 py-1"

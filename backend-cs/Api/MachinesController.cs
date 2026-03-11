@@ -4,6 +4,7 @@ using DriveChill.Models;
 using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
+using DriveChill.Utils;
 using System.Text;
 using System.Text.Json;
 
@@ -47,7 +48,7 @@ public sealed class MachinesController : ControllerBase
         {
             Name       = name.Trim(),
             BaseUrl    = baseUrl.TrimEnd('/'),
-            ApiKeyHash = apiKey,
+            ApiKeyHash = apiKey is not null ? CredentialEncryption.Encrypt(apiKey, _settings.SecretKey) : null,
         };
         var created = await _db.CreateMachineAsync(record, ct);
         return Ok(new { machine = ToView(created) });
@@ -81,7 +82,7 @@ public sealed class MachinesController : ControllerBase
         {
             Name                = body.TryGetProperty("name",    out var n) ? n.GetString() ?? existing.Name   : existing.Name,
             BaseUrl             = newBaseUrl,
-            ApiKeyHash          = body.TryGetProperty("api_key", out var k) ? k.GetString() : existing.ApiKeyHash,
+            ApiKeyHash          = body.TryGetProperty("api_key", out var k) ? (k.GetString() is { } newKey ? CredentialEncryption.Encrypt(newKey, _settings.SecretKey) : null) : existing.ApiKeyHash,
             Enabled             = body.TryGetProperty("enabled", out var e) ? (e.ValueKind == JsonValueKind.True) : existing.Enabled,
             PollIntervalSeconds = body.TryGetProperty("poll_interval_seconds", out var p) ? (p.TryGetDouble(out var pd) ? pd : existing.PollIntervalSeconds) : existing.PollIntervalSeconds,
             TimeoutMs           = body.TryGetProperty("timeout_ms", out var t) ? (t.TryGetInt32(out var ti) ? ti : existing.TimeoutMs) : existing.TimeoutMs,
@@ -311,8 +312,11 @@ public sealed class MachinesController : ControllerBase
         };
 
         if (!string.IsNullOrEmpty(machine.ApiKeyHash))
+        {
+            var rawKey = CredentialEncryption.Decrypt(machine.ApiKeyHash, _settings.SecretKey);
             client.DefaultRequestHeaders.Authorization =
-                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", machine.ApiKeyHash);
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", rawKey);
+        }
 
         return client;
     }

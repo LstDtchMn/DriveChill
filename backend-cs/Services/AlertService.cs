@@ -259,6 +259,7 @@ public sealed class AlertService
     public IReadOnlyList<AlertEvent> Evaluate(IReadOnlyList<SensorReading> readings)
     {
         var fired = new List<AlertEvent>();
+        var firedRules = new List<AlertRule>();
         var clearedActionRules = new List<AlertRule>(); // full rule objects for batch suppress
 
         lock (_lock)
@@ -290,6 +291,7 @@ public sealed class AlertService
                     };
                     _events.Add(ev);
                     fired.Add(ev);
+                    firedRules.Add(rule);
                     _active.Add(rule.RuleId);
 
                     // Trim history to 500 events
@@ -309,10 +311,9 @@ public sealed class AlertService
         }
 
         // Handle profile switching outside the lock
-        foreach (var ev in fired)
+        foreach (var rule in firedRules)
         {
-            var rule = _rules.FirstOrDefault(r => r.RuleId == ev.RuleId);
-            if (rule != null) HandleActionFire(rule);
+            HandleActionFire(rule);
         }
         // Process all simultaneously-clearing action rules as a single batch so that
         // _suppressRevert is computed from the whole clearing set, not rule-by-rule.

@@ -14,8 +14,13 @@ public sealed class VirtualSensorsController : ControllerBase
     };
 
     private readonly DbService _db;
+    private readonly VirtualSensorService _vsSvc;
 
-    public VirtualSensorsController(DbService db) => _db = db;
+    public VirtualSensorsController(DbService db, VirtualSensorService vsSvc)
+    {
+        _db = db;
+        _vsSvc = vsSvc;
+    }
 
     [HttpGet]
     public async Task<IActionResult> List(CancellationToken ct)
@@ -46,6 +51,7 @@ public sealed class VirtualSensorsController : ControllerBase
             Enabled = body.Enabled,
         };
         await _db.CreateVirtualSensorAsync(vs, ct);
+        await ReloadVirtualSensorsAsync(ct);
         return Ok(new { success = true, id = vs.Id });
     }
 
@@ -73,6 +79,7 @@ public sealed class VirtualSensorsController : ControllerBase
         var updated = await _db.UpdateVirtualSensorAsync(vs, ct);
         if (!updated)
             return NotFound(new { detail = "Virtual sensor not found" });
+        await ReloadVirtualSensorsAsync(ct);
         return Ok(new { success = true });
     }
 
@@ -82,7 +89,14 @@ public sealed class VirtualSensorsController : ControllerBase
         var deleted = await _db.DeleteVirtualSensorAsync(sensorId, ct);
         if (!deleted)
             return NotFound(new { detail = "Virtual sensor not found" });
+        await ReloadVirtualSensorsAsync(ct);
         return Ok(new { success = true });
+    }
+
+    private async Task ReloadVirtualSensorsAsync(CancellationToken ct)
+    {
+        var all = await _db.GetVirtualSensorsAsync(ct);
+        _vsSvc.Load(all);
     }
 
     private static object ToDto(VirtualSensor vs) => new

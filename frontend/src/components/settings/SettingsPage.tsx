@@ -118,6 +118,8 @@ export function SettingsPage() {
     try {
       const updated = await api.drives.updateSettings(driveSettings);
       setDriveSettings(updated);
+    } catch (e: any) {
+      alert(e?.message || 'Failed to save drive settings');
     } finally {
       setDriveSaving(false);
     }
@@ -871,7 +873,8 @@ export function SettingsPage() {
               </button>
               <button
                 onClick={handleTestEmail}
-                className="btn-secondary text-sm px-4"
+                disabled={!isAdmin}
+                className="btn-secondary text-sm px-4 disabled:opacity-50"
               >
                 Send Test Email
               </button>

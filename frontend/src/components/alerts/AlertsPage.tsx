@@ -25,6 +25,7 @@ export function AlertsPage() {
   const [newActionProfileId, setNewActionProfileId] = useState('');
   const [newActionRevert, setNewActionRevert] = useState(true);
   const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
   const allTempSensors = [...cpuTemps, ...gpuTemps, ...hddTemps, ...caseTemps];
 
@@ -79,8 +80,8 @@ export function AlertsPage() {
       setNewActionEnabled(false);
       setNewActionProfileId('');
       setNewActionRevert(true);
-    } catch {
-      // Handle error
+    } catch (e: any) {
+      setError(e?.message || 'Failed to add rule');
     }
   };
 
@@ -88,8 +89,8 @@ export function AlertsPage() {
     try {
       await api.deleteAlertRule(id);
       setRules(rules.filter((r) => r.id !== id));
-    } catch {
-      // Handle error
+    } catch (e: any) {
+      setError(e?.message || 'Failed to delete rule');
     }
   };
 
@@ -97,14 +98,20 @@ export function AlertsPage() {
     try {
       await api.clearAlerts();
       clearAlerts();
-    } catch {
-      // Handle error
+    } catch (e: any) {
+      setError(e?.message || 'Failed to clear events');
     }
   };
 
   return (
     <div className="space-y-6 animate-fade-in">
       <ViewerBanner />
+      {error && (
+        <div className="card p-3 text-sm" style={{ borderColor: 'var(--danger)', color: 'var(--danger)' }}>
+          {error}
+          <button onClick={() => setError(null)} className="ml-2 underline text-xs">dismiss</button>
+        </div>
+      )}
       {/* Active alerts banner */}
       {activeAlerts.length > 0 && (
         <div className="card p-4 animate-card-enter" style={{ borderColor: 'var(--danger)', background: 'rgba(239, 68, 68, 0.08)' }}>
@@ -283,7 +290,7 @@ export function AlertsPage() {
         <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
           <h3 className="section-title">Event Log</h3>
           {alertEvents.length > 0 && (
-            <button onClick={handleClearEvents} className="btn-secondary text-xs">
+            <button onClick={handleClearEvents} disabled={!canWrite} className="btn-secondary text-xs disabled:opacity-50">
               Clear All
             </button>
           )}

@@ -2001,14 +2001,21 @@ public sealed class DbService : IDisposable
         await conn.OpenAsync(ct);
 
         // Check for existing subscription with same endpoint (UNIQUE constraint).
-        // Return the existing record rather than creating a phantom duplicate.
+        // Update keys if they changed (browser may regenerate them), then return.
         await using var check = conn.CreateCommand();
-        check.CommandText = "SELECT id, endpoint, p256dh, auth_key, user_agent, created_at, last_used_at FROM push_subscriptions WHERE endpoint = $ep";
+        check.CommandText = "SELECT id FROM push_subscriptions WHERE endpoint = $ep";
         check.Parameters.AddWithValue("$ep", sub.Endpoint);
-        await using var existingReader = await check.ExecuteReaderAsync(ct);
-        if (await existingReader.ReadAsync(ct))
-            return ReadPushSub(existingReader);
-        await existingReader.DisposeAsync();
+        var existingId = await check.ExecuteScalarAsync(ct) as string;
+        if (existingId is not null)
+        {
+            await using var upd = conn.CreateCommand();
+            upd.CommandText = "UPDATE push_subscriptions SET p256dh = $p256, auth_key = $auth WHERE id = $id";
+            upd.Parameters.AddWithValue("$p256", sub.P256dh ?? "");
+            upd.Parameters.AddWithValue("$auth", sub.AuthKey ?? "");
+            upd.Parameters.AddWithValue("$id", existingId);
+            await upd.ExecuteNonQueryAsync(ct);
+            return (await GetPushSubscriptionAsync(existingId, ct))!;
+        }
 
         sub.Id        = Guid.NewGuid().ToString();
         sub.CreatedAt = DateTimeOffset.UtcNow.ToString("o");

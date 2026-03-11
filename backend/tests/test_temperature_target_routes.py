@@ -97,12 +97,23 @@ class TestValidateSensorId:
         req = _mock_request(sensor_ids={"hdd_temp_abc"})
         _validate_sensor_id("hdd_temp_abc", req, is_new=True)  # must not raise
 
-    def test_rejects_non_hdd_prefix(self):
+    def test_accepts_cpu_temp_id(self):
+        req = _mock_request(sensor_ids={"cpu_temp_0"})
+        _validate_sensor_id("cpu_temp_0", req, is_new=True)  # must not raise
+
+    def test_accepts_gpu_temp_id(self):
+        req = _mock_request(sensor_ids={"gpu_temp_0"})
+        _validate_sensor_id("gpu_temp_0", req, is_new=True)  # must not raise
+
+    def test_accepts_virtual_sensor_id(self):
+        req = _mock_request(sensor_ids={"vs_avg1"})
+        _validate_sensor_id("vs_avg1", req, is_new=True)  # must not raise
+
+    def test_rejects_invalid_prefix(self):
         req = _mock_request()
         with pytest.raises(HTTPException) as exc_info:
-            _validate_sensor_id("cpu_temp_0", req, is_new=True)
+            _validate_sensor_id("fan_speed_0", req, is_new=True)
         assert exc_info.value.status_code == 422
-        assert "hdd_temp_*" in exc_info.value.detail
 
     def test_rejects_unknown_sensor_on_create(self):
         req = _mock_request(sensor_ids={"hdd_temp_abc"})

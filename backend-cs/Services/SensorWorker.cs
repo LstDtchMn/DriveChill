@@ -17,9 +17,7 @@ public sealed class SensorWorker : BackgroundService
     private readonly SensorService                  _sensors;
     private readonly FanService                     _fans;
     private readonly AlertService                   _alerts;
-    private readonly WebhookService                 _webhooks;
-    private readonly EmailNotificationService       _email;
-    private readonly PushNotificationService        _push;
+    private readonly AlertDeliveryService           _alertDelivery;
     private readonly NotificationChannelService     _notifChannels;
     private readonly TemperatureTargetService       _tempTargets;
     private readonly VirtualSensorService           _virtualSensors;
@@ -35,8 +33,7 @@ public sealed class SensorWorker : BackgroundService
     private int _telemetryPublishingFlag; // 0 = idle, 1 = publishing (atomic via Interlocked)
 
     public SensorWorker(IHardwareBackend hw, SensorService sensors, FanService fans,
-        AlertService alerts, WebhookService webhooks,
-        EmailNotificationService email, PushNotificationService push,
+        AlertService alerts, AlertDeliveryService alertDelivery,
         NotificationChannelService notifChannels,
         TemperatureTargetService tempTargets, VirtualSensorService virtualSensors,
         DbService db, SettingsStore store, AppSettings settings, ILogger<SensorWorker> log)
@@ -45,9 +42,7 @@ public sealed class SensorWorker : BackgroundService
         _sensors         = sensors;
         _fans            = fans;
         _alerts          = alerts;
-        _webhooks        = webhooks;
-        _email           = email;
-        _push            = push;
+        _alertDelivery   = alertDelivery;
         _notifChannels   = notifChannels;
         _tempTargets     = tempTargets;
         _virtualSensors  = virtualSensors;
@@ -167,29 +162,7 @@ public sealed class SensorWorker : BackgroundService
                         DriveChillMetrics.AlertEventsTotal.WithLabels(evt.RuleId, evt.Condition).Inc();
 
                     // Dispatch all delivery channels concurrently (fire-and-forget).
-                    // Errors inside each service are logged and swallowed so a delivery
-                    // failure never crashes the polling loop.
-                    var capturedEvents = allEvents;
-                    _ = Task.Run(async () =>
-                    {
-                        try
-                        {
-                            var tasks = new List<Task>
-                            {
-                                _webhooks.DispatchAlertEventsAsync(capturedEvents, CancellationToken.None),
-                            };
-                            foreach (var evt in capturedEvents)
-                            {
-                                tasks.Add(_email.SendAlertAsync(evt, CancellationToken.None));
-                                tasks.Add(_push.SendAlertAsync(evt, CancellationToken.None));
-                                tasks.Add(_notifChannels.SendAlertAllAsync(
-                                    evt.SensorName, evt.ActualValue, evt.Threshold,
-                                    CancellationToken.None));
-                            }
-                            await Task.WhenAll(tasks);
-                        }
-                        catch (Exception ex) { _log.LogWarning(ex, "Alert delivery error"); }
-                    }, CancellationToken.None);
+                    _alertDelivery.DispatchAsync(allEvents);
                 }
 
                 // Persist to DB on a slower cadence

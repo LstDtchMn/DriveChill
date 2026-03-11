@@ -329,6 +329,8 @@ export function TrendChart({ buckets, sensorId: _sensorId, unit, fmt, annotation
 
       <svg
         ref={svgRef}
+        role="img"
+        aria-label="Sensor trend chart"
         width={svgWidth}
         height={CHART_HEIGHT}
         style={{ display: 'block', cursor: dragStart !== null ? 'col-resize' : 'crosshair', userSelect: 'none' }}

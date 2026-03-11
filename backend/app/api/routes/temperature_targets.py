@@ -17,7 +17,7 @@ from app.models.temperature_targets import (
 
 router = APIRouter(prefix="/api/temperature-targets", tags=["temperature-targets"])
 
-_HDD_TEMP_RE = re.compile(r"^hdd_temp_")
+_SENSOR_ID_RE = re.compile(r"^(hdd_temp_|cpu_temp_|gpu_temp_|vs_)")
 
 
 def _get_service(request: Request):
@@ -50,8 +50,8 @@ def _get_controllable_fan_ids(request: Request) -> set[str]:
 
 def _validate_sensor_id(sensor_id: str, request: Request, *, is_new: bool = True) -> None:
     """Validate sensor_id format and existence."""
-    if not _HDD_TEMP_RE.match(sensor_id):
-        raise HTTPException(status_code=422, detail="sensor_id must match hdd_temp_* pattern")
+    if not _SENSOR_ID_RE.match(sensor_id):
+        raise HTTPException(status_code=422, detail="sensor_id must start with hdd_temp_, cpu_temp_, gpu_temp_, or vs_")
     if is_new:
         known = _get_sensor_ids(request)
         if known and sensor_id not in known:

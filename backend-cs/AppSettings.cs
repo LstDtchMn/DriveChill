@@ -119,6 +119,11 @@ public sealed class AppSettings
     public string VapidContactEmail =>
         (Environment.GetEnvironmentVariable("DRIVECHILL_VAPID_CONTACT_EMAIL") ?? "admin@localhost").Trim();
 
+    // Panic thresholds — configurable via settings
+    public double PanicCpuTemp    { get; set; } = 95.0;
+    public double PanicGpuTemp    { get; set; } = 90.0;
+    public double PanicHysteresis { get; set; } = 5.0;
+
     public bool PrometheusEnabled =>
         string.Equals(
             Environment.GetEnvironmentVariable("DRIVECHILL_PROMETHEUS_ENABLED"),

@@ -57,11 +57,11 @@ public sealed class FanService
     //          | "profile" | "temperature_target" | "manual"
     private Dictionary<string, string> _controlSources = new();
 
-    private const double PanicCpuTemp = 95.0;
-    private const double PanicGpuTemp = 90.0;
-    private const double PanicHysteresis = 5.0;
+    private readonly double PanicCpuTemp;
+    private readonly double PanicGpuTemp;
+    private readonly double PanicHysteresis;
 
-    public FanService(IHardwareBackend hw, SettingsStore store,
+    public FanService(IHardwareBackend hw, SettingsStore store, AppSettings? settings = null,
         TemperatureTargetService? tempTargetSvc = null,
         VirtualSensorService? virtualSensorSvc = null)
     {
@@ -69,6 +69,10 @@ public sealed class FanService
         _store = store;
         _tempTargetSvc = tempTargetSvc;
         _virtualSensorSvc = virtualSensorSvc;
+        settings ??= new AppSettings();
+        PanicCpuTemp    = settings.PanicCpuTemp;
+        PanicGpuTemp    = settings.PanicGpuTemp;
+        PanicHysteresis = settings.PanicHysteresis;
         _lastTickMs = _rampStopwatch.ElapsedMilliseconds;
         // NOTE: GetFanIds() returns empty before Initialize() — fan IDs are
         // populated lazily on the first ApplyCurvesAsync tick (see SyncCurveSlots).
@@ -315,7 +319,11 @@ public sealed class FanService
     {
         speedPercent = Math.Clamp(speedPercent, 0, 100);
         _rwl.EnterWriteLock();
-        try { _curves[fanId] = null; } // disable any active curve
+        try
+        {
+            _curves[fanId] = null; // disable any active curve
+            _lastApplied[fanId] = speedPercent;
+        }
         finally { _rwl.ExitWriteLock(); }
         return _hw.SetFanSpeed(fanId, speedPercent);
     }
@@ -403,10 +411,12 @@ public sealed class FanService
         // Check panic thresholds every tick
         CheckPanicThresholds(readings);
 
-        // Skip curve application when released to BIOS or in panic mode
+        // Skip curve application when released to BIOS or in panic mode.
+        // Panic sources are set by CheckPanicThresholds; only clear on release.
         if (_released || _tempPanic || _sensorPanic)
         {
-            lock (_controlSources) _controlSources.Clear();
+            if (_released)
+                lock (_controlSources) _controlSources.Clear();
             return Task.CompletedTask;
         }
 
@@ -470,14 +480,11 @@ public sealed class FanService
         }
         finally { _rwl.ExitWriteLock(); }
 
-        // 2. Build temperature-target speeds
+        // 2. Build temperature-target speeds (use resolved values so virtual sensors work)
         var ttSpeeds = new Dictionary<string, double>();
         if (_tempTargetSvc is not null)
         {
-            var sensorMap = new Dictionary<string, double>();
-            foreach (var r in readings)
-                sensorMap[r.Id] = r.Value;
-            ttSpeeds = _tempTargetSvc.Evaluate(sensorMap);
+            ttSpeeds = _tempTargetSvc.Evaluate(sensorValues);
         }
 
         // 3. Merge over union of fan IDs — hottest source wins

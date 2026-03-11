@@ -25,8 +25,9 @@ public sealed class SensorsController : ControllerBase
         return Ok(snap);
     }
 
-    /// <summary>GET /api/sensors/history?sensor_id=&amp;hours=1</summary>
+    /// <summary>GET /api/sensors/history — DEPRECATED, use /api/analytics/history instead.</summary>
     [HttpGet("history")]
+    [Obsolete("Use /api/analytics/history instead")]
     public async Task<IActionResult> GetHistory(
         [FromQuery(Name = "sensor_id")] string sensorId,
         [FromQuery] double hours = 1,
@@ -37,6 +38,8 @@ public sealed class SensorsController : ControllerBase
 
         var since = DateTimeOffset.UtcNow.AddHours(-hours);
         var rows  = await _db.GetHistoryAsync(sensorId, since, ct);
+        Response.Headers["Deprecation"] = "true";
+        Response.Headers["Link"] = "</api/analytics/history>; rel=\"successor-version\"";
         return Ok(rows);
     }
 

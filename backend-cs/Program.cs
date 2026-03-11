@@ -172,9 +172,11 @@ internal static class Program
             new FanService(
                 sp.GetRequiredService<IHardwareBackend>(),
                 sp.GetRequiredService<SettingsStore>(),
+                sp.GetRequiredService<AppSettings>(),
                 sp.GetRequiredService<TemperatureTargetService>(),
                 sp.GetRequiredService<VirtualSensorService>()));
         builder.Services.AddSingleton<AlertService>();
+        builder.Services.AddSingleton<AlertDeliveryService>();
         builder.Services.AddSingleton<DbService>();
         builder.Services.AddSingleton<SettingsStore>();
         builder.Services.AddSingleton<ApiKeyService>();

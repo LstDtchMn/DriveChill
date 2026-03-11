@@ -13,8 +13,8 @@ public sealed partial class TemperatureTargetsController : ControllerBase
     private readonly SensorService _sensors;
     private readonly FanService _fans;
 
-    [GeneratedRegex(@"^hdd_temp_")]
-    private static partial Regex HddTempPattern();
+    [GeneratedRegex(@"^(hdd_temp_|cpu_temp_|gpu_temp_|vs_)")]
+    private static partial Regex SensorIdPattern();
 
     public TemperatureTargetsController(
         TemperatureTargetService svc,
@@ -112,8 +112,8 @@ public sealed partial class TemperatureTargetsController : ControllerBase
 
     private IActionResult? ValidateSensorId(string sensorId, bool isNew)
     {
-        if (!HddTempPattern().IsMatch(sensorId))
-            return UnprocessableEntity(new { detail = "sensor_id must match hdd_temp_* pattern" });
+        if (!SensorIdPattern().IsMatch(sensorId))
+            return UnprocessableEntity(new { detail = "sensor_id must start with hdd_temp_, cpu_temp_, gpu_temp_, or vs_" });
 
         if (isNew)
         {
