@@ -307,6 +307,15 @@ class NotificationChannelService:
         parsed = urlparse(broker_url)
         hostname = parsed.hostname or "localhost"
         port = parsed.port or (8883 if parsed.scheme == "mqtts" else 1883)
+
+        # SSRF check: rewrite scheme to http:// so the shared validator
+        # can resolve the hostname and block private/loopback IPs.
+        import re
+        check_url = re.sub(r"^(mqtts?|ssl)://", "http://", broker_url, count=1)
+        ok, reason = await validate_outbound_url_at_request_time(check_url)
+        if not ok:
+            logger.warning("MQTT connection blocked (SSRF): %s", reason)
+            return None
         use_tls = parsed.scheme in ("mqtts", "ssl")
 
         username = channel.config.get("username") or None

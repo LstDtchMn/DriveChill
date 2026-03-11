@@ -26,13 +26,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def _week_start_utc(dt: datetime) -> datetime:
-    """Return the Monday 00:00 UTC of the ISO week containing *dt*."""
-    return (dt - timedelta(days=dt.weekday())).replace(
-        hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc
-    )
-
-
 def _is_due(schedule: dict, now: datetime) -> bool:
     """Return True if *schedule* should fire right now.
 
@@ -42,6 +35,8 @@ def _is_due(schedule: dict, now: datetime) -> bool:
       absent or invalid).
     - It has never been sent, or ``last_sent_at`` is before the current
       reporting period (today for daily, the current ISO week for weekly).
+
+    All boundary comparisons are done in UTC to avoid naive/aware mismatches.
     """
     # Resolve the schedule's timezone; fall back to UTC.
     tz_name = schedule.get("timezone")
@@ -72,11 +67,17 @@ def _is_due(schedule: dict, now: datetime) -> bool:
         return True
 
     if schedule["frequency"] == "daily":
-        today_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
-        return last_sent_dt < today_start
+        # Midnight of today in the schedule's local timezone, converted to UTC
+        today_start_local = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+        today_start_utc = today_start_local.astimezone(timezone.utc)
+        return last_sent_dt < today_start_utc
     else:  # weekly
-        week_start = _week_start_utc(local_now)
-        return last_sent_dt < week_start
+        # Monday 00:00 of the current ISO week in local timezone, converted to UTC
+        week_start_local = (local_now - timedelta(days=local_now.weekday())).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        week_start_utc = week_start_local.astimezone(timezone.utc)
+        return last_sent_dt < week_start_utc
 
 
 # ---------------------------------------------------------------------------

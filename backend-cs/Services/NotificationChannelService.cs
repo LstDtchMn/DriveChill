@@ -232,6 +232,17 @@ public sealed class NotificationChannelService
         var brokerUrl = GetStr(ch.Config, "broker_url") ?? "";
         if (string.IsNullOrEmpty(brokerUrl)) return null;
 
+        // SSRF check: rewrite scheme to http:// so the shared validator
+        // can resolve the hostname and block private/loopback IPs.
+        var checkUrl = System.Text.RegularExpressions.Regex.Replace(
+            brokerUrl, @"^(mqtts?|ssl)://", "http://",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (!UrlSecurity.TryValidateOutboundHttpUrl(checkUrl, allowPrivateTargets: false, out var ssrfReason))
+        {
+            _logger.LogWarning("MQTT connection blocked (SSRF): {Reason}", ssrfReason);
+            return null;
+        }
+
         await _mqttConnectLock.WaitAsync(ct);
         try
         {

@@ -10,7 +10,7 @@ namespace DriveChill.Api;
 public sealed class NotificationChannelsController : ControllerBase
 {
     private readonly NotificationChannelService _svc;
-    private static readonly string[] UrlConfigKeys = ["url", "webhook_url"];
+    private static readonly string[] UrlConfigKeys = ["url", "webhook_url", "broker_url"];
 
     public NotificationChannelsController(NotificationChannelService svc) => _svc = svc;
 
@@ -23,8 +23,16 @@ public sealed class NotificationChannelsController : ControllerBase
             if (config.TryGetValue(key, out var el) && el.ValueKind == JsonValueKind.String)
             {
                 var val = el.GetString() ?? "";
-                if (!string.IsNullOrEmpty(val) &&
-                    !UrlSecurity.TryValidateOutboundHttpUrl(val, allowPrivateTargets: false, out var reason))
+                if (string.IsNullOrEmpty(val)) continue;
+
+                // For broker_url, rewrite mqtt(s)://|ssl:// → http:// so the
+                // SSRF validator can parse and resolve the hostname.
+                var checkVal = val;
+                if (key == "broker_url")
+                    checkVal = System.Text.RegularExpressions.Regex.Replace(
+                        val, @"^(mqtts?|ssl)://", "http://", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+                if (!UrlSecurity.TryValidateOutboundHttpUrl(checkVal, allowPrivateTargets: false, out var reason))
                     return $"Config '{key}': {reason}";
             }
         }

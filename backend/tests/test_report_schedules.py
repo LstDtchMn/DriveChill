@@ -25,7 +25,7 @@ from app.api.routes.report_schedules import (
     list_report_schedules,
     update_report_schedule,
 )
-from app.services.report_scheduler_service import _is_due, _week_start_utc
+from app.services.report_scheduler_service import _is_due
 
 
 # ---------------------------------------------------------------------------
@@ -285,22 +285,30 @@ class TestIsDue:
 
 
 # ---------------------------------------------------------------------------
-# _week_start_utc
+# Weekly _is_due boundary (replaces former _week_start_utc unit tests)
 # ---------------------------------------------------------------------------
 
 
-class TestWeekStartUtc:
-    def test_monday_is_own_week_start(self):
-        dt = datetime(2026, 3, 9, 12, 0, 0, tzinfo=timezone.utc)  # Monday
-        ws = _week_start_utc(dt)
-        assert ws == datetime(2026, 3, 9, 0, 0, 0, tzinfo=timezone.utc)
+class TestWeeklyIsDue:
+    def _sched(self, last_sent_at: str) -> dict:
+        return {
+            "frequency": "weekly",
+            "time_utc": "08:00",
+            "timezone": "UTC",
+            "last_sent_at": last_sent_at,
+        }
 
-    def test_tuesday_week_start_is_monday(self):
-        dt = datetime(2026, 3, 10, 8, 0, 0, tzinfo=timezone.utc)  # Tuesday
-        ws = _week_start_utc(dt)
-        assert ws == datetime(2026, 3, 9, 0, 0, 0, tzinfo=timezone.utc)
+    def test_monday_after_last_week_send_is_due(self):
+        now = datetime(2026, 3, 9, 8, 0, 0, tzinfo=timezone.utc)  # Monday 08:00
+        sched = self._sched(last_sent_at="2026-03-02T08:00:00+00:00")  # prev Monday
+        assert _is_due(sched, now) is True
 
-    def test_sunday_week_start_is_monday_6_days_ago(self):
-        dt = datetime(2026, 3, 15, 23, 59, 0, tzinfo=timezone.utc)  # Sunday
-        ws = _week_start_utc(dt)
-        assert ws == datetime(2026, 3, 9, 0, 0, 0, tzinfo=timezone.utc)
+    def test_tuesday_same_week_as_send_is_not_due(self):
+        now = datetime(2026, 3, 10, 8, 0, 0, tzinfo=timezone.utc)  # Tuesday
+        sched = self._sched(last_sent_at="2026-03-09T08:00:00+00:00")  # Monday same week
+        assert _is_due(sched, now) is False
+
+    def test_sunday_same_week_as_send_is_not_due(self):
+        now = datetime(2026, 3, 15, 23, 59, 0, tzinfo=timezone.utc)  # Sunday
+        sched = self._sched(last_sent_at="2026-03-09T08:00:00+00:00")  # Monday same week
+        assert _is_due(sched, now) is False

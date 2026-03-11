@@ -1,5 +1,6 @@
 using System.Text.Json;
 using DriveChill.Models;
+using Microsoft.Extensions.Logging;
 
 namespace DriveChill.Services;
 
@@ -13,6 +14,7 @@ public sealed class SettingsStore
 {
     private readonly string _path;
     private readonly object _lock = new();
+    private readonly ILogger<SettingsStore>? _logger;
 
     private StoredData _data;
 
@@ -23,8 +25,9 @@ public sealed class SettingsStore
         PropertyNameCaseInsensitive = true,
     };
 
-    public SettingsStore(AppSettings appSettings)
+    public SettingsStore(AppSettings appSettings, ILogger<SettingsStore>? logger = null)
     {
+        _logger = logger;
         _path = Path.Combine(appSettings.DataDir, "settings.json");
         Directory.CreateDirectory(appSettings.DataDir);
         _data = Load();
@@ -114,7 +117,26 @@ public sealed class SettingsStore
                 ? JsonSerializer.Deserialize<StoredData>(File.ReadAllText(_path), _json) ?? new StoredData()
                 : new StoredData();
         }
-        catch { data = new StoredData(); }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Failed to deserialize {Path}; falling back to defaults", _path);
+
+            // Preserve the corrupt file so the user can recover data manually.
+            try
+            {
+                if (File.Exists(_path))
+                {
+                    var stamp = DateTime.UtcNow.ToString("yyyyMMddTHHmmssZ");
+                    File.Move(_path, $"{_path}.corrupt-{stamp}");
+                }
+            }
+            catch (Exception renameEx)
+            {
+                _logger?.LogWarning(renameEx, "Could not rename corrupt settings file");
+            }
+
+            data = new StoredData();
+        }
 
         // Retention migration: old default was 1 day; upgrade to 30 on first run after update.
         if (data.RetentionMigrationVersion < 1)
@@ -138,6 +160,10 @@ public sealed class SettingsStore
 
     private void Save()
     {
+        // Keep a rolling backup so the last good state is always recoverable.
+        if (File.Exists(_path))
+            File.Copy(_path, _path + ".bak", overwrite: true);
+
         // Write to temp file then move — atomic on Windows (same drive/volume)
         var tmp = _path + ".tmp";
         File.WriteAllText(tmp, JsonSerializer.Serialize(_data, _json));

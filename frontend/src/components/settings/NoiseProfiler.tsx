@@ -123,6 +123,7 @@ export function NoiseProfiler() {
 
     startLiveDB();
 
+    let sweepError: string | null = null;
     try {
       for (let i = 0; i < steps.length; i++) {
         if (abortRef.current) break;
@@ -130,15 +131,17 @@ export function NoiseProfiler() {
         const pct = steps[i];
         setCurrentStep(i);
 
-        // Mute other fans if in precise mode
+        // Mute other fans if in precise mode (best-effort, don't abort on failure)
         if (mode === 'precise') {
           for (const fid of muteFanIds) {
-            await api.setFanSpeed(fid, 0).catch(() => {});
+            await api.setFanSpeed(fid, 0).catch((err) => {
+              console.warn(`Failed to mute fan ${fid}:`, err);
+            });
           }
         }
 
-        // Set target fan speed
-        await api.setFanSpeed(selectedFanId, pct).catch(() => {});
+        // Set target fan speed — abort sweep on failure
+        await api.setFanSpeed(selectedFanId, pct);
 
         // Settle
         setSweepState('settling');
@@ -150,16 +153,27 @@ export function NoiseProfiler() {
         const db = await meter.measureMedianDB(MEASURE_MS);
         if (abortRef.current) break;
 
-        const rpmReading = fanSensors.find((s) => s.id === selectedFanId);
+        const freshReadings = useAppStore.getState().readings;
+        const rpmReading = freshReadings.find((s) => s.id === selectedFanId && s.sensor_type === 'fan_rpm');
         const rpm = rpmReading?.value ?? pct * 20; // fallback: rough estimate
 
         collectedData.push({ rpm, db: isFinite(db) ? db : 0 });
         setLiveSteps((prev) => [...prev, { pct, db: isFinite(db) ? db : null }]);
       }
+    } catch (err) {
+      sweepError = err instanceof Error ? err.message : 'Failed to set fan speed';
     } finally {
       stopLiveDB();
       meter.stop();
       meterRef.current = null;
+    }
+
+    if (sweepError) {
+      setErrorMsg(sweepError);
+      setSweepState('error');
+      toast(sweepError, 'error');
+      await api.releaseFanControl().catch(() => {});
+      return;
     }
 
     if (abortRef.current) {

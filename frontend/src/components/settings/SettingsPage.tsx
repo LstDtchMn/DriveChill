@@ -367,7 +367,10 @@ export function SettingsPage() {
   const handleVerifyMachine = async (machineId: string) => {
     setBusyMachineIds((prev) => new Set(prev).add(machineId));
     try {
-      await api.verifyMachine(machineId);
+      const result = await api.verifyMachine(machineId);
+      if (result.success === false) {
+        toast(result.error || 'Machine verification failed.', 'error');
+      }
       await fetchMachines();
     } catch {
       toast('Machine verification failed.', 'error');

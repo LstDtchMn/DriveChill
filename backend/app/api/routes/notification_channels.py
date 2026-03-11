@@ -13,7 +13,7 @@ from app.utils.url_security import validate_outbound_url_async
 router = APIRouter(prefix="/api/notification-channels", tags=["notification-channels"])
 
 # Config keys that contain URLs requiring full SSRF validation
-_URL_CONFIG_KEYS = ("url", "webhook_url")
+_URL_CONFIG_KEYS = ("url", "webhook_url", "broker_url")
 
 
 async def _validate_config_urls(config: dict) -> None:
@@ -21,11 +21,22 @@ async def _validate_config_urls(config: dict) -> None:
 
     Uses the shared url_security validator which blocks loopback, link-local,
     private RFC1918 ranges, and non-http/https schemes.
+
+    For broker_url (MQTT), the mqtt:// or mqtts:// scheme is rewritten to
+    http:// before validation so the hostname/IP check still applies.
     """
+    import re
+
     for key in _URL_CONFIG_KEYS:
         val = config.get(key)
         if val and isinstance(val, str):
-            ok, reason = await validate_outbound_url_async(val)
+            check_val = val
+            if key == "broker_url":
+                # Rewrite mqtt(s)://  →  http:// so the SSRF validator
+                # can parse and resolve the hostname.
+                check_val = re.sub(r"^mqtts?://", "http://", val, count=1)
+                check_val = re.sub(r"^ssl://", "http://", check_val, count=1)
+            ok, reason = await validate_outbound_url_async(check_val)
             if not ok:
                 raise HTTPException(
                     status_code=400,
