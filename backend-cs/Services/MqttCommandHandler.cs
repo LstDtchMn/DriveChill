@@ -256,7 +256,7 @@ public sealed class MqttCommandHandler : BackgroundService
                     var percent = percentEl.GetDouble();
                     if (percent >= 0 && percent <= 100)
                     {
-                        _hw.SetFanSpeed(fanId, percent);
+                        _fans.SetSpeed(fanId, percent);
                         _log.LogInformation("MQTT: set fan {FanId} to {Percent}%", fanId, percent);
                     }
                     else

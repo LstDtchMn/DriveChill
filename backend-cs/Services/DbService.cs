@@ -22,7 +22,7 @@ public sealed class DbService : IDisposable
         _settings = settings;
         _log = log;
         Directory.CreateDirectory(settings.DataDir);
-        _connStr = $"Data Source={settings.DbPath}";
+        _connStr = $"Data Source={settings.DbPath};Foreign Keys=True";
     }
 
     // -----------------------------------------------------------------------

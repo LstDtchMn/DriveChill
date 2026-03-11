@@ -14,15 +14,18 @@ public sealed class SettingsController : ControllerBase
     private readonly DbService                  _db;
     private readonly WebhookService             _webhooks;
     private readonly NotificationChannelService _notifChannels;
+    private readonly AlertService               _alerts;
 
     public SettingsController(SettingsStore store, AppSettings appSettings, DbService db,
-                              WebhookService webhooks, NotificationChannelService notifChannels)
+                              WebhookService webhooks, NotificationChannelService notifChannels,
+                              AlertService alerts)
     {
         _store         = store;
         _appSettings   = appSettings;
         _db            = db;
         _webhooks      = webhooks;
         _notifChannels = notifChannels;
+        _alerts        = alerts;
     }
 
     /// <summary>GET /api/settings — returns same field names as Python backend.</summary>
@@ -230,6 +233,7 @@ public sealed class SettingsController : ControllerBase
                 if (rule != null) rules.Add(rule);
             }
             _store.SaveAlerts(rules);
+            _alerts.ReloadRules();
             imported["alert_rules"] = rules.Count;
         }
 

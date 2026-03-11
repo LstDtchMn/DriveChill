@@ -237,8 +237,18 @@ public static partial class MigrationRunner
 
     private static string BackupDb(string dbPath)
     {
-        var ts = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+        var ts = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
         var backupPath = $"{dbPath}.bak-{ts}";
+
+        // Checkpoint WAL before copying so the backup file is self-contained.
+        var connStr = $"Data Source={dbPath}";
+        using var checkpointConn = new SqliteConnection(connStr);
+        checkpointConn.Open();
+        using var cmd = checkpointConn.CreateCommand();
+        cmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE)";
+        cmd.ExecuteNonQuery();
+        checkpointConn.Close();
+
         File.Copy(dbPath, backupPath, overwrite: true);
         _log.LogInformation("Database backed up to {Path}", backupPath);
         return backupPath;

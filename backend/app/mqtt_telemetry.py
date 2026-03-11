@@ -25,7 +25,7 @@ async def _do_publish(
             {
                 "sensor_id": r.id,
                 "sensor_name": r.name,
-                "sensor_type": r.sensor_type,
+                "sensor_type": r.sensor_type.value if hasattr(r.sensor_type, "value") else str(r.sensor_type),
                 "value": r.value,
                 "unit": r.unit,
             }

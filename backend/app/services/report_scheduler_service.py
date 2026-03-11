@@ -13,6 +13,7 @@ import math
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
+from zoneinfo import ZoneInfo
 
 if TYPE_CHECKING:
     import aiosqlite
@@ -36,10 +37,21 @@ def _is_due(schedule: dict, now: datetime) -> bool:
     """Return True if *schedule* should fire right now.
 
     A schedule is due when:
-    - Its ``time_utc`` (HH:MM) matches the current UTC hour+minute.
+    - Its ``time_utc`` (HH:MM) matches the current hour+minute in the
+      schedule's timezone (falls back to UTC when the timezone field is
+      absent or invalid).
     - It has never been sent, or ``last_sent_at`` is before the current
       reporting period (today for daily, the current ISO week for weekly).
     """
+    # Resolve the schedule's timezone; fall back to UTC.
+    tz_name = schedule.get("timezone")
+    try:
+        tz = ZoneInfo(tz_name) if tz_name else timezone.utc
+    except (KeyError, TypeError):
+        tz = timezone.utc
+
+    local_now = now.astimezone(tz)
+
     try:
         hh, mm = schedule["time_utc"].split(":")
         sched_hour = int(hh)
@@ -47,7 +59,7 @@ def _is_due(schedule: dict, now: datetime) -> bool:
     except (ValueError, AttributeError):
         return False
 
-    if now.hour != sched_hour or now.minute != sched_minute:
+    if local_now.hour != sched_hour or local_now.minute != sched_minute:
         return False
 
     last_sent_at = schedule.get("last_sent_at")
@@ -60,10 +72,10 @@ def _is_due(schedule: dict, now: datetime) -> bool:
         return True
 
     if schedule["frequency"] == "daily":
-        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        today_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
         return last_sent_dt < today_start
     else:  # weekly
-        week_start = _week_start_utc(now)
+        week_start = _week_start_utc(local_now)
         return last_sent_dt < week_start
 
 

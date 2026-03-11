@@ -135,7 +135,7 @@ public sealed class AuthController : ControllerBase
         {
             await _db.CreateUserAsync(req.Username.Trim(), hash, req.Role, ct);
         }
-        catch
+        catch (Microsoft.Data.Sqlite.SqliteException ex) when (ex.SqliteErrorCode == 19)
         {
             return Conflict(new { detail = "Username already exists" });
         }

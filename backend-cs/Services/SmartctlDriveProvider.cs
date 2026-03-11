@@ -123,8 +123,11 @@ public sealed partial class SmartctlDriveProvider : IDriveProvider
             proc.Start();
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
-            var stdout = await proc.StandardOutput.ReadToEndAsync(timeoutCts.Token);
-            var stderr = await proc.StandardError.ReadToEndAsync(timeoutCts.Token);
+            var stdoutTask = proc.StandardOutput.ReadToEndAsync(timeoutCts.Token);
+            var stderrTask = proc.StandardError.ReadToEndAsync(timeoutCts.Token);
+            await Task.WhenAll(stdoutTask, stderrTask);
+            var stdout = stdoutTask.Result;
+            var stderr = stderrTask.Result;
             await proc.WaitForExitAsync(timeoutCts.Token);
 
             if (!string.IsNullOrWhiteSpace(stderr))

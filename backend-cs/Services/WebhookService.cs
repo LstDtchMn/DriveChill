@@ -101,7 +101,6 @@ public sealed class WebhookService
         var body = Encoding.UTF8.GetBytes(json);
 
         var client = _httpClientFactory.CreateClient("webhooks");
-        client.Timeout = TimeSpan.FromSeconds(cfg.TimeoutSeconds);
 
         for (var attempt = 1; attempt <= cfg.MaxRetries + 1; attempt++)
         {
@@ -117,6 +116,9 @@ public sealed class WebhookService
 
             try
             {
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                timeoutCts.CancelAfter(TimeSpan.FromSeconds(cfg.TimeoutSeconds));
+
                 using var req = new HttpRequestMessage(HttpMethod.Post, cfg.TargetUrl);
                 req.Content = new ByteArrayContent(body);
                 req.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
@@ -135,10 +137,14 @@ public sealed class WebhookService
                     ).ToLowerInvariant();
                     req.Headers.Add("X-DriveChill-Signature", sig);
                 }
-                using var resp = await client.SendAsync(req, ct);
+                using var resp = await client.SendAsync(req, timeoutCts.Token);
                 statusCode = (int)resp.StatusCode;
                 success = resp.IsSuccessStatusCode;
                 if (!success) error = $"HTTP {(int)resp.StatusCode}";
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                error = $"Request timed out after {cfg.TimeoutSeconds}s";
             }
             catch (Exception ex)
             {

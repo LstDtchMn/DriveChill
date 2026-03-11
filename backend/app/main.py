@@ -510,12 +510,10 @@ class _SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        # Explicitly allow ws:// and wss:// so the WebSocket connection works
-        # even in browsers where 'self' alone does not cover the ws/wss
-        # scheme mapping.  Use the request Host header so CSP works for any
-        # deployment (not just localhost).  This is safe: CSP is a browser-side
-        # directive and the Host header reflects the origin the browser used.
-        ws_host = request.headers.get("host", f"localhost:{settings.port}")
+        # CSP connect-src: 'self' covers same-origin HTTP and (in modern
+        # browsers) the corresponding ws:/wss: scheme.  We no longer inject
+        # the request Host header — that was an unsanitised header reflection
+        # vector (IMPT-1).
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
             # Next.js static export injects inline bootstrap scripts.
@@ -523,7 +521,7 @@ class _SecurityHeadersMiddleware(BaseHTTPMiddleware):
             # Google Fonts stylesheet loaded by the Next.js layout.
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
             "img-src 'self' data:; "
-            f"connect-src 'self' ws://{ws_host} wss://{ws_host}; "
+            "connect-src 'self'; "
             # Google Fonts font files.
             "font-src 'self' https://fonts.gstatic.com; "
             "frame-ancestors 'none'"

@@ -241,7 +241,7 @@ export function FanTestPanel({ fanId, fanName }: Props) {
         ? 'badge-success'
         : result.status === 'cancelled'
           ? 'badge-warning'
-          : 'badge-error';
+          : 'badge-danger';
 
     return (
       <div className="card p-4">

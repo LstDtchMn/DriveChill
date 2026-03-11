@@ -137,6 +137,7 @@ export function useWebSocket(enabled = true) {
   useEffect(() => {
     if (!enabled) {
       // Close existing connection when disabled (e.g. auth expired)
+      enabledRef.current = false;
       if (wsRef.current) {
         wsRef.current.close();
         wsRef.current = null;

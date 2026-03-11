@@ -121,7 +121,7 @@ export function SettingsPage() {
       const updated = await api.drives.updateSettings(driveSettings);
       setDriveSettings(updated);
     } catch (e: any) {
-      alert(e?.message || 'Failed to save drive settings');
+      toast(e?.message || 'Failed to save drive settings', 'error');
     } finally {
       setDriveSaving(false);
     }

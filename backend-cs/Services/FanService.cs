@@ -86,7 +86,10 @@ public sealed class FanService
     /// <summary>Load per-fan settings from DB on startup.</summary>
     public async Task LoadFanSettingsAsync(DbService db, CancellationToken ct = default)
     {
-        _fanSettings = await db.GetAllFanSettingsAsync(ct);
+        var settings = await db.GetAllFanSettingsAsync(ct);
+        _rwl.EnterWriteLock();
+        try { _fanSettings = settings; }
+        finally { _rwl.ExitWriteLock(); }
     }
 
     /// <summary>Update cached fan settings (caller persists to DB).</summary>

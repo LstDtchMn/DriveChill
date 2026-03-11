@@ -32,7 +32,8 @@ public sealed class SettingsControllerTests : IDisposable
         _webhooks      = new WebhookService(_store, new NullHttpClientFactory(), _appSettings);
         _notifChannels = new NotificationChannelService(_db, new NullHttpClientFactory(),
                              NullLogger<NotificationChannelService>.Instance);
-        _ctrl          = new SettingsController(_store, _appSettings, _db, _webhooks, _notifChannels);
+        var alerts      = new AlertService(_store);
+        _ctrl          = new SettingsController(_store, _appSettings, _db, _webhooks, _notifChannels, alerts);
     }
 
     public void Dispose()

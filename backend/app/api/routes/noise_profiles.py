@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.api.dependencies.auth import require_csrf
 
@@ -22,6 +22,7 @@ class NoiseProfileBody(BaseModel):
     mode: str = Field(default="quick")
     data: list[NoiseDataPoint] = Field(min_length=1)
 
+    @field_validator("mode")
     @classmethod
     def validate_mode(cls, v: str) -> str:
         if v not in {"quick", "precise"}:

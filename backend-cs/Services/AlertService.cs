@@ -47,6 +47,16 @@ public sealed class AlertService
     // Rules CRUD
     // -----------------------------------------------------------------------
 
+    /// <summary>Reload rules from the store (e.g. after config import).</summary>
+    public void ReloadRules()
+    {
+        lock (_lock)
+        {
+            _rules.Clear();
+            _rules.AddRange(_store.LoadAlerts());
+        }
+    }
+
     public IReadOnlyList<AlertRule> GetRules()
     {
         lock (_lock) return [.. _rules];

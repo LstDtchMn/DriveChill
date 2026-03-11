@@ -10,6 +10,7 @@ public sealed class SmartTrendService
 {
     private readonly ILogger<SmartTrendService> _logger;
     private readonly Dictionary<string, DriveSnapshot> _snapshots = [];
+    private readonly object _snapshotsLock = new();
 
     public double WearWarningPct { get; set; } = 80.0;
     public double WearCriticalPct { get; set; } = 90.0;
@@ -33,132 +34,135 @@ public sealed class SmartTrendService
         double? wearPercentUsed,
         long? powerOnHours)
     {
-        _snapshots.TryGetValue(driveId, out var prev);
-        prev ??= new DriveSnapshot();
-        var alerts = new List<SmartTrendAlert>();
-
-        // 1. Reallocated sector increase
-        if (reallocatedSectors.HasValue && prev.ReallocatedSectors.HasValue)
+        lock (_snapshotsLock)
         {
-            long delta = reallocatedSectors.Value - prev.ReallocatedSectors.Value;
-            if (delta >= ReallocatedSectorDeltaThreshold)
+            _snapshots.TryGetValue(driveId, out var prev);
+            prev ??= new DriveSnapshot();
+            var alerts = new List<SmartTrendAlert>();
+
+            // 1. Reallocated sector increase
+            if (reallocatedSectors.HasValue && prev.ReallocatedSectors.HasValue)
             {
-                if (!prev.ActiveConditions.Contains("reallocated_increase"))
+                long delta = reallocatedSectors.Value - prev.ReallocatedSectors.Value;
+                if (delta >= ReallocatedSectorDeltaThreshold)
                 {
-                    alerts.Add(new SmartTrendAlert
+                    if (!prev.ActiveConditions.Contains("reallocated_increase"))
                     {
-                        Condition   = "reallocated_increase",
-                        Severity    = "critical",
-                        Message     = $"{driveName}: reallocated sectors increased by {delta} ({prev.ReallocatedSectors} → {reallocatedSectors})",
-                        ActualValue = reallocatedSectors.Value,
-                        Threshold   = ReallocatedSectorDeltaThreshold,
-                    });
-                    prev.ActiveConditions.Add("reallocated_increase");
+                        alerts.Add(new SmartTrendAlert
+                        {
+                            Condition   = "reallocated_increase",
+                            Severity    = "critical",
+                            Message     = $"{driveName}: reallocated sectors increased by {delta} ({prev.ReallocatedSectors} → {reallocatedSectors})",
+                            ActualValue = reallocatedSectors.Value,
+                            Threshold   = ReallocatedSectorDeltaThreshold,
+                        });
+                        prev.ActiveConditions.Add("reallocated_increase");
+                    }
+                }
+                else
+                {
+                    prev.ActiveConditions.Remove("reallocated_increase");
                 }
             }
-            else
+
+            // 2. Wear threshold crossing
+            if (wearPercentUsed.HasValue)
             {
-                prev.ActiveConditions.Remove("reallocated_increase");
+                if (wearPercentUsed.Value >= WearCriticalPct)
+                {
+                    if (!prev.ActiveConditions.Contains("wear_critical"))
+                    {
+                        alerts.Add(new SmartTrendAlert
+                        {
+                            Condition   = "wear_critical",
+                            Severity    = "critical",
+                            Message     = $"{driveName}: wear level critical ({wearPercentUsed:F1}% used)",
+                            ActualValue = wearPercentUsed.Value,
+                            Threshold   = WearCriticalPct,
+                        });
+                        prev.ActiveConditions.Add("wear_critical");
+                    }
+                    prev.ActiveConditions.Remove("wear_warning");
+                }
+                else if (wearPercentUsed.Value >= WearWarningPct)
+                {
+                    if (!prev.ActiveConditions.Contains("wear_warning"))
+                    {
+                        alerts.Add(new SmartTrendAlert
+                        {
+                            Condition   = "wear_warning",
+                            Severity    = "warning",
+                            Message     = $"{driveName}: wear level warning ({wearPercentUsed:F1}% used)",
+                            ActualValue = wearPercentUsed.Value,
+                            Threshold   = WearWarningPct,
+                        });
+                        prev.ActiveConditions.Add("wear_warning");
+                    }
+                    prev.ActiveConditions.Remove("wear_critical");
+                }
+                else
+                {
+                    prev.ActiveConditions.Remove("wear_warning");
+                    prev.ActiveConditions.Remove("wear_critical");
+                }
             }
+
+            // 3. Power-on-hours threshold
+            if (powerOnHours.HasValue)
+            {
+                if (powerOnHours.Value >= PowerOnHoursCritical)
+                {
+                    if (!prev.ActiveConditions.Contains("poh_critical"))
+                    {
+                        alerts.Add(new SmartTrendAlert
+                        {
+                            Condition   = "poh_critical",
+                            Severity    = "critical",
+                            Message     = $"{driveName}: power-on hours critical ({powerOnHours:N0}h)",
+                            ActualValue = powerOnHours.Value,
+                            Threshold   = PowerOnHoursCritical,
+                        });
+                        prev.ActiveConditions.Add("poh_critical");
+                    }
+                    prev.ActiveConditions.Remove("poh_warning");
+                }
+                else if (powerOnHours.Value >= PowerOnHoursWarning)
+                {
+                    if (!prev.ActiveConditions.Contains("poh_warning"))
+                    {
+                        alerts.Add(new SmartTrendAlert
+                        {
+                            Condition   = "poh_warning",
+                            Severity    = "warning",
+                            Message     = $"{driveName}: power-on hours warning ({powerOnHours:N0}h)",
+                            ActualValue = powerOnHours.Value,
+                            Threshold   = PowerOnHoursWarning,
+                        });
+                        prev.ActiveConditions.Add("poh_warning");
+                    }
+                    prev.ActiveConditions.Remove("poh_critical");
+                }
+                else
+                {
+                    prev.ActiveConditions.Remove("poh_warning");
+                    prev.ActiveConditions.Remove("poh_critical");
+                }
+            }
+
+            // Update snapshot
+            _snapshots[driveId] = new DriveSnapshot
+            {
+                ReallocatedSectors = reallocatedSectors,
+                WearPercentUsed = wearPercentUsed,
+                PowerOnHours = powerOnHours,
+                ActiveConditions = prev.ActiveConditions,
+            };
+
+            foreach (var a in alerts)
+                _logger.LogWarning("SMART trend alert: {Message}", a.Message);
+
+            return alerts;
         }
-
-        // 2. Wear threshold crossing
-        if (wearPercentUsed.HasValue)
-        {
-            if (wearPercentUsed.Value >= WearCriticalPct)
-            {
-                if (!prev.ActiveConditions.Contains("wear_critical"))
-                {
-                    alerts.Add(new SmartTrendAlert
-                    {
-                        Condition   = "wear_critical",
-                        Severity    = "critical",
-                        Message     = $"{driveName}: wear level critical ({wearPercentUsed:F1}% used)",
-                        ActualValue = wearPercentUsed.Value,
-                        Threshold   = WearCriticalPct,
-                    });
-                    prev.ActiveConditions.Add("wear_critical");
-                }
-                prev.ActiveConditions.Remove("wear_warning");
-            }
-            else if (wearPercentUsed.Value >= WearWarningPct)
-            {
-                if (!prev.ActiveConditions.Contains("wear_warning"))
-                {
-                    alerts.Add(new SmartTrendAlert
-                    {
-                        Condition   = "wear_warning",
-                        Severity    = "warning",
-                        Message     = $"{driveName}: wear level warning ({wearPercentUsed:F1}% used)",
-                        ActualValue = wearPercentUsed.Value,
-                        Threshold   = WearWarningPct,
-                    });
-                    prev.ActiveConditions.Add("wear_warning");
-                }
-                prev.ActiveConditions.Remove("wear_critical");
-            }
-            else
-            {
-                prev.ActiveConditions.Remove("wear_warning");
-                prev.ActiveConditions.Remove("wear_critical");
-            }
-        }
-
-        // 3. Power-on-hours threshold
-        if (powerOnHours.HasValue)
-        {
-            if (powerOnHours.Value >= PowerOnHoursCritical)
-            {
-                if (!prev.ActiveConditions.Contains("poh_critical"))
-                {
-                    alerts.Add(new SmartTrendAlert
-                    {
-                        Condition   = "poh_critical",
-                        Severity    = "critical",
-                        Message     = $"{driveName}: power-on hours critical ({powerOnHours:N0}h)",
-                        ActualValue = powerOnHours.Value,
-                        Threshold   = PowerOnHoursCritical,
-                    });
-                    prev.ActiveConditions.Add("poh_critical");
-                }
-                prev.ActiveConditions.Remove("poh_warning");
-            }
-            else if (powerOnHours.Value >= PowerOnHoursWarning)
-            {
-                if (!prev.ActiveConditions.Contains("poh_warning"))
-                {
-                    alerts.Add(new SmartTrendAlert
-                    {
-                        Condition   = "poh_warning",
-                        Severity    = "warning",
-                        Message     = $"{driveName}: power-on hours warning ({powerOnHours:N0}h)",
-                        ActualValue = powerOnHours.Value,
-                        Threshold   = PowerOnHoursWarning,
-                    });
-                    prev.ActiveConditions.Add("poh_warning");
-                }
-                prev.ActiveConditions.Remove("poh_critical");
-            }
-            else
-            {
-                prev.ActiveConditions.Remove("poh_warning");
-                prev.ActiveConditions.Remove("poh_critical");
-            }
-        }
-
-        // Update snapshot
-        _snapshots[driveId] = new DriveSnapshot
-        {
-            ReallocatedSectors = reallocatedSectors,
-            WearPercentUsed = wearPercentUsed,
-            PowerOnHours = powerOnHours,
-            ActiveConditions = prev.ActiveConditions,
-        };
-
-        foreach (var a in alerts)
-            _logger.LogWarning("SMART trend alert: {Message}", a.Message);
-
-        return alerts;
     }
 
     private sealed class DriveSnapshot
