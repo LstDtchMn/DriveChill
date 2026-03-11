@@ -321,24 +321,17 @@ public sealed class DbService : IDisposable
                 """;
             await cmd.ExecuteNonQueryAsync(ct);
 
-            // Idempotent column migrations for existing databases.
-            // ALTER TABLE ADD COLUMN throws if the column already exists — we suppress that.
-            foreach (var alter in new[]
+            // Run file-based migrations (replaces the old hardcoded ALTER TABLE loop).
+            // MigrationRunner tracks applied versions in a schema_version table,
+            // backs up before applying, and rolls back on failure.
+            try
             {
-                "ALTER TABLE temperature_targets ADD COLUMN pid_mode INTEGER NOT NULL DEFAULT 0",
-                "ALTER TABLE temperature_targets ADD COLUMN pid_kp   REAL    NOT NULL DEFAULT 5.0",
-                "ALTER TABLE temperature_targets ADD COLUMN pid_ki   REAL    NOT NULL DEFAULT 0.05",
-                "ALTER TABLE temperature_targets ADD COLUMN pid_kd   REAL    NOT NULL DEFAULT 1.0",
-                "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'",
-            })
+                await MigrationRunner.RunAsync(_connStr, _settings.DbPath, ct);
+            }
+            catch (Exception ex)
             {
-                try
-                {
-                    await using var mig = conn.CreateCommand();
-                    mig.CommandText = alter;
-                    await mig.ExecuteNonQueryAsync(ct);
-                }
-                catch (SqliteException) { /* column already exists — safe to ignore */ }
+                _log.LogError(ex, "Schema migration failed");
+                throw;
             }
 
             _initialised = true;

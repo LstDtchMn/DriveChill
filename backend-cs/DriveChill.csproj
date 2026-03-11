@@ -32,6 +32,11 @@
     <None Include="..\frontend\out\**\*" CopyToOutputDirectory="PreserveNewest" Link="wwwroot\%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 
+  <!-- Copy SQL migrations to output directory -->
+  <ItemGroup>
+    <None Include="Migrations\*.sql" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <!-- Exclude the test project directory from compilation -->
   <ItemGroup>
     <Compile Remove="Tests\**" />
