@@ -66,12 +66,12 @@ public sealed class NotificationsController : ControllerBase
         var s = new EmailNotificationSettingsRecord
         {
             Enabled       = body.TryGetProperty("enabled",        out var en2)  ? en2.GetBoolean()  : current.Enabled,
-            SmtpHost      = body.TryGetProperty("smtp_host",      out var sh)   ? sh.GetString()!   : current.SmtpHost,
+            SmtpHost      = body.TryGetProperty("smtp_host",      out var sh)   ? (sh.GetString() ?? current.SmtpHost)      : current.SmtpHost,
             SmtpPort      = smtpPort,
-            SmtpUsername  = body.TryGetProperty("smtp_username",  out var su)   ? su.GetString()!   : current.SmtpUsername,
+            SmtpUsername  = body.TryGetProperty("smtp_username",  out var su)   ? (su.GetString() ?? current.SmtpUsername)  : current.SmtpUsername,
             // Only update password when the field is explicitly present in the payload.
-            SmtpPassword  = body.TryGetProperty("smtp_password",  out var spw)  ? spw.GetString() ?? "" : current.SmtpPassword,
-            SenderAddress = body.TryGetProperty("sender_address", out var sa)   ? sa.GetString()!   : current.SenderAddress,
+            SmtpPassword  = body.TryGetProperty("smtp_password",  out var spw)  ? (spw.GetString() ?? "")                  : current.SmtpPassword,
+            SenderAddress = body.TryGetProperty("sender_address", out var sa)   ? (sa.GetString() ?? current.SenderAddress) : current.SenderAddress,
             RecipientList = body.TryGetProperty("recipient_list", out var rl)   ? JsonSerializer.Serialize(rl) : current.RecipientList,
             UseTls        = body.TryGetProperty("use_tls",        out var tls)  ? tls.GetBoolean()  : current.UseTls,
             UseSsl        = body.TryGetProperty("use_ssl",        out var ssl2) ? ssl2.GetBoolean() : current.UseSsl,

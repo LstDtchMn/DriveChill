@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.api.dependencies.auth import require_auth, require_csrf
 from app.config import settings
-from app.utils.url_security import validate_outbound_url
+from app.utils.url_security import _parse_and_check_scheme, validate_outbound_url_async
 
 router = APIRouter(prefix="/api/machines", tags=["machines"])
 
@@ -33,13 +33,11 @@ class CreateMachineRequest(BaseModel):
     @field_validator("base_url")
     @classmethod
     def validate_base_url(cls, v: str) -> str:
+        """Scheme/format check only — async DNS SSRF check runs in the route handler."""
         value = v.strip()
-        ok, reason = validate_outbound_url(
-            value,
-            allow_private=settings.allow_private_outbound_targets,
-        )
-        if not ok:
-            raise ValueError(reason or "base_url is not allowed")
+        _, err = _parse_and_check_scheme(value)
+        if err:
+            raise ValueError(err)
         return value.rstrip("/")
 
 
@@ -55,15 +53,13 @@ class UpdateMachineRequest(BaseModel):
     @field_validator("base_url")
     @classmethod
     def validate_base_url(cls, v: str | None) -> str | None:
+        """Scheme/format check only — async DNS SSRF check runs in the route handler."""
         if v is None:
             return None
         value = v.strip()
-        ok, reason = validate_outbound_url(
-            value,
-            allow_private=settings.allow_private_outbound_targets,
-        )
-        if not ok:
-            raise ValueError(reason or "base_url is not allowed")
+        _, err = _parse_and_check_scheme(value)
+        if err:
+            raise ValueError(err)
         return value.rstrip("/")
 
 
@@ -124,6 +120,12 @@ async def list_machines(request: Request):
 
 @router.post("", dependencies=[Depends(require_csrf)])
 async def create_machine(body: CreateMachineRequest, request: Request):
+    # Async DNS-based SSRF check (moved out of Pydantic validator to avoid blocking event loop)
+    ok, reason = await validate_outbound_url_async(
+        body.base_url, allow_private=settings.allow_private_outbound_targets,
+    )
+    if not ok:
+        raise HTTPException(status_code=422, detail=reason or "base_url is not allowed")
     repo = request.app.state.machine_repo
     machine = await repo.create(
         name=body.name,
@@ -139,6 +141,13 @@ async def create_machine(body: CreateMachineRequest, request: Request):
 
 @router.put("/{machine_id}", dependencies=[Depends(require_csrf)])
 async def update_machine(machine_id: str, body: UpdateMachineRequest, request: Request):
+    # Async DNS-based SSRF check when base_url is being changed
+    if body.base_url is not None:
+        ok, reason = await validate_outbound_url_async(
+            body.base_url, allow_private=settings.allow_private_outbound_targets,
+        )
+        if not ok:
+            raise HTTPException(status_code=422, detail=reason or "base_url is not allowed")
     repo = request.app.state.machine_repo
     # When api_key is not in the request body, pass the sentinel so the repo
     # keeps the existing value instead of NULLing it.

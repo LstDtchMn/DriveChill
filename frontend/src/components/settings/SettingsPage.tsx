@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { api, authApi, getApiBaseUrl } from '@/lib/api';
 import { useAuthStore } from '@/stores/authStore';
 import { useAppStore } from '@/stores/appStore';
@@ -49,6 +49,8 @@ export function SettingsPage() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const savedTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  useEffect(() => () => { if (savedTimerRef.current) clearTimeout(savedTimerRef.current); }, []);
   const [editingSensor, setEditingSensor] = useState<string | null>(null);
   const [editLabel, setEditLabel] = useState('');
   const [notifPermission, setNotifPermission] = useState<NotificationPermission | 'unsupported'>('default');
@@ -265,7 +267,7 @@ export function SettingsPage() {
       });
       setTempUnit(settings.temp_unit as TempUnit);
       setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      savedTimerRef.current = setTimeout(() => setSaved(false), 2000);
     } catch {
       toast('Failed to save settings.', 'error');
     } finally {

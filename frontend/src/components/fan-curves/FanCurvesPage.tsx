@@ -218,7 +218,10 @@ export function FanCurvesPage() {
     setCurves(curves.map((c) => (c.id === selectedCurve ? updated : c)));
   };
 
+  const [creatingCurve, setCreatingCurve] = useState(false);
   const handleNewCurve = async () => {
+    if (creatingCurve) return;
+    setCreatingCurve(true);
     const draft: FanCurve = {
       id: `curve_${Date.now()}`,
       name: `Custom Curve ${curves.length + 1}`,
@@ -238,6 +241,8 @@ export function FanCurvesPage() {
       setEditingPoints(newCurve.points);
     } catch {
       toast('Failed to create curve. Check your connection.', 'error');
+    } finally {
+      setCreatingCurve(false);
     }
   };
 
@@ -249,9 +254,9 @@ export function FanCurvesPage() {
       <div className="border-t pt-6" style={{ borderColor: 'var(--border)' }}>
         <div className="flex items-center justify-between gap-2 mb-4 flex-wrap">
           <h3 className="section-title">Custom Curves</h3>
-          <button onClick={handleNewCurve} disabled={!canWrite} className="btn-primary min-h-11 flex items-center gap-2 text-sm disabled:opacity-50">
+          <button onClick={handleNewCurve} disabled={!canWrite || creatingCurve} className="btn-primary min-h-11 flex items-center gap-2 text-sm disabled:opacity-50">
             <Plus size={14} />
-            New Curve
+            {creatingCurve ? 'Creating...' : 'New Curve'}
           </button>
         </div>
 
@@ -406,7 +411,7 @@ export function FanCurvesPage() {
             <p className="text-sm mb-3" style={{ color: 'var(--text-secondary)' }}>
               No custom curves yet. Create one or activate a preset above.
             </p>
-            <button onClick={handleNewCurve} disabled={!canWrite} className="btn-primary min-h-11 text-sm disabled:opacity-50">
+            <button onClick={handleNewCurve} disabled={!canWrite || creatingCurve} className="btn-primary min-h-11 text-sm disabled:opacity-50">
               Create Your First Curve
             </button>
           </div>

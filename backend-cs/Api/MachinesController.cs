@@ -82,7 +82,11 @@ public sealed class MachinesController : ControllerBase
         {
             Name                = body.TryGetProperty("name",    out var n) ? n.GetString() ?? existing.Name   : existing.Name,
             BaseUrl             = newBaseUrl,
-            ApiKeyHash          = body.TryGetProperty("api_key", out var k) ? (k.GetString() is { } newKey ? CredentialEncryption.Encrypt(newKey, _settings.SecretKey) : null) : existing.ApiKeyHash,
+            ApiKeyHash          = body.TryGetProperty("api_key", out var k)
+                ? (k.ValueKind == JsonValueKind.Null ? existing.ApiKeyHash
+                   : k.GetString() is { } newKey ? CredentialEncryption.Encrypt(newKey, _settings.SecretKey)
+                   : existing.ApiKeyHash)
+                : existing.ApiKeyHash,
             Enabled             = body.TryGetProperty("enabled", out var e) ? (e.ValueKind == JsonValueKind.True) : existing.Enabled,
             PollIntervalSeconds = body.TryGetProperty("poll_interval_seconds", out var p) ? (p.TryGetDouble(out var pd) ? pd : existing.PollIntervalSeconds) : existing.PollIntervalSeconds,
             TimeoutMs           = body.TryGetProperty("timeout_ms", out var t) ? (t.TryGetInt32(out var ti) ? ti : existing.TimeoutMs) : existing.TimeoutMs,
@@ -148,9 +152,9 @@ public sealed class MachinesController : ControllerBase
             var fansTask     = client.GetStringAsync($"{machine.BaseUrl}/api/fans",     ct);
             await Task.WhenAll(profilesTask, sensorsTask, fansTask);
 
-            var profiles = JsonSerializer.Deserialize<JsonElement>(await profilesTask);
-            var sensors  = JsonSerializer.Deserialize<JsonElement>(await sensorsTask);
-            var fans     = JsonSerializer.Deserialize<JsonElement>(await fansTask);
+            var profiles = JsonSerializer.Deserialize<JsonElement>(profilesTask.Result);
+            var sensors  = JsonSerializer.Deserialize<JsonElement>(sensorsTask.Result);
+            var fans     = JsonSerializer.Deserialize<JsonElement>(fansTask.Result);
             return Ok(new
             {
                 state = new

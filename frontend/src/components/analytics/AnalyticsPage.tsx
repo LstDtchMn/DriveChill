@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { api } from '@/lib/api';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { displayTemp, tempUnitSymbol } from '@/lib/tempUnit';
@@ -115,6 +115,7 @@ export function AnalyticsPage() {
   const [corrY, setCorrY]           = useState('');
   const [corrResult, setCorrResult] = useState<{ coeff: number; samples: AnalyticsCorrelationSample[]; count: number } | null>(null);
   const [corrLoading, setCorrLoading] = useState(false);
+  const corrGenRef = useRef(0);
 
   const canWrite = useCanWrite();
   const { tempUnit } = useSettingsStore();
@@ -171,12 +172,18 @@ export function AnalyticsPage() {
 
   const handleCorrelate = async () => {
     if (!corrX || !corrY || corrX === corrY) return;
+    const gen = ++corrGenRef.current;
     setCorrLoading(true); setCorrResult(null);
     try {
       const r = await api.analytics.getCorrelation(corrX, corrY, hours, buildOpts());
+      if (gen !== corrGenRef.current) return; // stale request
       setCorrResult({ coeff: r.correlation_coefficient, samples: r.samples, count: r.sample_count });
-    } catch { setCorrResult({ coeff: NaN, samples: [], count: 0 }); }
-    finally { setCorrLoading(false); }
+    } catch {
+      if (gen !== corrGenRef.current) return;
+      setCorrResult({ coeff: NaN, samples: [], count: 0 });
+    } finally {
+      if (gen === corrGenRef.current) setCorrLoading(false);
+    }
   };
 
   const handleCreateAnnotation = async () => {

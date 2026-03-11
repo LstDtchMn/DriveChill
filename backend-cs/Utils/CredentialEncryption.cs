@@ -18,6 +18,12 @@ public static class CredentialEncryption
     private const int    TagLen   = 16;
     private static readonly byte[] Aad = "smtp"u8.ToArray();
 
+    /// <summary>
+    /// Derive a 256-bit key from the deployment secret.
+    /// IMPORTANT: SecretKey MUST be high-entropy (e.g. <c>secrets.token_hex(32)</c>).
+    /// A single SHA-256 pass is acceptable for a 256-bit random input; a low-entropy
+    /// passphrase would be brute-forceable. See AppSettings.SecretKey docs.
+    /// </summary>
     private static byte[] DeriveKey(string secretKey)
         => SHA256.HashData(Encoding.UTF8.GetBytes(secretKey));
 

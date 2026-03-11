@@ -7,7 +7,8 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Callable, Awaitable
 
 import aiosqlite
-from pydantic import BaseModel
+from typing import Literal
+from pydantic import BaseModel, Field
 
 from app.models.sensors import SensorReading, SensorType
 from app.services import prom_metrics
@@ -39,12 +40,12 @@ class AlertAction(BaseModel):
 
 
 class AlertRule(BaseModel):
-    id: str
-    sensor_id: str
+    id: str = Field(max_length=128)
+    sensor_id: str = Field(max_length=128)
     threshold: float  # Temperature threshold in °C
-    name: str = ""
-    direction: str = "above"
-    cooldown_seconds: int = 300
+    name: str = Field(default="", max_length=256)
+    direction: Literal["above", "below"] = "above"
+    cooldown_seconds: int = Field(default=300, ge=0, le=86400)
     enabled: bool = True
     action: AlertAction | None = None
 

@@ -1358,7 +1358,7 @@ public sealed class DbService : IDisposable
         if (timezone is not null) { parts.Add("timezone = $timezone"); parms.Add(new("$timezone", timezone)); }
         if (enabled.HasValue) { parts.Add("enabled = $enabled"); parms.Add(new("$enabled", enabled.Value ? 1 : 0)); }
         if (parts.Count == 0)
-            return null;
+            return await GetReportScheduleAsync(id, ct); // no fields to update — return current state
 
         await using var conn = new SqliteConnection(_connStr);
         await conn.OpenAsync(ct);

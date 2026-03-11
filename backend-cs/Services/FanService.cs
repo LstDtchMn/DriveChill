@@ -55,6 +55,7 @@ public sealed class FanService
     // Control transparency (B3): per-fan source of the last applied speed.
     // Sources: "startup_safety" | "panic_sensor" | "panic_temp" | "released"
     //          | "profile" | "temperature_target" | "manual"
+    private readonly object _controlSourcesLock = new();
     private Dictionary<string, string> _controlSources = new();
 
     private readonly double PanicCpuTemp;
@@ -121,10 +122,10 @@ public sealed class FanService
 
                 // Try to find current speed from sensor readings
                 var rpmReading = snapshot.Readings.FirstOrDefault(r =>
-                    r.Id == fanId + "_rpm" || r.Id.StartsWith(fanId));
+                    r.Id == fanId + "_rpm" || r.Id == fanId);
                 var pctReading = snapshot.Readings.FirstOrDefault(r =>
                     r.SensorType == SensorTypeValues.FanPercent &&
-                    (r.Id == fanId + "_pct" || r.Id.StartsWith(fanId)));
+                    (r.Id == fanId + "_pct" || r.Id == fanId));
 
                 result.Add(new FanStatus
                 {
@@ -200,7 +201,7 @@ public sealed class FanService
         finally { _rwl.ExitReadLock(); }
 
         Dictionary<string, string> sources;
-        lock (_controlSources) sources = new Dictionary<string, string>(_controlSources);
+        lock (_controlSourcesLock) sources = new Dictionary<string, string>(_controlSources);
 
         return new
         {
@@ -240,7 +241,7 @@ public sealed class FanService
                     }
                 }
                 finally { _rwl.ExitWriteLock(); }
-                lock (_controlSources)
+                lock (_controlSourcesLock)
                 {
                     _controlSources.Clear();
                     foreach (var fanId in _hw.GetFanIds())
@@ -279,7 +280,7 @@ public sealed class FanService
                 }
             }
             finally { _rwl.ExitWriteLock(); }
-            lock (_controlSources)
+            lock (_controlSourcesLock)
             {
                 _controlSources.Clear();
                 foreach (var fanId in _hw.GetFanIds())
@@ -298,7 +299,7 @@ public sealed class FanService
     /// <summary>Per-fan source of the last applied speed (B3 control transparency).</summary>
     public IReadOnlyDictionary<string, string> ControlSources
     {
-        get { lock (_controlSources) return new Dictionary<string, string>(_controlSources); }
+        get { lock (_controlSourcesLock) return new Dictionary<string, string>(_controlSources); }
     }
 
     /// <summary>Exit startup safety mode (curves are now loaded).</summary>
@@ -416,7 +417,7 @@ public sealed class FanService
         if (_released || _tempPanic || _sensorPanic)
         {
             if (_released)
-                lock (_controlSources) _controlSources.Clear();
+                lock (_controlSourcesLock) _controlSources.Clear();
             return Task.CompletedTask;
         }
 
@@ -431,7 +432,7 @@ public sealed class FanService
                 var startupFanIds = _hw.GetFanIds();
                 foreach (var fanId in startupFanIds)
                     _hw.SetFanSpeed(fanId, StartupSafetySpeed);
-                lock (_controlSources)
+                lock (_controlSourcesLock)
                 {
                     _controlSources.Clear();
                     foreach (var fanId in startupFanIds)
@@ -451,6 +452,10 @@ public sealed class FanService
             sensorValues = _virtualSensorSvc.ResolveAll(sensorValues);
 
         // 1. Build curve-based speeds
+        // Snapshot test-locked fans outside _rwl to avoid inconsistent lock ordering
+        HashSet<string> testLockedSnapshot;
+        lock (_testLockObj) testLockedSnapshot = new HashSet<string>(_testLocked);
+
         var curveSpeeds = new Dictionary<string, double>();
         _rwl.EnterWriteLock(); // write lock needed for hysteresis state mutation
         try
@@ -458,8 +463,7 @@ public sealed class FanService
             foreach (var (fanId, curve) in _curves)
             {
                 // Skip fans locked by FanTestService — benchmark sweep controls them directly
-                lock (_testLockObj)
-                    if (_testLocked.Contains(fanId)) continue;
+                if (testLockedSnapshot.Contains(fanId)) continue;
 
                 if (curve == null || !curve.Enabled) continue;
 
@@ -523,8 +527,8 @@ public sealed class FanService
         // Apply ramp-rate limiting: clamp speed change per tick (panic bypasses this)
         var rampRate = _store.FanRampRatePctPerSec;
         var nowMs = _rampStopwatch.ElapsedMilliseconds;
-        var elapsedSec = (_lastTickMs > 0) ? (nowMs - _lastTickMs) / 1000.0 : 0.0;
-        _lastTickMs = nowMs;
+        var prevMs = Interlocked.Exchange(ref _lastTickMs, nowMs);
+        var elapsedSec = (prevMs > 0) ? (nowMs - prevMs) / 1000.0 : 0.0;
 
         if (rampRate > 0 && elapsedSec > 0)
         {
@@ -575,7 +579,7 @@ public sealed class FanService
         }
 
         // Persist control sources
-        lock (_controlSources) { _controlSources = newSources; }
+        lock (_controlSourcesLock) { _controlSources = newSources; }
 
         return Task.CompletedTask;
     }

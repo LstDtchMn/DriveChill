@@ -105,21 +105,14 @@ async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
     credentials: 'include',
   });
 
-  if (res.status === 401) {
-    // Notify the app that the session has expired
-    if (typeof window !== 'undefined') {
+  if (!res.ok) {
+    // Dispatch auth/forbidden events only on actual errors
+    if (res.status === 401 && typeof window !== 'undefined') {
       window.dispatchEvent(new Event('drivechill:auth-expired'));
     }
-  }
-
-  if (res.status === 403) {
-    // Notify the app that the action was forbidden (e.g. viewer role trying to write)
-    if (typeof window !== 'undefined') {
+    if (res.status === 403 && typeof window !== 'undefined') {
       window.dispatchEvent(new Event('drivechill:forbidden'));
     }
-  }
-
-  if (!res.ok) {
     let detail: unknown = null;
     try {
       detail = await res.json();
@@ -128,6 +121,9 @@ async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
     }
     throw new APIError(res.status, `API error: ${res.status} ${res.statusText}`, detail);
   }
+
+  // HTTP 204 No Content — skip body parsing
+  if (res.status === 204) return undefined as T;
   return res.json();
 }
 

@@ -319,7 +319,7 @@ class MachineMonitorService:
         if machine.get("api_key"):
             headers["Authorization"] = f"Bearer {machine['api_key']}"
 
-        url = f"{base_url}{path}"
+        url = f"{base_url}{normalized}"
         response = await self._client.request(
             method=method.upper(),
             url=url,
