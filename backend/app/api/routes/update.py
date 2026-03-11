@@ -64,49 +64,65 @@ async def _deployment_type() -> str:
 
 
 async def _fetch_latest() -> dict:
-    """Query GitHub releases API and return normalised check result."""
+    """Query GitHub releases API and return normalised check result.
+
+    The cache lock is held only for reading/writing the cached result, not
+    during the GitHub HTTP call or the ``sc.exe`` subprocess, so concurrent
+    requests are never blocked behind I/O.
+    """
     global _cached_at, _cached_data
 
+    # Fast path: return cached result without blocking.
     async with _cache_lock:
         now = datetime.now(timezone.utc)
         if _cached_at and _cached_data and (now - _cached_at) < _CACHE_TTL:
             return _cached_data
 
-        url = f"https://api.github.com/repos/{_GITHUB_REPO}/releases/latest"
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(
-                    url, headers={"User-Agent": f"DriveChill/{settings.app_version}"}
-                )
-                resp.raise_for_status()
-                data = resp.json()
-        except httpx.HTTPError as exc:
-            raise HTTPException(
-                status_code=503,
-                detail=f"Could not reach GitHub releases API: {exc}",
+    # Perform the network call and subprocess *outside* the lock so
+    # concurrent callers are not blocked behind slow I/O.
+    url = f"https://api.github.com/repos/{_GITHUB_REPO}/releases/latest"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                url, headers={"User-Agent": f"DriveChill/{settings.app_version}"}
             )
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Could not reach GitHub releases API: {exc}",
+        )
 
-        latest_tag = data.get("tag_name", "").lstrip("v")
-        release_url = data.get("html_url", "")
+    latest_tag = data.get("tag_name", "").lstrip("v")
+    release_url = data.get("html_url", "")
 
-        def _ver_tuple(v: str):
-            try:
-                parts = (v.split("-")[0].split(".") + ["0", "0", "0"])[:3]
-                return tuple(int(x) for x in parts)
-            except ValueError:
-                return (0, 0, 0)
+    def _ver_tuple(v: str):
+        try:
+            parts = (v.split("-")[0].split(".") + ["0", "0", "0"])[:3]
+            return tuple(int(x) for x in parts)
+        except ValueError:
+            return (0, 0, 0)
 
-        update_available = _ver_tuple(latest_tag) > _ver_tuple(settings.app_version)
+    update_available = _ver_tuple(latest_tag) > _ver_tuple(settings.app_version)
 
-        _cached_data = {
-            "current":          settings.app_version,
-            "latest":           latest_tag,
-            "update_available": update_available,
-            "release_url":      release_url,
-            "deployment":       await _deployment_type(),
-        }
-        _cached_at = now
-        return _cached_data
+    deploy = await _deployment_type()
+
+    result = {
+        "current":          settings.app_version,
+        "latest":           latest_tag,
+        "update_available": update_available,
+        "release_url":      release_url,
+        "deployment":       deploy,
+    }
+
+    # Re-acquire lock to update the cache.  A race may cause a double-fetch
+    # but both will produce the same result; the last write wins harmlessly.
+    async with _cache_lock:
+        _cached_data = result
+        _cached_at = datetime.now(timezone.utc)
+
+    return result
 
 
 @router.get("/check")

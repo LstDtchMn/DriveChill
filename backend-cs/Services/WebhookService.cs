@@ -33,16 +33,16 @@ public sealed class WebhookService
         lock (_lock) return WebhookConfigView.FromConfig(_store.GetAll().Webhook);
     }
 
-    public WebhookConfig UpdateConfig(WebhookConfig cfg)
+    public async Task<WebhookConfig> UpdateConfigAsync(WebhookConfig cfg)
     {
         cfg.TargetUrl = cfg.TargetUrl?.Trim() ?? "";
-        if (!string.IsNullOrWhiteSpace(cfg.TargetUrl) &&
-            !UrlSecurity.TryValidateOutboundHttpUrl(
-                cfg.TargetUrl,
-                _appSettings.AllowPrivateOutboundTargets,
-                out var reason))
+        if (!string.IsNullOrWhiteSpace(cfg.TargetUrl))
         {
-            throw new ArgumentException(reason ?? "target_url is not allowed");
+            var (valid, reason) = await UrlSecurity.TryValidateOutboundHttpUrlAsync(
+                cfg.TargetUrl,
+                _appSettings.AllowPrivateOutboundTargets);
+            if (!valid)
+                throw new ArgumentException(reason ?? "target_url is not allowed");
         }
 
         cfg.UpdatedAt = DateTimeOffset.UtcNow.ToString("o");

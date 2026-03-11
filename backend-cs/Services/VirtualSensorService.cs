@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using DriveChill.Models;
+using Microsoft.Extensions.Logging;
 
 namespace DriveChill.Services;
 
@@ -18,6 +19,12 @@ public sealed class VirtualSensorService
     private List<VirtualSensor> _defs = new();
     private readonly Dictionary<string, EmaState> _emaState = new();
     private readonly Stopwatch _clock = Stopwatch.StartNew();
+    private readonly ILogger<VirtualSensorService>? _logger;
+
+    public VirtualSensorService(ILogger<VirtualSensorService>? logger = null)
+    {
+        _logger = logger;
+    }
 
     public void Load(List<VirtualSensor> defs)
     {
@@ -39,19 +46,46 @@ public sealed class VirtualSensorService
     /// <summary>
     /// Compute all enabled virtual sensor values and merge into sensor values.
     /// Returns a new dict containing both real and virtual sensor values.
+    ///
+    /// Uses a two-pass topological approach so that virtual sensors referencing
+    /// other virtual sensors (forward references) resolve correctly:
+    ///   Pass 1: resolve sensors whose sources are all hardware (non-virtual) sensors.
+    ///   Pass 2: resolve remaining sensors (their virtual dependencies are now available).
     /// </summary>
     public Dictionary<string, double> ResolveAll(Dictionary<string, double> sensorValues)
     {
         lock (_lock)
         {
             var result = new Dictionary<string, double>(sensorValues);
+            var virtualIds = new HashSet<string>(_defs.Where(d => d.Enabled).Select(d => d.Id));
+            var deferred = new List<VirtualSensor>();
+
+            // Pass 1: resolve sensors whose sources are only hardware sensors
             foreach (var vs in _defs)
             {
                 if (!vs.Enabled) continue;
+                if (vs.SourceIds.Any(sid => virtualIds.Contains(sid)))
+                {
+                    deferred.Add(vs);
+                    continue;
+                }
                 var val = Compute(vs, result);
                 if (val.HasValue && double.IsFinite(val.Value))
                     result[vs.Id] = val.Value;
             }
+
+            // Pass 2: resolve sensors that depend on virtual sensors (now available from pass 1)
+            foreach (var vs in deferred)
+            {
+                var val = Compute(vs, result);
+                if (val.HasValue && double.IsFinite(val.Value))
+                    result[vs.Id] = val.Value;
+                else
+                    _logger?.LogWarning(
+                        "Virtual sensor '{Id}' could not resolve after two passes — " +
+                        "check source IDs for circular or deep dependencies", vs.Id);
+            }
+
             return result;
         }
     }

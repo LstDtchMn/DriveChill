@@ -115,7 +115,7 @@ export function FanCurvesPage() {
   useEffect(() => {
     if (!createCoolingCurveSensorId || !curvesLoaded) return;
     const draft: FanCurve = {
-      id: `draft_cooling_${Date.now()}`,
+      id: `draft_cooling_${crypto.randomUUID()}`,
       name: 'Storage Cooling',
       sensor_id: createCoolingCurveSensorId,
       fan_id: allFans[0] || 'fan_cpu',
@@ -223,7 +223,7 @@ export function FanCurvesPage() {
     if (creatingCurve) return;
     setCreatingCurve(true);
     const draft: FanCurve = {
-      id: `curve_${Date.now()}`,
+      id: crypto.randomUUID(),
       name: `Custom Curve ${curves.length + 1}`,
       sensor_id: allTempSensors[0]?.id || 'cpu_temp_0',
       fan_id: allFans[0] || 'fan_cpu',

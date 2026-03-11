@@ -5,6 +5,7 @@ namespace DriveChill.Utils;
 
 public static class UrlSecurity
 {
+    [Obsolete("Use TryValidateOutboundHttpUrlAsync for non-blocking DNS resolution")]
     public static bool TryValidateOutboundHttpUrl(
         string url,
         bool allowPrivateTargets,
@@ -86,6 +87,62 @@ public static class UrlSecurity
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Async version of <see cref="TryValidateOutboundHttpUrl"/> that uses
+    /// non-blocking DNS resolution via <see cref="Dns.GetHostAddressesAsync"/>.
+    /// </summary>
+    public static async Task<(bool Valid, string? Reason)> TryValidateOutboundHttpUrlAsync(
+        string url,
+        bool allowPrivateTargets)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            return (false, "Invalid URL");
+
+        if (uri.Scheme is not ("http" or "https"))
+            return (false, "URL must start with http:// or https://");
+
+        if (string.IsNullOrWhiteSpace(uri.Host))
+            return (false, "URL hostname is required");
+
+        var host = uri.Host.Trim();
+        if (string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase))
+            return (false, "localhost is not allowed");
+
+        IPAddress[] addresses;
+        try
+        {
+            addresses = await Dns.GetHostAddressesAsync(host).ConfigureAwait(false);
+        }
+        catch (SocketException)
+        {
+            return (false, "Hostname cannot be resolved");
+        }
+        catch (ArgumentException)
+        {
+            return (false, "Invalid hostname");
+        }
+
+        if (addresses.Length == 0)
+            return (false, "Hostname has no routable address");
+
+        foreach (var ip in addresses)
+        {
+            if (IPAddress.IsLoopback(ip))
+                return (false, "Loopback targets are not allowed");
+
+            if (ip.IsIPv6LinkLocal || ip.IsIPv6Multicast || ip.IsIPv6SiteLocal)
+                return (false, "Non-routable targets are not allowed");
+
+            if (IsUnspecified(ip) || IsReserved(ip) || IsMulticast(ip))
+                return (false, "Non-routable targets are not allowed");
+
+            if (!allowPrivateTargets && IsPrivate(ip))
+                return (false, "Private network targets are not allowed");
+        }
+
+        return (true, null);
     }
 
     public static string RedactUrlForLog(string? url)

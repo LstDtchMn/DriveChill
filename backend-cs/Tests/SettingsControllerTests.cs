@@ -271,7 +271,7 @@ public sealed class SettingsControllerTests : IDisposable
     public async Task ImportConfig_NeverOverwritesWebhookSigningSecret()
     {
         // Set an existing signing secret
-        _webhooks.UpdateConfig(new Models.WebhookConfig
+        await _webhooks.UpdateConfigAsync(new Models.WebhookConfig
         {
             SigningSecret = "my-secret-key",
             TargetUrl = "",

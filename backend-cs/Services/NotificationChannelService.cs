@@ -126,7 +126,8 @@ public sealed class NotificationChannelService
         var url = GetStr(config, "url")?.TrimEnd('/') ?? "";
         var topic = GetStr(config, "topic") ?? "";
         if (string.IsNullOrEmpty(url) || string.IsNullOrEmpty(topic)) return false;
-        if (!UrlSecurity.TryValidateOutboundHttpUrl(url, allowPrivateTargets: false, out var ssrfErr))
+        var (ntfyValid, ssrfErr) = await UrlSecurity.TryValidateOutboundHttpUrlAsync(url, allowPrivateTargets: false);
+        if (!ntfyValid)
         {
             _logger.LogWarning("ntfy delivery blocked (SSRF): {Reason}", ssrfErr);
             return false;
@@ -151,7 +152,8 @@ public sealed class NotificationChannelService
     {
         var webhookUrl = GetStr(config, "webhook_url") ?? "";
         if (string.IsNullOrEmpty(webhookUrl)) return false;
-        if (!UrlSecurity.TryValidateOutboundHttpUrl(webhookUrl, allowPrivateTargets: false, out var ssrfErr))
+        var (discordValid, ssrfErr) = await UrlSecurity.TryValidateOutboundHttpUrlAsync(webhookUrl, allowPrivateTargets: false);
+        if (!discordValid)
         {
             _logger.LogWarning("Discord delivery blocked (SSRF): {Reason}", ssrfErr);
             return false;
@@ -170,7 +172,8 @@ public sealed class NotificationChannelService
     {
         var webhookUrl = GetStr(config, "webhook_url") ?? "";
         if (string.IsNullOrEmpty(webhookUrl)) return false;
-        if (!UrlSecurity.TryValidateOutboundHttpUrl(webhookUrl, allowPrivateTargets: false, out var ssrfErr))
+        var (slackValid, ssrfErr) = await UrlSecurity.TryValidateOutboundHttpUrlAsync(webhookUrl, allowPrivateTargets: false);
+        if (!slackValid)
         {
             _logger.LogWarning("Slack delivery blocked (SSRF): {Reason}", ssrfErr);
             return false;
@@ -189,7 +192,8 @@ public sealed class NotificationChannelService
     {
         var url = GetStr(config, "url") ?? "";
         if (string.IsNullOrEmpty(url)) return false;
-        if (!UrlSecurity.TryValidateOutboundHttpUrl(url, allowPrivateTargets: false, out var ssrfErr))
+        var (genericValid, ssrfErr) = await UrlSecurity.TryValidateOutboundHttpUrlAsync(url, allowPrivateTargets: false);
+        if (!genericValid)
         {
             _logger.LogWarning("Generic webhook delivery blocked (SSRF): {Reason}", ssrfErr);
             return false;
@@ -237,7 +241,8 @@ public sealed class NotificationChannelService
         var checkUrl = System.Text.RegularExpressions.Regex.Replace(
             brokerUrl, @"^(mqtts?|ssl)://", "http://",
             System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-        if (!UrlSecurity.TryValidateOutboundHttpUrl(checkUrl, allowPrivateTargets: false, out var ssrfReason))
+        var (mqttValid, ssrfReason) = await UrlSecurity.TryValidateOutboundHttpUrlAsync(checkUrl, allowPrivateTargets: false);
+        if (!mqttValid)
         {
             _logger.LogWarning("MQTT connection blocked (SSRF): {Reason}", ssrfReason);
             return null;

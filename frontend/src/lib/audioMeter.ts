@@ -30,6 +30,8 @@ export class AudioMeter {
   private stream: MediaStream | null = null;
   private source: MediaStreamAudioSourceNode | null = null;
   private fftSize = 2048;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private _fftBuffer: any = null;
 
   /**
    * Request microphone access, create AudioContext, wire up AnalyserNode.
@@ -63,8 +65,10 @@ export class AudioMeter {
     if (!this.analyser || !this.ctx) return -Infinity;
 
     const bufferLength = this.analyser.frequencyBinCount;
-    const dataArray = new Float32Array(bufferLength);
-    this.analyser.getFloatFrequencyData(dataArray);
+    if (!this._fftBuffer || this._fftBuffer.length !== bufferLength) {
+      this._fftBuffer = new Float32Array(bufferLength);
+    }
+    this.analyser.getFloatFrequencyData(this._fftBuffer);
 
     const binWidth = this.ctx.sampleRate / this.fftSize;
 
@@ -73,7 +77,7 @@ export class AudioMeter {
 
     for (let i = 1; i < bufferLength; i++) {
       const freqHz = i * binWidth;
-      const linearAmplitude = Math.pow(10, dataArray[i] / 20); // dBFS → linear
+      const linearAmplitude = Math.pow(10, this._fftBuffer[i] / 20); // dBFS → linear
       const power = linearAmplitude * linearAmplitude;
       const weight = Math.pow(10, aWeightDB(freqHz) / 10); // A-weight factor
       weightedPower += power * weight;
@@ -92,16 +96,20 @@ export class AudioMeter {
    * @param durationMs  Measurement window in milliseconds (default 3000)
    * @param intervalMs  Sample interval in milliseconds (default 100)
    */
-  async measureMedianDB(durationMs = 3000, intervalMs = 100): Promise<number> {
+  async measureMedianDB(durationMs = 3000, intervalMs = 100, signal?: AbortSignal): Promise<number> {
     const samples: number[] = [];
     const end = Date.now() + durationMs;
 
     while (Date.now() < end) {
+      if (signal?.aborted) break;
       const sample = this.getDB();
       if (isFinite(sample)) {
         samples.push(sample);
       }
-      await new Promise<void>((resolve) => setTimeout(resolve, intervalMs));
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, intervalMs);
+        signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+      });
     }
 
     if (samples.length === 0) return -Infinity;
@@ -128,5 +136,6 @@ export class AudioMeter {
       this.ctx = null;
     }
     this.analyser = null;
+    this._fftBuffer = null;
   }
 }

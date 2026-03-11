@@ -10,7 +10,7 @@ import aiosqlite
 from typing import Literal
 from pydantic import BaseModel, Field
 
-from app.models.sensors import SensorReading, SensorType
+from app.models.sensors import SensorReading
 from app.services import prom_metrics
 
 logger = logging.getLogger(__name__)
@@ -28,9 +28,6 @@ if TYPE_CHECKING:
     from app.services.push_notification_service import PushNotificationService
     from app.services.email_notification_service import EmailNotificationService
     from app.services.notification_channel_service import NotificationChannelService
-
-TEMP_SENSOR_TYPES = {SensorType.CPU_TEMP, SensorType.GPU_TEMP, SensorType.HDD_TEMP, SensorType.CASE_TEMP}
-
 
 class AlertAction(BaseModel):
     """Optional action payload attached to an alert rule."""
@@ -272,7 +269,9 @@ class AlertService:
         from datetime import timedelta
 
         now = datetime.now(timezone.utc)
-        sensor_map = {r.id: r for r in readings if r.sensor_type in TEMP_SENSOR_TYPES}
+        # All sensor types are eligible — alert rules can reference any sensor_id
+        # (temperature, fan RPM, voltage, virtual sensors, etc.).
+        sensor_map = {r.id: r for r in readings}
         new_events: list[AlertEvent] = []
         # Collect all simultaneously-clearing action rules for batch processing
         cleared_action_rules: list[AlertRule] = []

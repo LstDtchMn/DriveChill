@@ -106,7 +106,7 @@ public sealed class WebhookServiceTests : IDisposable
     }
 
     [Fact]
-    public void UpdateConfig_ClampsTimeoutToValidRange()
+    public async Task UpdateConfig_ClampsTimeoutToValidRange()
     {
         var cfg = new WebhookConfig
         {
@@ -116,12 +116,12 @@ public sealed class WebhookServiceTests : IDisposable
             RetryBackoffSeconds = 0.1,
         };
 
-        var updated = _svc.UpdateConfig(cfg);
+        var updated = await _svc.UpdateConfigAsync(cfg);
         Assert.Equal(30.0, updated.TimeoutSeconds);
     }
 
     [Fact]
-    public void UpdateConfig_ClampsMaxRetriesToValidRange()
+    public async Task UpdateConfig_ClampsMaxRetriesToValidRange()
     {
         var cfg = new WebhookConfig
         {
@@ -131,7 +131,7 @@ public sealed class WebhookServiceTests : IDisposable
             RetryBackoffSeconds = 1,
         };
 
-        var updated = _svc.UpdateConfig(cfg);
+        var updated = await _svc.UpdateConfigAsync(cfg);
         Assert.Equal(10, updated.MaxRetries);
     }
 }

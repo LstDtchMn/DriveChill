@@ -23,7 +23,7 @@ public sealed class WebhooksController : ControllerBase
     }
 
     [HttpPut]
-    public IActionResult UpdateConfig([FromBody] JsonElement body)
+    public async Task<IActionResult> UpdateConfig([FromBody] JsonElement body)
     {
         var current = _webhooks.GetConfigRaw();
         var cfg = new WebhookConfig
@@ -49,7 +49,7 @@ public sealed class WebhooksController : ControllerBase
 
         try
         {
-            var updated = _webhooks.UpdateConfig(cfg);
+            var updated = await _webhooks.UpdateConfigAsync(cfg);
             return Ok(new { success = true, config = WebhookConfigView.FromConfig(updated) });
         }
         catch (ArgumentException)

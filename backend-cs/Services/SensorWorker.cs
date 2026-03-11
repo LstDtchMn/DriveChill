@@ -126,7 +126,7 @@ public sealed class SensorWorker : BackgroundService
                         {
                             Interlocked.Exchange(ref _telemetryPublishingFlag, 0);
                         }
-                    }, CancellationToken.None);
+                    }, stoppingToken);
                 }
 
                 // Count readings by sensor_type

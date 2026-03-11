@@ -364,53 +364,71 @@ async def get_anomalies(
         sensor_clause = f"AND {clause}"
         base_params.extend(extra)
 
-    sql = f"""
-        SELECT timestamp, sensor_id, sensor_name, sensor_type,
-               CAST(value AS REAL) AS value, unit
+    db = request.app.state.db
+
+    # Step 1: Compute per-sensor mean and stddev in SQL (avoids loading all rows).
+    stats_sql = f"""
+        SELECT sensor_id,
+               MAX(sensor_name) AS sensor_name,
+               MAX(sensor_type) AS sensor_type,
+               MAX(unit) AS unit,
+               AVG(CAST(value AS REAL)) AS mean,
+               COUNT(*) AS cnt,
+               CASE WHEN COUNT(*) > 1 THEN
+                 SQRT(MAX(0, AVG(CAST(value AS REAL) * CAST(value AS REAL))
+                            - AVG(CAST(value AS REAL)) * AVG(CAST(value AS REAL))))
+               ELSE 0 END AS stddev
         FROM sensor_log
         WHERE timestamp >= ? AND timestamp <= ?
           {sensor_clause}
-        ORDER BY sensor_id, timestamp ASC
+        GROUP BY sensor_id
     """
+    sensor_stats = await _fetchall_as_dicts(db, stats_sql, base_params)
 
-    db = request.app.state.db
-    all_rows = await _fetchall_as_dicts(db, sql, base_params)
-
-    by_sensor: dict[str, list[dict]] = defaultdict(list)
-    meta: dict[str, dict] = {}
-    for row in all_rows:
-        sid = row["sensor_id"]
-        by_sensor[sid].append(row)
-        if sid not in meta:
-            meta[sid] = {
-                "sensor_name": row["sensor_name"],
-                "sensor_type": row["sensor_type"],
-                "unit": row["unit"],
-            }
+    # Build lookup of sensors with enough samples and non-zero stddev.
+    stats_map: dict[str, dict] = {}
+    for s in sensor_stats:
+        if s["cnt"] >= 10 and s["stddev"] > 0:
+            stats_map[s["sensor_id"]] = s
 
     anomalies: list[dict[str, Any]] = []
-    for sid, rows in by_sensor.items():
-        if len(rows) < 10:
-            continue   # reject undersampled series
-        values = [r["value"] for r in rows]
-        mean = sum(values) / len(values)
-        variance = sum((v - mean) ** 2 for v in values) / len(values)
-        stdev = math.sqrt(variance)
-        if stdev == 0:
-            continue
-        for row in rows:
-            z = abs(row["value"] - mean) / stdev
-            if z > z_score_threshold:
+
+    if stats_map:
+        # Step 2: For each qualifying sensor, find individual anomalous readings in SQL.
+        # We query each sensor separately so we can apply per-sensor mean/stddev thresholds.
+        for sid, st in stats_map.items():
+            mean = st["mean"]
+            stddev = st["stddev"]
+            deviation_threshold = z_score_threshold * stddev
+
+            anomaly_sql = f"""
+                SELECT timestamp, sensor_id, sensor_name,
+                       CAST(value AS REAL) AS value, unit
+                FROM sensor_log
+                WHERE timestamp >= ? AND timestamp <= ?
+                  AND sensor_id = ?
+                  AND ABS(CAST(value AS REAL) - ?) > ?
+                ORDER BY ABS(CAST(value AS REAL) - ?) DESC
+                LIMIT 100
+            """
+            anomaly_params = [
+                base_params[0], base_params[1],
+                sid, mean, deviation_threshold, mean,
+            ]
+            anom_rows = await _fetchall_as_dicts(db, anomaly_sql, anomaly_params)
+
+            for row in anom_rows:
+                z = abs(row["value"] - mean) / stddev
                 severity = "critical" if z > z_score_threshold * 1.5 else "warning"
                 anomalies.append({
                     "timestamp_utc": row["timestamp"],
                     "sensor_id": sid,
-                    "sensor_name": meta[sid]["sensor_name"],
+                    "sensor_name": row["sensor_name"],
                     "value": row["value"],
-                    "unit": meta[sid]["unit"],
+                    "unit": row["unit"],
                     "z_score": round(z, 4),
                     "mean": round(mean, 4),
-                    "stdev": round(stdev, 4),
+                    "stdev": round(stddev, 4),
                     "severity": severity,
                 })
 
@@ -419,10 +437,16 @@ async def get_anomalies(
         anomalies = anomalies[:500]
 
     # Returned range reflects the actual extent of data considered, not merely the request window.
-    if all_rows:
-        timestamps = [r["timestamp"] for r in all_rows]
-        returned_start = _parse_utc(min(timestamps))
-        returned_end   = _parse_utc(max(timestamps))
+    extent_sql = f"""
+        SELECT MIN(timestamp) AS min_ts, MAX(timestamp) AS max_ts
+        FROM sensor_log
+        WHERE timestamp >= ? AND timestamp <= ?
+          {sensor_clause}
+    """
+    extent_rows = await _fetchall_as_dicts(db, extent_sql, base_params)
+    if extent_rows and extent_rows[0]["min_ts"]:
+        returned_start = _parse_utc(extent_rows[0]["min_ts"])
+        returned_end = _parse_utc(extent_rows[0]["max_ts"])
     else:
         returned_start, returned_end = start_dt, end_dt
 

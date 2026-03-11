@@ -59,7 +59,7 @@ export function AlertsPage() {
       ? { type: 'switch_profile', profile_id: newActionProfileId, revert_after_clear: newActionRevert }
       : null;
     const rule: AlertRule = {
-      id: `alert_${Date.now()}`,
+      id: crypto.randomUUID(),
       sensor_id: newSensorId,
       threshold: thresholdC,
       name: newName || `Alert on ${newSensorId}`,

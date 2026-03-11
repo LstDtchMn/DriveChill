@@ -15,7 +15,7 @@ public sealed class NotificationChannelsController : ControllerBase
     public NotificationChannelsController(NotificationChannelService svc) => _svc = svc;
 
     /// <summary>Returns an error detail string if any URL-typed config field fails SSRF validation.</summary>
-    private static string? ValidateConfigUrls(Dictionary<string, JsonElement>? config)
+    private static async Task<string?> ValidateConfigUrlsAsync(Dictionary<string, JsonElement>? config)
     {
         if (config is null) return null;
         foreach (var key in UrlConfigKeys)
@@ -32,7 +32,8 @@ public sealed class NotificationChannelsController : ControllerBase
                     checkVal = System.Text.RegularExpressions.Regex.Replace(
                         val, @"^(mqtts?|ssl)://", "http://", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
-                if (!UrlSecurity.TryValidateOutboundHttpUrl(checkVal, allowPrivateTargets: false, out var reason))
+                var (valid, reason) = await UrlSecurity.TryValidateOutboundHttpUrlAsync(checkVal, allowPrivateTargets: false);
+                if (!valid)
                     return $"Config '{key}': {reason}";
             }
         }
@@ -57,7 +58,7 @@ public sealed class NotificationChannelsController : ControllerBase
             return BadRequest(new { detail = "name is required" });
         if (!NotificationChannelService.IsValidType(body.Type))
             return BadRequest(new { detail = $"Invalid type. Must be one of: discord, generic_webhook, ntfy, slack" });
-        var urlErr = ValidateConfigUrls(body.Config);
+        var urlErr = await ValidateConfigUrlsAsync(body.Config);
         if (urlErr is not null) return BadRequest(new { detail = urlErr });
 
         var id = $"nc_{Guid.NewGuid().ToString()[..16]}";
@@ -68,7 +69,7 @@ public sealed class NotificationChannelsController : ControllerBase
     [HttpPut("{id}")]
     public async Task<IActionResult> Update(string id, [FromBody] UpdateChannelRequest body, CancellationToken ct)
     {
-        var urlErr = ValidateConfigUrls(body.Config);
+        var urlErr = await ValidateConfigUrlsAsync(body.Config);
         if (urlErr is not null) return BadRequest(new { detail = urlErr });
 
         var ok = await _svc.UpdateAsync(id, body.Name, body.Enabled, body.Config, ct);

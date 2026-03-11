@@ -308,7 +308,7 @@ public sealed class SettingsController : ControllerBase
                 MaxRetries          = whNode.TryGetProperty("max_retries", out var whMr) && whMr.TryGetInt32(out var mrv) ? mrv : 2,
                 RetryBackoffSeconds = whNode.TryGetProperty("retry_backoff_seconds", out var whRb) && whRb.TryGetDouble(out var rbv) ? rbv : 1.0,
             };
-            try { _webhooks.UpdateConfig(cfg); } catch { /* skip invalid config */ }
+            try { await _webhooks.UpdateConfigAsync(cfg); } catch { /* skip invalid config */ }
             imported["webhook_config"] = 1;
         }
 
@@ -338,12 +338,15 @@ public sealed class SettingsController : ControllerBase
                             el.ValueKind == System.Text.Json.JsonValueKind.String)
                         {
                             var val = el.GetString() ?? "";
-                            if (!string.IsNullOrEmpty(val) &&
-                                !DriveChill.Utils.UrlSecurity.TryValidateOutboundHttpUrl(
-                                    val, allowPrivateTargets: false, out _))
+                            if (!string.IsNullOrEmpty(val))
                             {
-                                ssrfBlocked = true;
-                                break;
+                                var (urlValid, _) = await DriveChill.Utils.UrlSecurity.TryValidateOutboundHttpUrlAsync(
+                                    val, allowPrivateTargets: false);
+                                if (!urlValid)
+                                {
+                                    ssrfBlocked = true;
+                                    break;
+                                }
                             }
                         }
                     }
