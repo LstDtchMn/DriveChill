@@ -232,36 +232,26 @@ public sealed class ProfileScheduleTests : IDisposable
     }
 
     [Fact]
-    public void FindActiveSchedule_UsesTimezone_NotUtc()
+    public void FindActiveSchedule_UsesIanaTimezone_NotUtc()
     {
-        // Create a schedule that's active at 10:00 in US Eastern but NOT at
-        // 10:00 UTC. We'll test by setting timezone to a zone that differs
-        // from UTC and verifying the match depends on the zone.
+        // The frontend sends IANA IDs (e.g. "America/New_York") via
+        // Intl.DateTimeFormat().resolvedOptions().timeZone.
+        // .NET 6+ FindSystemTimeZoneById handles IANA IDs on all platforms.
         var utcNow = DateTimeOffset.UtcNow;
-
-        // Find a timezone where the current local time differs from UTC
-        // Use UTC+12 (e.g., "Fiji Standard Time" / "Pacific/Fiji") — if it's
-        // 14:00 UTC, it's 02:00+1 in UTC+12 (different day potentially)
-        var tz = TimeZoneInfo.FindSystemTimeZoneById("UTC");
-        var utcLocal = TimeZoneInfo.ConvertTime(utcNow, tz);
-        var utcTime = utcLocal.ToString("HH:mm");
-        var utcDay = (int)utcLocal.DayOfWeek;
+        var utcTime = utcNow.ToString("HH:mm");
+        var utcDay = (int)utcNow.DayOfWeek;
         var utcDayMon = utcDay == 0 ? 6 : utcDay - 1;
 
-        // Schedule active at current UTC time, all days, but in UTC+12 timezone
-        // This should NOT match because in UTC+12 the wall-clock time is different
-        string tz12Id;
-        try { TimeZoneInfo.FindSystemTimeZoneById("Pacific/Fiji"); tz12Id = "Pacific/Fiji"; }
-        catch (TimeZoneNotFoundException) { tz12Id = "Fiji Standard Time"; }
+        // Use "America/New_York" — the most common IANA ID the frontend sends
+        var nyTz = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
+        var nyLocal = TimeZoneInfo.ConvertTime(utcNow, nyTz);
+        var nyTime = nyLocal.ToString("HH:mm");
 
-        var tz12 = TimeZoneInfo.FindSystemTimeZoneById(tz12Id);
-        var tz12Local = TimeZoneInfo.ConvertTime(utcNow, tz12);
-        var tz12Time = tz12Local.ToString("HH:mm");
-
-        // Only run the assertion if the times actually differ (they should unless UTC offset is 0)
-        if (utcTime != tz12Time)
+        // Only assert mismatch if times actually differ (they always will
+        // unless the machine is running in exactly UTC-5/UTC-4)
+        if (utcTime != nyTime)
         {
-            // Schedule window is [utcTime, utcTime+1min) — matches UTC but not UTC+12
+            // 1-minute window at current UTC time, tagged with IANA timezone
             var endMinute = (int.Parse(utcTime.Split(':')[1]) + 1) % 60;
             var endHour = int.Parse(utcTime.Split(':')[0]) + (endMinute == 0 ? 1 : 0);
             var endTime = $"{endHour % 24:D2}:{endMinute:D2}";
@@ -270,19 +260,19 @@ public sealed class ProfileScheduleTests : IDisposable
             {
                 new()
                 {
-                    Id = "tz-test", ProfileId = "p1",
+                    Id = "ny-test", ProfileId = "p1",
                     StartTime = utcTime, EndTime = endTime,
                     DaysOfWeek = $"{utcDayMon}",
-                    Timezone = tz12Id,
+                    Timezone = "America/New_York", // IANA ID from frontend
                     Enabled = true, CreatedAt = "2026-01-01",
                 },
             };
-            // Should NOT match — schedule time is interpreted in UTC+12, not UTC
+            // Should NOT match — schedule time is in NY local time, not UTC
             var result = ProfileSchedulerService.FindActiveSchedule(schedules);
             Assert.Null(result);
         }
 
-        // Now verify the same schedule DOES match when timezone is UTC
+        // Same window with UTC timezone DOES match
         {
             var endMinute = (int.Parse(utcTime.Split(':')[1]) + 1) % 60;
             var endHour = int.Parse(utcTime.Split(':')[0]) + (endMinute == 0 ? 1 : 0);
