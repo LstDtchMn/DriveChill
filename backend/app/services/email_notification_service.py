@@ -59,6 +59,10 @@ class EmailNotificationService:
         sent = await self._send(subject, body)
         return sent > 0
 
+    async def send_html_report(self, subject: str, html_body: str) -> int:
+        """Public API for sending HTML reports (e.g. scheduled analytics)."""
+        return await self._send_html(subject, html_body)
+
     async def _send_html(self, subject: str, html_body: str) -> int:
         """Send an HTML email to all configured recipients.
 

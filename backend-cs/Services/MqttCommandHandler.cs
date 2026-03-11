@@ -135,22 +135,26 @@ public sealed class MqttCommandHandler : BackgroundService
         if (!string.IsNullOrEmpty(username))
             optionsBuilder.WithCredentials(username, password ?? "");
 
-        // Rate tracking
+        // Rate tracking (thread-safe — MQTTnet may invoke handlers concurrently)
+        var rateTrackerLock = new object();
         var rateTracker = new List<double>();
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
 
         // Set up message handler before connecting
         client.ApplicationMessageReceivedAsync += async e =>
         {
-            // Rate limit
+            // Rate limit (synchronized)
             var now = stopwatch.Elapsed.TotalSeconds;
-            rateTracker.RemoveAll(t => now - t >= 1.0);
-            if (rateTracker.Count >= MaxCommandsPerSecond)
+            lock (rateTrackerLock)
             {
-                _log.LogWarning("MQTT command rate limit exceeded for channel {Channel}, dropping", channelName);
-                return;
+                rateTracker.RemoveAll(t => now - t >= 1.0);
+                if (rateTracker.Count >= MaxCommandsPerSecond)
+                {
+                    _log.LogWarning("MQTT command rate limit exceeded for channel {Channel}, dropping", channelName);
+                    return;
+                }
+                rateTracker.Add(now);
             }
-            rateTracker.Add(now);
 
             var topic = e.ApplicationMessage.Topic;
             var payload = e.ApplicationMessage.PayloadSegment.Count > 0

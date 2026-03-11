@@ -3,12 +3,14 @@
 import { useState, useEffect, useMemo } from 'react';
 import { api } from '@/lib/api';
 import { useAppStore } from '@/stores/appStore';
+import { useCanWrite } from '@/hooks/useCanWrite';
 import { computeNoiseRecommendations } from '@/lib/noiseOptimizer';
 import type { NoiseProfile, TemperatureTarget } from '@/lib/types';
 
 export function NoiseAdvisor() {
   const readings = useAppStore((s) => s.readings);
   const appliedSpeeds = useAppStore((s) => s.appliedSpeeds);
+  const canWrite = useCanWrite();
 
   const [noiseProfiles, setNoiseProfiles] = useState<NoiseProfile[] | null>(null);
   const [tempTargets, setTempTargets] = useState<TemperatureTarget[] | null>(null);
@@ -205,7 +207,7 @@ export function NoiseAdvisor() {
                   <button
                     className="btn-primary text-xs"
                     style={{ minHeight: 32, minWidth: 72 }}
-                    disabled={isApplying}
+                    disabled={isApplying || !canWrite}
                     onClick={() => handleApply(rec.fanId, rec.recommendedPercent)}
                   >
                     {isApplying ? 'Applying...' : 'Apply'}

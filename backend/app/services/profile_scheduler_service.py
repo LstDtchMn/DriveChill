@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, time, timezone
+from zoneinfo import ZoneInfo
 
 import aiosqlite
 
@@ -152,13 +153,21 @@ def _find_active_schedule(
     if now is None:
         now = datetime.now(timezone.utc)
 
-    current_day = now.weekday()  # 0=Monday
-    current_time = now.strftime("%H:%M")
-
     matching = []
     for schedule in schedules:
         if not schedule.get("enabled", True):
             continue
+
+        # Convert UTC now to the schedule's local timezone for comparison
+        tz_name = schedule.get("timezone", "UTC")
+        try:
+            local_now = now.astimezone(ZoneInfo(tz_name))
+        except (KeyError, ValueError):
+            local_now = now  # fall back to UTC if timezone is invalid
+
+        current_day = local_now.weekday()  # 0=Monday
+        current_time = local_now.strftime("%H:%M")
+
         days = [int(d) for d in schedule["days_of_week"].split(",") if d.strip()]
         if current_day not in days:
             continue
@@ -179,6 +188,9 @@ def _find_active_schedule(
 
     # Most specific (fewest days) wins, then most recently created
     matching.sort(
-        key=lambda s: (len(s["days_of_week"].split(",")), s.get("created_at", ""))
+        key=lambda s: (len(s["days_of_week"].split(",")), s.get("created_at", "")),
     )
-    return matching[0]
+    # Within same specificity, pick the most recently created (last in ascending order)
+    best_days = len(matching[0]["days_of_week"].split(","))
+    candidates = [s for s in matching if len(s["days_of_week"].split(",")) == best_days]
+    return candidates[-1]

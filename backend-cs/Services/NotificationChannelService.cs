@@ -32,8 +32,9 @@ public sealed class NotificationChannelService
     private readonly DbService _db;
     private readonly IHttpClientFactory _httpFactory;
     private readonly ILogger<NotificationChannelService> _logger;
-    private readonly Dictionary<string, MqttClientWrapper> _mqttClients = new();
-    private readonly Dictionary<string, HashSet<string>> _haAdvertised = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, MqttClientWrapper> _mqttClients = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, HashSet<string>> _haAdvertised = new();
+    private readonly SemaphoreSlim _mqttConnectLock = new(1, 1);
 
     public NotificationChannelService(DbService db, IHttpClientFactory httpFactory,
                                        ILogger<NotificationChannelService> logger)
@@ -231,8 +232,13 @@ public sealed class NotificationChannelService
         var brokerUrl = GetStr(ch.Config, "broker_url") ?? "";
         if (string.IsNullOrEmpty(brokerUrl)) return null;
 
+        await _mqttConnectLock.WaitAsync(ct);
         try
         {
+            // Double-check after acquiring lock
+            if (_mqttClients.TryGetValue(ch.Id, out var rechecked) && rechecked.IsConnected)
+                return rechecked;
+
             var uri = new Uri(brokerUrl);
             var hostname = uri.Host;
             var port = uri.Port > 0 ? uri.Port : (uri.Scheme == "mqtts" ? 8883 : 1883);
@@ -265,6 +271,10 @@ public sealed class NotificationChannelService
             _logger.LogWarning(ex, "MQTT connection failed for channel {Name}", ch.Name);
             return null;
         }
+        finally
+        {
+            _mqttConnectLock.Release();
+        }
     }
 
     private async Task<bool> SendMqttAsync(NotificationChannel ch, string sensorName,
@@ -274,7 +284,7 @@ public sealed class NotificationChannelService
         if (wrapper is null) return false;
 
         var topicPrefix = GetStr(ch.Config, "topic_prefix") ?? "drivechill";
-        var qos = GetInt(ch.Config, "qos", 1);
+        var qos = Math.Clamp(GetInt(ch.Config, "qos", 1), 0, 2);
         var retain = GetBool(ch.Config, "retain", false);
 
         var payload = JsonSerializer.Serialize(new
@@ -302,7 +312,7 @@ public sealed class NotificationChannelService
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "MQTT publish failed for channel {Name}", ch.Name);
-            _mqttClients.Remove(ch.Id);
+            _mqttClients.TryRemove(ch.Id, out _);
             try { await wrapper.Client.DisconnectAsync(new MqttClientDisconnectOptionsBuilder().Build(), ct); } catch { }
             return false;
         }
@@ -407,7 +417,7 @@ public sealed class NotificationChannelService
             if (wrapper is null) continue;
 
             var topicPrefix = GetStr(ch.Config, "topic_prefix") ?? "drivechill";
-            var qos = GetInt(ch.Config, "qos", 0);
+            var qos = Math.Clamp(GetInt(ch.Config, "qos", 0), 0, 2);
             var retain = GetBool(ch.Config, "retain", false);
 
             try
@@ -431,7 +441,7 @@ public sealed class NotificationChannelService
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "MQTT telemetry publish failed for channel {Name}", ch.Name);
-                _mqttClients.Remove(ch.Id);
+                _mqttClients.TryRemove(ch.Id, out _);
                 try { await wrapper.Client.DisconnectAsync(new MqttClientDisconnectOptionsBuilder().Build(), ct); } catch { }
             }
         }

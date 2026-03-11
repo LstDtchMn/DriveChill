@@ -284,8 +284,8 @@ def test_find_active_schedule_tie_uses_created_at():
     s1 = _make_schedule(sid="old", profile_id="p1", days="0", created_at="2026-01-01")
     s2 = _make_schedule(sid="new", profile_id="p2", days="0", created_at="2026-02-01")
     result = _find_active_schedule([s1, s2], now=now)
-    # Both have 1 day, so sort by created_at ascending — oldest first
-    assert result["id"] == "old"
+    # Both have 1 day, tied on specificity — most recently created wins
+    assert result["id"] == "new"
 
 
 def test_find_active_schedule_empty():

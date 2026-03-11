@@ -85,8 +85,6 @@ public sealed class ProfileSchedulerService : BackgroundService
         if (_activeScheduleId == matched.Id)
             return;
 
-        _activeScheduleId = matched.Id;
-
         // Activate the profile
         var profiles = _store.LoadProfiles().ToList();
         var profile = profiles.FirstOrDefault(p => p.Id == matched.ProfileId);
@@ -96,6 +94,8 @@ public sealed class ProfileSchedulerService : BackgroundService
                 matched.Id, matched.ProfileId);
             return;
         }
+
+        _activeScheduleId = matched.Id;
 
         foreach (var p in profiles) p.IsActive = p.Id == matched.ProfileId;
         _store.SaveProfiles(profiles);
@@ -182,7 +182,7 @@ public sealed class ProfileSchedulerService : BackgroundService
         // Most specific (fewest days) wins, then most recently created
         return matching
             .OrderBy(s => s.DaysOfWeek.Split(',').Length)
-            .ThenBy(s => s.CreatedAt)
+            .ThenByDescending(s => s.CreatedAt)
             .First();
     }
 }

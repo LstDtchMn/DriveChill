@@ -134,41 +134,45 @@ async def _subscribe_loop(
 
     rate_tracker: list[float] = []
 
-    async with aiomqtt.Client(
-        hostname=hostname,
-        port=port,
-        username=username,
-        password=password,
-        identifier=client_id,
-        tls_params=tls_params,
-    ) as client:
-        await client.subscribe(f"{topic_prefix}/commands/#")
-        logger.info(
-            "MQTT subscribed to %s/commands/# for channel %s",
-            topic_prefix,
-            channel_name,
-        )
+    try:
+        async with aiomqtt.Client(
+            hostname=hostname,
+            port=port,
+            username=username,
+            password=password,
+            identifier=client_id,
+            tls_params=tls_params,
+        ) as client:
+            await client.subscribe(f"{topic_prefix}/commands/#")
+            logger.info(
+                "MQTT subscribed to %s/commands/# for channel %s",
+                topic_prefix,
+                channel_name,
+            )
 
-        async for message in client.messages:
-            # Rate limit: sliding window of 1 second
-            now = time.monotonic()
-            rate_tracker[:] = [t for t in rate_tracker if now - t < 1.0]
-            if len(rate_tracker) >= MAX_COMMANDS_PER_SECOND:
-                logger.warning(
-                    "MQTT command rate limit exceeded for channel %s, dropping message",
-                    channel_name,
-                )
-                continue
-            rate_tracker.append(now)
+            async for message in client.messages:
+                # Rate limit: sliding window of 1 second
+                now = time.monotonic()
+                rate_tracker[:] = [t for t in rate_tracker if now - t < 1.0]
+                if len(rate_tracker) >= MAX_COMMANDS_PER_SECOND:
+                    logger.warning(
+                        "MQTT command rate limit exceeded for channel %s, dropping message",
+                        channel_name,
+                    )
+                    continue
+                rate_tracker.append(now)
 
-            topic = str(message.topic)
-            try:
-                await _dispatch_command(
-                    topic, message.payload, topic_prefix,
-                    backend, fan_service, profile_repo,
-                )
-            except Exception:
-                logger.debug("MQTT command dispatch error", exc_info=True)
+                topic = str(message.topic)
+                try:
+                    await _dispatch_command(
+                        topic, message.payload, topic_prefix,
+                        backend, fan_service, profile_repo,
+                    )
+                except Exception:
+                    logger.debug("MQTT command dispatch error", exc_info=True)
+    except Exception:
+        logger.warning("MQTT subscribe loop error for channel %s", channel_name, exc_info=True)
+        await asyncio.sleep(5)  # back-off before task restart
 
 
 async def create_mqtt_command_handler(

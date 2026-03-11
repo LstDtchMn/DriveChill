@@ -323,7 +323,7 @@ class ReportSchedulerService:
         freq_label = "Daily" if schedule["frequency"] == "daily" else "Weekly"
         subject = f"DriveChill {freq_label} Report — {now.strftime('%Y-%m-%d')}"
 
-        sent = await self._email_svc._send_html(subject, html_body)
+        sent = await self._email_svc.send_html_report(subject, html_body)
         if sent:
             await self._db.execute(
                 "UPDATE report_schedules SET last_sent_at=? WHERE id=?",

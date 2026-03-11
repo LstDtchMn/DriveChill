@@ -11,6 +11,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { api } from '@/lib/api';
 import { useAppStore } from '@/stores/appStore';
 import { useSettingsStore } from '@/stores/settingsStore';
+import { useCanWrite } from '@/hooks/useCanWrite';
 import type { NoiseProfile, NoiseDataPoint } from '@/lib/types';
 import { AudioMeter } from '@/lib/audioMeter';
 import { Trash2, Mic, MicOff, Play, StopCircle } from 'lucide-react';
@@ -34,6 +35,7 @@ interface LiveStep {
 export function NoiseProfiler() {
   const confirm = useConfirm();
   const toast = useToast();
+  const canWrite = useCanWrite();
 
   const readings = useAppStore((s) => s.readings);
   const { sensorLabels } = useSettingsStore();
@@ -170,6 +172,7 @@ export function NoiseProfiler() {
     if (collectedData.length === 0) {
       setErrorMsg('No data collected during sweep.');
       setSweepState('error');
+      await api.releaseFanControl().catch(() => {});
       return;
     }
 
@@ -313,7 +316,7 @@ export function NoiseProfiler() {
           {!isRunning ? (
             <button
               className="btn-primary flex items-center gap-2 text-xs"
-              disabled={!selectedFanId || sweepState === 'done'}
+              disabled={!selectedFanId || sweepState === 'done' || !canWrite}
               onClick={runSweep}
             >
               <Mic size={13} />

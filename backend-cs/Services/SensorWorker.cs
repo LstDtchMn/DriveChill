@@ -32,7 +32,7 @@ public sealed class SensorWorker : BackgroundService
     private DateTimeOffset _lastPrune   = DateTimeOffset.MinValue;
     private const int DbIntervalSeconds = 10;
     private const int PruneIntervalSeconds = 3600; // prune once per hour
-    private volatile bool _telemetryPublishing;
+    private int _telemetryPublishingFlag; // 0 = idle, 1 = publishing (atomic via Interlocked)
 
     public SensorWorker(IHardwareBackend hw, SensorService sensors, FanService fans,
         AlertService alerts, WebhookService webhooks,
@@ -107,9 +107,8 @@ public sealed class SensorWorker : BackgroundService
                 _sensors.Update(snapshot);
 
                 // MQTT telemetry — single-flight: skip if previous publish still running
-                if (!_telemetryPublishing)
+                if (Interlocked.CompareExchange(ref _telemetryPublishingFlag, 1, 0) == 0)
                 {
-                    _telemetryPublishing = true;
                     _ = Task.Run(async () =>
                     {
                         try
@@ -130,7 +129,7 @@ public sealed class SensorWorker : BackgroundService
                         }
                         finally
                         {
-                            _telemetryPublishing = false;
+                            Interlocked.Exchange(ref _telemetryPublishingFlag, 0);
                         }
                     }, CancellationToken.None);
                 }

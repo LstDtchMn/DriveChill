@@ -210,6 +210,10 @@ public sealed class AuthController : ControllerBase
     [HttpPost("me/password")]
     public async Task<IActionResult> ChangeMyPassword([FromBody] SelfPasswordChangeRequest req, CancellationToken ct = default)
     {
+        var ip = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        if (!_sessions.CheckRateLimit(ip))
+            return StatusCode(429, new { detail = "Too many requests. Try again later." });
+
         var sessionToken = Request.Cookies[SessionCookieName];
         if (string.IsNullOrEmpty(sessionToken))
             return Unauthorized(new { detail = "Not authenticated" });
@@ -237,7 +241,6 @@ public sealed class AuthController : ControllerBase
         // Invalidate all existing sessions then issue a fresh one (session rotation).
         await _db.DeleteUserSessionsByUsernameAsync(session.Value.Username, ct);
 
-        var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
         var (newSessionToken, newCsrfToken) = await _sessions.CreateSessionDirectAsync(
             session.Value.Username, ip, Request.Headers.UserAgent.ToString(), ct);
 

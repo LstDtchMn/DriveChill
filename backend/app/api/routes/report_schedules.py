@@ -104,14 +104,22 @@ async def update_report_schedule(
     if not fields:
         raise HTTPException(status_code=400, detail="No fields to update")
 
+    _ALLOWED_COLUMNS = {"frequency": "frequency", "time_utc": "time_utc",
+                        "timezone": "timezone", "enabled": "enabled"}
     set_clauses = []
     params: list = []
     for field in fields:
+        col = _ALLOWED_COLUMNS.get(field)
+        if col is None:
+            continue
         value = getattr(body, field)
         if field == "enabled":
             value = int(value)
-        set_clauses.append(f"{field}=?")
+        set_clauses.append(f"{col}=?")
         params.append(value)
+
+    if not set_clauses:
+        raise HTTPException(status_code=400, detail="No valid fields to update")
 
     params.append(schedule_id)
     await db.execute(

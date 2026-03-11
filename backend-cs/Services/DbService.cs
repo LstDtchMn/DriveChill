@@ -1517,9 +1517,8 @@ public sealed class DbService : IDisposable
         await using var conn = new SqliteConnection(_connStr);
         await conn.OpenAsync(ct);
         await using var cmd = conn.CreateCommand();
-        cmd.CommandText = "UPDATE users SET password_hash = $h, updated_at = $t WHERE username = $u";
+        cmd.CommandText = "UPDATE users SET password_hash = $h WHERE username = $u";
         cmd.Parameters.AddWithValue("$h", passwordHash);
-        cmd.Parameters.AddWithValue("$t", DateTimeOffset.UtcNow.ToString("o"));
         cmd.Parameters.AddWithValue("$u", username);
         await cmd.ExecuteNonQueryAsync(ct);
     }
