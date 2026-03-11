@@ -106,10 +106,11 @@ class ProfileSchedulerService:
         if self._active_schedule_id == schedule_id:
             return
 
-        self._active_schedule_id = schedule_id
-
         try:
             await self._activate_profile_fn(profile_id)
+            # Only mark as active after successful activation — transient
+            # failures must not suppress retries on the next tick.
+            self._active_schedule_id = schedule_id
             logger.info(
                 "Profile schedule: activated profile %s (schedule %s)",
                 profile_id, schedule_id,

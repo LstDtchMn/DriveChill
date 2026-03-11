@@ -133,46 +133,55 @@ async def _subscribe_loop(
     tls_params = aiomqtt.TLSParameters() if use_tls else None
 
     rate_tracker: list[float] = []
+    backoff = 5  # seconds, doubles on consecutive failures, caps at 60
 
-    try:
-        async with aiomqtt.Client(
-            hostname=hostname,
-            port=port,
-            username=username,
-            password=password,
-            identifier=client_id,
-            tls_params=tls_params,
-        ) as client:
-            await client.subscribe(f"{topic_prefix}/commands/#")
-            logger.info(
-                "MQTT subscribed to %s/commands/# for channel %s",
-                topic_prefix,
-                channel_name,
+    while True:
+        try:
+            async with aiomqtt.Client(
+                hostname=hostname,
+                port=port,
+                username=username,
+                password=password,
+                identifier=client_id,
+                tls_params=tls_params,
+            ) as client:
+                await client.subscribe(f"{topic_prefix}/commands/#")
+                logger.info(
+                    "MQTT subscribed to %s/commands/# for channel %s",
+                    topic_prefix,
+                    channel_name,
+                )
+                backoff = 5  # reset on successful connect
+
+                async for message in client.messages:
+                    # Rate limit: sliding window of 1 second
+                    now = time.monotonic()
+                    rate_tracker[:] = [t for t in rate_tracker if now - t < 1.0]
+                    if len(rate_tracker) >= MAX_COMMANDS_PER_SECOND:
+                        logger.warning(
+                            "MQTT command rate limit exceeded for channel %s, dropping message",
+                            channel_name,
+                        )
+                        continue
+                    rate_tracker.append(now)
+
+                    topic = str(message.topic)
+                    try:
+                        await _dispatch_command(
+                            topic, message.payload, topic_prefix,
+                            backend, fan_service, profile_repo,
+                        )
+                    except Exception:
+                        logger.debug("MQTT command dispatch error", exc_info=True)
+        except asyncio.CancelledError:
+            raise  # let the supervisor cancel us cleanly
+        except Exception:
+            logger.warning(
+                "MQTT subscribe loop error for channel %s, retrying in %ds",
+                channel_name, backoff, exc_info=True,
             )
-
-            async for message in client.messages:
-                # Rate limit: sliding window of 1 second
-                now = time.monotonic()
-                rate_tracker[:] = [t for t in rate_tracker if now - t < 1.0]
-                if len(rate_tracker) >= MAX_COMMANDS_PER_SECOND:
-                    logger.warning(
-                        "MQTT command rate limit exceeded for channel %s, dropping message",
-                        channel_name,
-                    )
-                    continue
-                rate_tracker.append(now)
-
-                topic = str(message.topic)
-                try:
-                    await _dispatch_command(
-                        topic, message.payload, topic_prefix,
-                        backend, fan_service, profile_repo,
-                    )
-                except Exception:
-                    logger.debug("MQTT command dispatch error", exc_info=True)
-    except Exception:
-        logger.warning("MQTT subscribe loop error for channel %s", channel_name, exc_info=True)
-        await asyncio.sleep(5)  # back-off before task restart
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 60)
 
 
 async def create_mqtt_command_handler(

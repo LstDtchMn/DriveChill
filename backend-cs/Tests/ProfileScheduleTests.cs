@@ -230,4 +230,107 @@ public sealed class ProfileScheduleTests : IDisposable
         var result = ProfileSchedulerService.FindActiveSchedule(schedules);
         Assert.Null(result);
     }
+
+    [Fact]
+    public void FindActiveSchedule_UsesTimezone_NotUtc()
+    {
+        // Create a schedule that's active at 10:00 in US Eastern but NOT at
+        // 10:00 UTC. We'll test by setting timezone to a zone that differs
+        // from UTC and verifying the match depends on the zone.
+        var utcNow = DateTimeOffset.UtcNow;
+
+        // Find a timezone where the current local time differs from UTC
+        // Use UTC+12 (e.g., "Fiji Standard Time" / "Pacific/Fiji") — if it's
+        // 14:00 UTC, it's 02:00+1 in UTC+12 (different day potentially)
+        var tz = TimeZoneInfo.FindSystemTimeZoneById("UTC");
+        var utcLocal = TimeZoneInfo.ConvertTime(utcNow, tz);
+        var utcTime = utcLocal.ToString("HH:mm");
+        var utcDay = (int)utcLocal.DayOfWeek;
+        var utcDayMon = utcDay == 0 ? 6 : utcDay - 1;
+
+        // Schedule active at current UTC time, all days, but in UTC+12 timezone
+        // This should NOT match because in UTC+12 the wall-clock time is different
+        string tz12Id;
+        try { TimeZoneInfo.FindSystemTimeZoneById("Pacific/Fiji"); tz12Id = "Pacific/Fiji"; }
+        catch (TimeZoneNotFoundException) { tz12Id = "Fiji Standard Time"; }
+
+        var tz12 = TimeZoneInfo.FindSystemTimeZoneById(tz12Id);
+        var tz12Local = TimeZoneInfo.ConvertTime(utcNow, tz12);
+        var tz12Time = tz12Local.ToString("HH:mm");
+
+        // Only run the assertion if the times actually differ (they should unless UTC offset is 0)
+        if (utcTime != tz12Time)
+        {
+            // Schedule window is [utcTime, utcTime+1min) — matches UTC but not UTC+12
+            var endMinute = (int.Parse(utcTime.Split(':')[1]) + 1) % 60;
+            var endHour = int.Parse(utcTime.Split(':')[0]) + (endMinute == 0 ? 1 : 0);
+            var endTime = $"{endHour % 24:D2}:{endMinute:D2}";
+
+            var schedules = new List<ProfileScheduleRecord>
+            {
+                new()
+                {
+                    Id = "tz-test", ProfileId = "p1",
+                    StartTime = utcTime, EndTime = endTime,
+                    DaysOfWeek = $"{utcDayMon}",
+                    Timezone = tz12Id,
+                    Enabled = true, CreatedAt = "2026-01-01",
+                },
+            };
+            // Should NOT match — schedule time is interpreted in UTC+12, not UTC
+            var result = ProfileSchedulerService.FindActiveSchedule(schedules);
+            Assert.Null(result);
+        }
+
+        // Now verify the same schedule DOES match when timezone is UTC
+        {
+            var endMinute = (int.Parse(utcTime.Split(':')[1]) + 1) % 60;
+            var endHour = int.Parse(utcTime.Split(':')[0]) + (endMinute == 0 ? 1 : 0);
+            var endTime = $"{endHour % 24:D2}:{endMinute:D2}";
+
+            var schedules = new List<ProfileScheduleRecord>
+            {
+                new()
+                {
+                    Id = "utc-test", ProfileId = "p1",
+                    StartTime = utcTime, EndTime = endTime,
+                    DaysOfWeek = $"{utcDayMon}",
+                    Timezone = "UTC",
+                    Enabled = true, CreatedAt = "2026-01-01",
+                },
+            };
+            var result = ProfileSchedulerService.FindActiveSchedule(schedules);
+            Assert.NotNull(result);
+            Assert.Equal("utc-test", result!.Id);
+        }
+    }
+
+    [Fact]
+    public void FindActiveSchedule_InvalidTimezone_FallsBackToUtc()
+    {
+        var utcNow = DateTimeOffset.UtcNow;
+        var utcTime = utcNow.ToString("HH:mm");
+        var utcDay = (int)utcNow.DayOfWeek;
+        var utcDayMon = utcDay == 0 ? 6 : utcDay - 1;
+
+        var endMinute = (int.Parse(utcTime.Split(':')[1]) + 1) % 60;
+        var endHour = int.Parse(utcTime.Split(':')[0]) + (endMinute == 0 ? 1 : 0);
+        var endTime = $"{endHour % 24:D2}:{endMinute:D2}";
+
+        var schedules = new List<ProfileScheduleRecord>
+        {
+            new()
+            {
+                Id = "bad-tz", ProfileId = "p1",
+                StartTime = utcTime, EndTime = endTime,
+                DaysOfWeek = $"{utcDayMon}",
+                Timezone = "Invalid/Timezone_That_Does_Not_Exist",
+                Enabled = true, CreatedAt = "2026-01-01",
+            },
+        };
+        // Invalid timezone falls back to UTC — should still match
+        var result = ProfileSchedulerService.FindActiveSchedule(schedules);
+        Assert.NotNull(result);
+        Assert.Equal("bad-tz", result!.Id);
+    }
 }

@@ -141,17 +141,32 @@ public sealed class ProfileSchedulerService : BackgroundService
     /// </summary>
     internal static ProfileScheduleRecord? FindActiveSchedule(List<ProfileScheduleRecord> schedules)
     {
-        var now = DateTimeOffset.UtcNow;
-        var dow = (int)now.DayOfWeek;
-        // Convert .NET DayOfWeek (0=Sunday) to Python convention (0=Monday)
-        dow = dow == 0 ? 6 : dow - 1;
-        var currentTime = now.ToString("HH:mm");
+        var utcNow = DateTimeOffset.UtcNow;
 
         var matching = new List<ProfileScheduleRecord>();
 
         foreach (var schedule in schedules)
         {
             if (!schedule.Enabled) continue;
+
+            // Convert UTC now to the schedule's local timezone for comparison
+            // Supports both IANA (e.g. "America/New_York") and Windows timezone IDs
+            DateTimeOffset localNow;
+            try
+            {
+                var tz = TimeZoneInfo.FindSystemTimeZoneById(schedule.Timezone ?? "UTC");
+                localNow = TimeZoneInfo.ConvertTime(utcNow, tz);
+            }
+            catch (TimeZoneNotFoundException)
+            {
+                localNow = utcNow; // fall back to UTC if timezone is invalid
+            }
+
+            var dow = (int)localNow.DayOfWeek;
+            // Convert .NET DayOfWeek (0=Sunday) to Python convention (0=Monday)
+            dow = dow == 0 ? 6 : dow - 1;
+            var currentTime = localNow.ToString("HH:mm");
+
             var days = schedule.DaysOfWeek.Split(',')
                 .Select(d => d.Trim())
                 .Where(d => int.TryParse(d, out _))
