@@ -46,6 +46,9 @@ internal static class Program
         ("/api/virtual-sensors", "virtual_sensors"),
         ("/api/notification-channels", "notifications"),
         ("/api/profile-schedules", "profiles"),
+        ("/api/noise-profiles", "settings"),
+        ("/api/report-schedules", "settings"),
+        ("/api/annotations", "analytics"),
     ];
     private static readonly HashSet<string> _readMethods = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -201,6 +204,8 @@ internal static class Program
         builder.Services.AddHostedService<MqttCommandHandler>();
         // Background worker: profile scheduling (time-of-day profile switching)
         builder.Services.AddHostedService<ProfileSchedulerService>();
+        // Background worker: scheduled analytics report emails
+        builder.Services.AddHostedService<ReportSchedulerService>();
 
         // CORS for Next.js dev server.
         // AllowCredentials() is required for session cookies to be forwarded on

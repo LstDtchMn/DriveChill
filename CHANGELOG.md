@@ -1,6 +1,13 @@
 # Changelog
 
-## [2.3.0] - Unreleased
+## [3.0.0] - Unreleased
+
+### Features - C# v3.0 parity completion
+- **Noise profiles CRUD (C#)**: `GET/POST/DELETE /api/noise-profiles` plus `GET /api/noise-profiles/{id}` now match the Python backend, backed by the new `noise_profiles` SQLite table and controller tests.
+- **Scheduled analytics reports (C#)**: `GET/POST/PUT/DELETE /api/report-schedules` now ship with `ReportSchedulerService`, HTML email report generation, `last_sent_at` tracking, and due-logic coverage in tests.
+- **Event annotations CRUD (C#)**: `GET/POST/DELETE /api/annotations` now persist timeline markers in the shared `event_log` table with range filtering and controller tests.
+- **Schema/API parity cleanup (C#)**: `DbService.EnsureInitialisedAsync` now creates `noise_profiles`, `report_schedules`, and `event_log`; API-key scope mapping now includes noise profiles, report schedules, and annotations to mirror Python auth behavior.
+- **MQTT Home Assistant discovery parity verified**: C# `NotificationChannelService` HA discovery behavior was reviewed against the Python implementation and confirmed aligned for config payloads, retained publishes, and stale-entity cleanup.
 
 ### Features — C# Fan-Control Parity
 - **Composite sensor curves (C#)**: `FanService.ApplyCurvesAsync` now supports `SensorIds` list with MAX resolution — parity with Python `resolve_composite_temp`

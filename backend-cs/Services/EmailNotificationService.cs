@@ -14,7 +14,7 @@ namespace DriveChill.Services;
 /// SSL/TLS (port 465).  Use port 587 with STARTTLS for encrypted SMTP.
 /// A future version should migrate to MailKit for full port 465 support.
 /// </summary>
-public sealed class EmailNotificationService
+public class EmailNotificationService
 {
     private readonly DbService _db;
     private readonly ILogger<EmailNotificationService> _log;
@@ -109,6 +109,50 @@ public sealed class EmailNotificationService
         catch (Exception ex)
         {
             return ex.Message;
+        }
+    }
+
+    /// <summary>
+    /// Send an HTML analytics report email. Returns true on successful delivery.
+    /// </summary>
+    public virtual async Task<bool> SendHtmlReportAsync(string subject, string htmlBody, CancellationToken ct = default)
+    {
+        var s = await _db.GetEmailSettingsAsync(ct);
+        if (!s.Enabled || string.IsNullOrEmpty(s.SmtpHost))
+            return false;
+
+        var recipients = JsonSerializer.Deserialize<string[]>(s.RecipientList)
+                         ?? Array.Empty<string>();
+        if (recipients.Length == 0)
+            return false;
+
+        var password = await _db.GetSmtpPasswordAsync(ct);
+
+        try
+        {
+            using var client = new SmtpClient(s.SmtpHost, s.SmtpPort)
+            {
+                Credentials = new System.Net.NetworkCredential(s.SmtpUsername, password),
+                EnableSsl = s.UseTls || s.UseSsl,
+                DeliveryMethod = SmtpDeliveryMethod.Network,
+                Timeout = 15_000,
+            };
+
+            using var msg = new MailMessage();
+            msg.From = new MailAddress(s.SenderAddress);
+            msg.Subject = subject;
+            msg.Body = htmlBody;
+            msg.IsBodyHtml = true;
+            foreach (var r in recipients)
+                msg.To.Add(r);
+
+            await client.SendMailAsync(msg, ct);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Scheduled report email delivery failed");
+            return false;
         }
     }
 

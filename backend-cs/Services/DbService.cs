@@ -267,6 +267,36 @@ public sealed class DbService : IDisposable
                     created_at   TEXT NOT NULL DEFAULT (datetime('now'))
                 );
 
+                CREATE TABLE IF NOT EXISTS noise_profiles (
+                    id         TEXT PRIMARY KEY,
+                    fan_id     TEXT NOT NULL,
+                    mode       TEXT NOT NULL CHECK(mode IN ('quick', 'precise')),
+                    data_json  TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+
+                CREATE TABLE IF NOT EXISTS report_schedules (
+                    id           TEXT PRIMARY KEY,
+                    frequency    TEXT NOT NULL CHECK(frequency IN ('daily', 'weekly')),
+                    time_utc     TEXT NOT NULL,
+                    timezone     TEXT NOT NULL DEFAULT 'UTC',
+                    enabled      INTEGER NOT NULL DEFAULT 1,
+                    last_sent_at TEXT,
+                    created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+
+                CREATE TABLE IF NOT EXISTS event_log (
+                    id            TEXT PRIMARY KEY,
+                    event_type    TEXT NOT NULL,
+                    timestamp_utc TEXT NOT NULL,
+                    label         TEXT NOT NULL,
+                    description   TEXT,
+                    metadata_json TEXT,
+                    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+                CREATE INDEX IF NOT EXISTS idx_event_log_type_ts ON event_log(event_type, timestamp_utc);
+
                 CREATE TABLE IF NOT EXISTS settings (
                     key        TEXT PRIMARY KEY,
                     value      TEXT NOT NULL,
@@ -1084,6 +1114,100 @@ public sealed class DbService : IDisposable
     }
 
     // -----------------------------------------------------------------------
+    // Noise Profiles
+    // -----------------------------------------------------------------------
+
+    public async Task<List<NoiseProfile>> ListNoiseProfilesAsync(CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT id, fan_id, mode, data_json, created_at, updated_at
+            FROM noise_profiles
+            ORDER BY created_at DESC
+            """;
+
+        var profiles = new List<NoiseProfile>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            profiles.Add(ReadNoiseProfile(reader));
+        return profiles;
+    }
+
+    public async Task<NoiseProfile?> GetNoiseProfileAsync(string id, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT id, fan_id, mode, data_json, created_at, updated_at
+            FROM noise_profiles
+            WHERE id = $id
+            """;
+        cmd.Parameters.AddWithValue("$id", id);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct) ? ReadNoiseProfile(reader) : null;
+    }
+
+    public async Task<NoiseProfile> CreateNoiseProfileAsync(NoiseProfile profile, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO noise_profiles (id, fan_id, mode, data_json, created_at, updated_at)
+            VALUES ($id, $fanId, $mode, $dataJson, $createdAt, $updatedAt)
+            """;
+        cmd.Parameters.AddWithValue("$id", profile.Id);
+        cmd.Parameters.AddWithValue("$fanId", profile.FanId);
+        cmd.Parameters.AddWithValue("$mode", profile.Mode);
+        cmd.Parameters.AddWithValue("$dataJson", System.Text.Json.JsonSerializer.Serialize(profile.Data));
+        cmd.Parameters.AddWithValue("$createdAt", profile.CreatedAt);
+        cmd.Parameters.AddWithValue("$updatedAt", profile.UpdatedAt);
+        await cmd.ExecuteNonQueryAsync(ct);
+        return profile;
+    }
+
+    public async Task<bool> DeleteNoiseProfileAsync(string id, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM noise_profiles WHERE id = $id";
+        cmd.Parameters.AddWithValue("$id", id);
+        return await cmd.ExecuteNonQueryAsync(ct) > 0;
+    }
+
+    private static NoiseProfile ReadNoiseProfile(SqliteDataReader reader)
+    {
+        var dataJson = reader.IsDBNull(3) ? "[]" : reader.GetString(3);
+        List<NoiseDataPoint> data;
+        try
+        {
+            data = System.Text.Json.JsonSerializer.Deserialize<List<NoiseDataPoint>>(dataJson) ?? [];
+        }
+        catch
+        {
+            data = [];
+        }
+
+        return new NoiseProfile
+        {
+            Id = reader.GetString(0),
+            FanId = reader.GetString(1),
+            Mode = reader.GetString(2),
+            Data = data,
+            CreatedAt = reader.IsDBNull(4) ? "" : reader.GetString(4),
+            UpdatedAt = reader.IsDBNull(5) ? "" : reader.GetString(5),
+        };
+    }
+
+    // -----------------------------------------------------------------------
     // Profile Schedules
     // -----------------------------------------------------------------------
 
@@ -1163,6 +1287,218 @@ public sealed class DbService : IDisposable
         cmd.CommandText = "DELETE FROM profile_schedules WHERE id = $id";
         cmd.Parameters.AddWithValue("$id", id);
         return await cmd.ExecuteNonQueryAsync(ct) > 0;
+    }
+
+    // -----------------------------------------------------------------------
+    // Report Schedules
+    // -----------------------------------------------------------------------
+
+    public async Task<List<ReportScheduleRecord>> ListReportSchedulesAsync(CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT id, frequency, time_utc, timezone, enabled, last_sent_at, created_at
+            FROM report_schedules
+            ORDER BY created_at ASC
+            """;
+
+        var schedules = new List<ReportScheduleRecord>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            schedules.Add(ReadReportSchedule(reader));
+        return schedules;
+    }
+
+    public async Task<ReportScheduleRecord?> GetReportScheduleAsync(string id, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT id, frequency, time_utc, timezone, enabled, last_sent_at, created_at
+            FROM report_schedules
+            WHERE id = $id
+            """;
+        cmd.Parameters.AddWithValue("$id", id);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct) ? ReadReportSchedule(reader) : null;
+    }
+
+    public async Task<ReportScheduleRecord> CreateReportScheduleAsync(ReportScheduleRecord schedule, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO report_schedules (id, frequency, time_utc, timezone, enabled, last_sent_at, created_at)
+            VALUES ($id, $frequency, $timeUtc, $timezone, $enabled, $lastSentAt, $createdAt)
+            """;
+        cmd.Parameters.AddWithValue("$id", schedule.Id);
+        cmd.Parameters.AddWithValue("$frequency", schedule.Frequency);
+        cmd.Parameters.AddWithValue("$timeUtc", schedule.TimeUtc);
+        cmd.Parameters.AddWithValue("$timezone", schedule.Timezone);
+        cmd.Parameters.AddWithValue("$enabled", schedule.Enabled ? 1 : 0);
+        cmd.Parameters.AddWithValue("$lastSentAt", (object?)schedule.LastSentAt ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$createdAt", schedule.CreatedAt);
+        await cmd.ExecuteNonQueryAsync(ct);
+        return schedule;
+    }
+
+    public async Task<ReportScheduleRecord?> UpdateReportScheduleAsync(
+        string id,
+        string? frequency = null,
+        string? timeUtc = null,
+        string? timezone = null,
+        bool? enabled = null,
+        CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        var parts = new List<string>();
+        var parms = new List<SqliteParameter> { new("$id", id) };
+        if (frequency is not null) { parts.Add("frequency = $frequency"); parms.Add(new("$frequency", frequency)); }
+        if (timeUtc is not null) { parts.Add("time_utc = $timeUtc"); parms.Add(new("$timeUtc", timeUtc)); }
+        if (timezone is not null) { parts.Add("timezone = $timezone"); parms.Add(new("$timezone", timezone)); }
+        if (enabled.HasValue) { parts.Add("enabled = $enabled"); parms.Add(new("$enabled", enabled.Value ? 1 : 0)); }
+        if (parts.Count == 0)
+            return null;
+
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"UPDATE report_schedules SET {string.Join(", ", parts)} WHERE id = $id";
+        foreach (var parm in parms)
+            cmd.Parameters.Add(parm);
+
+        var rows = await cmd.ExecuteNonQueryAsync(ct);
+        return rows > 0 ? await GetReportScheduleAsync(id, ct) : null;
+    }
+
+    public async Task<bool> DeleteReportScheduleAsync(string id, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM report_schedules WHERE id = $id";
+        cmd.Parameters.AddWithValue("$id", id);
+        return await cmd.ExecuteNonQueryAsync(ct) > 0;
+    }
+
+    public async Task<bool> UpdateReportScheduleLastSentAsync(string id, string lastSentAt, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE report_schedules SET last_sent_at = $lastSentAt WHERE id = $id";
+        cmd.Parameters.AddWithValue("$id", id);
+        cmd.Parameters.AddWithValue("$lastSentAt", lastSentAt);
+        return await cmd.ExecuteNonQueryAsync(ct) > 0;
+    }
+
+    private static ReportScheduleRecord ReadReportSchedule(SqliteDataReader reader)
+    {
+        return new ReportScheduleRecord
+        {
+            Id = reader.GetString(0),
+            Frequency = reader.GetString(1),
+            TimeUtc = reader.GetString(2),
+            Timezone = reader.GetString(3),
+            Enabled = reader.GetInt32(4) != 0,
+            LastSentAt = reader.IsDBNull(5) ? null : reader.GetString(5),
+            CreatedAt = reader.GetString(6),
+        };
+    }
+
+    // -----------------------------------------------------------------------
+    // Event Annotations
+    // -----------------------------------------------------------------------
+
+    public async Task<List<AnnotationRecord>> ListAnnotationsAsync(string? start = null, string? end = null, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+
+        var clauses = new List<string> { "event_type = 'annotation'" };
+        if (!string.IsNullOrWhiteSpace(start))
+        {
+            clauses.Add("timestamp_utc >= $start");
+            cmd.Parameters.AddWithValue("$start", start);
+        }
+        if (!string.IsNullOrWhiteSpace(end))
+        {
+            clauses.Add("timestamp_utc <= $end");
+            cmd.Parameters.AddWithValue("$end", end);
+        }
+
+        cmd.CommandText = $"""
+            SELECT id, event_type, timestamp_utc, label, description, metadata_json, created_at
+            FROM event_log
+            WHERE {string.Join(" AND ", clauses)}
+            ORDER BY timestamp_utc DESC
+            """;
+
+        var annotations = new List<AnnotationRecord>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            annotations.Add(ReadAnnotation(reader));
+        return annotations;
+    }
+
+    public async Task<AnnotationRecord> CreateAnnotationAsync(AnnotationRecord annotation, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO event_log (id, event_type, timestamp_utc, label, description, metadata_json, created_at)
+            VALUES ($id, $eventType, $timestampUtc, $label, $description, $metadataJson, $createdAt)
+            """;
+        cmd.Parameters.AddWithValue("$id", annotation.Id);
+        cmd.Parameters.AddWithValue("$eventType", annotation.EventType);
+        cmd.Parameters.AddWithValue("$timestampUtc", annotation.TimestampUtc);
+        cmd.Parameters.AddWithValue("$label", annotation.Label);
+        cmd.Parameters.AddWithValue("$description", (object?)annotation.Description ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$metadataJson", (object?)annotation.MetadataJson ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$createdAt", annotation.CreatedAt);
+        await cmd.ExecuteNonQueryAsync(ct);
+        return annotation;
+    }
+
+    public async Task<bool> DeleteAnnotationAsync(string id, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            DELETE FROM event_log
+            WHERE id = $id AND event_type = 'annotation'
+            """;
+        cmd.Parameters.AddWithValue("$id", id);
+        return await cmd.ExecuteNonQueryAsync(ct) > 0;
+    }
+
+    private static AnnotationRecord ReadAnnotation(SqliteDataReader reader)
+    {
+        return new AnnotationRecord
+        {
+            Id = reader.GetString(0),
+            EventType = reader.GetString(1),
+            TimestampUtc = reader.GetString(2),
+            Label = reader.GetString(3),
+            Description = reader.IsDBNull(4) ? null : reader.GetString(4),
+            MetadataJson = reader.IsDBNull(5) ? null : reader.GetString(5),
+            CreatedAt = reader.GetString(6),
+        };
     }
 
     // -----------------------------------------------------------------------
@@ -2469,19 +2805,6 @@ public sealed class DbService : IDisposable
             UpdatedAt = rdr.IsDBNull(6) ? "" : rdr.GetString(6),
         };
     }
-}
-
-/// <summary>Profile schedule record model.</summary>
-public sealed class ProfileScheduleRecord
-{
-    public string Id { get; set; } = "";
-    public string ProfileId { get; set; } = "";
-    public string StartTime { get; set; } = "00:00";
-    public string EndTime { get; set; } = "00:00";
-    public string DaysOfWeek { get; set; } = "0,1,2,3,4,5,6";
-    public string Timezone { get; set; } = "UTC";
-    public bool Enabled { get; set; } = true;
-    public string CreatedAt { get; set; } = "";
 }
 
 /// <summary>Quiet hours rule model.</summary>

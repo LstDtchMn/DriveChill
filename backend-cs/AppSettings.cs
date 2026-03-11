@@ -10,7 +10,7 @@ public sealed class AppSettings
     ];
 
     public string AppName    { get; set; } = "DriveChill";
-    public string AppVersion { get; set; } = "2.1.1";
+    public string AppVersion { get; set; } = "3.0.0";
 
     public double SensorPollInterval    { get; set; } = 1.0;
     /// <summary>Poll interval in milliseconds (derived from SensorPollInterval).</summary>
