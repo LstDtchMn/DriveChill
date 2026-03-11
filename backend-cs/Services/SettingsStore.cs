@@ -41,35 +41,35 @@ public sealed class SettingsStore
     public int PollIntervalMs
     {
         get { lock (_lock) return _data.PollIntervalMs; }
-        set { lock (_lock) _data.PollIntervalMs = value; Save(); }
+        set { lock (_lock) { _data.PollIntervalMs = value; } Save(); }
     }
 
     public int RetentionDays
     {
         get { lock (_lock) return _data.RetentionDays; }
-        set { lock (_lock) _data.RetentionDays = value; Save(); }
+        set { lock (_lock) { _data.RetentionDays = value; } Save(); }
     }
 
     public string TempUnit
     {
         get { lock (_lock) return _data.TempUnit; }
-        set { lock (_lock) _data.TempUnit = value; Save(); }
+        set { lock (_lock) { _data.TempUnit = value; } Save(); }
     }
 
     public double FanRampRatePctPerSec
     {
         get { lock (_lock) return _data.FanRampRatePctPerSec; }
-        set { lock (_lock) _data.FanRampRatePctPerSec = value; Save(); }
+        set { lock (_lock) { _data.FanRampRatePctPerSec = value; } Save(); }
     }
 
     public double Deadband
     {
         get { lock (_lock) return _data.Deadband; }
-        set { lock (_lock) _data.Deadband = Math.Max(0.0, value); Save(); }
+        set { lock (_lock) { _data.Deadband = Math.Max(0.0, value); } Save(); }
     }
 
     public StoredData GetAll() { lock (_lock) return Clone(_data); }
-    public void SetAll(StoredData d) { lock (_lock) _data = d; Save(); }
+    public void SetAll(StoredData d) { lock (_lock) { _data = d; } Save(); }
 
     // -----------------------------------------------------------------------
     // Curves / Alerts / Profiles — stored inside settings.json
@@ -82,7 +82,7 @@ public sealed class SettingsStore
 
     public void SaveCurves(IReadOnlyList<FanCurve> curves)
     {
-        lock (_lock) _data.Curves = [.. curves];
+        lock (_lock) { _data.Curves = [.. curves]; }
         Save();
     }
 
@@ -93,7 +93,7 @@ public sealed class SettingsStore
 
     public void SaveAlerts(IEnumerable<AlertRule> rules)
     {
-        lock (_lock) _data.Alerts = [.. rules];
+        lock (_lock) { _data.Alerts = [.. rules]; }
         Save();
     }
 
@@ -104,7 +104,7 @@ public sealed class SettingsStore
 
     public void SaveProfiles(IEnumerable<Profile> profiles)
     {
-        lock (_lock) _data.Profiles = [.. profiles];
+        lock (_lock) { _data.Profiles = [.. profiles]; }
         Save();
     }
 

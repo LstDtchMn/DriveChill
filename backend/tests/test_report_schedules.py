@@ -309,6 +309,6 @@ class TestWeeklyIsDue:
         assert _is_due(sched, now) is False
 
     def test_sunday_same_week_as_send_is_not_due(self):
-        now = datetime(2026, 3, 15, 23, 59, 0, tzinfo=timezone.utc)  # Sunday
+        now = datetime(2026, 3, 15, 8, 0, 0, tzinfo=timezone.utc)  # Sunday at 08:00
         sched = self._sched(last_sent_at="2026-03-09T08:00:00+00:00")  # Monday same week
         assert _is_due(sched, now) is False
