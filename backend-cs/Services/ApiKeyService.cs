@@ -32,6 +32,12 @@ public sealed class ApiKeyService
     private readonly SettingsStore _store;
     private readonly object _lock = new();
 
+    // Buffer LastUsedAt updates to avoid writing the full settings file on every validation.
+    // Flushed periodically (every 60s) or on explicit List()/Create()/Revoke().
+    private readonly Dictionary<string, string> _pendingLastUsed = new();
+    private DateTimeOffset _lastFlush = DateTimeOffset.UtcNow;
+    private static readonly TimeSpan FlushInterval = TimeSpan.FromSeconds(60);
+
     public ApiKeyService(SettingsStore store)
     {
         _store = store;
@@ -41,7 +47,9 @@ public sealed class ApiKeyService
     {
         lock (_lock)
         {
-            return [.. _store.GetAll().ApiKeys.OrderByDescending(k => k.CreatedAt)];
+            var data = _store.GetAll();
+            FlushPendingLastUsed(data);
+            return [.. data.ApiKeys.OrderByDescending(k => k.CreatedAt)];
         }
     }
 
@@ -105,10 +113,35 @@ public sealed class ApiKeyService
             if (key == null) return null;
             if (key.Scopes == null || key.Scopes.Count == 0)
                 key.Scopes = ["read:sensors"];
-            key.LastUsedAt = DateTimeOffset.UtcNow.ToString("o");
-            _store.SetAll(data);
+
+            // Buffer the LastUsedAt update instead of flushing to disk on every call.
+            var now = DateTimeOffset.UtcNow.ToString("o");
+            key.LastUsedAt = now;
+            _pendingLastUsed[key.Id] = now;
+
+            // Flush buffered updates periodically (every 60s).
+            if (DateTimeOffset.UtcNow - _lastFlush > FlushInterval)
+                FlushPendingLastUsed(data);
+
             return key;
         }
+    }
+
+    /// <summary>
+    /// Apply buffered LastUsedAt timestamps and write to disk. Must hold <c>_lock</c>.
+    /// </summary>
+    private void FlushPendingLastUsed(StoredData? data = null)
+    {
+        if (_pendingLastUsed.Count == 0) return;
+        data ??= _store.GetAll();
+        foreach (var (id, ts) in _pendingLastUsed)
+        {
+            var k = data.ApiKeys.FirstOrDefault(x => x.Id == id);
+            if (k != null) k.LastUsedAt = ts;
+        }
+        _pendingLastUsed.Clear();
+        _lastFlush = DateTimeOffset.UtcNow;
+        _store.SetAll(data);
     }
 
     private static List<string> NormalizeScopes(IEnumerable<string>? scopes)

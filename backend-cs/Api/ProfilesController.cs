@@ -22,7 +22,7 @@ public sealed class ProfilesController : ControllerBase
     /// <summary>GET /api/profiles</summary>
     [HttpGet]
     public async Task<IActionResult> GetProfiles(CancellationToken ct = default)
-        => Ok(await _db.ListProfilesAsync(ct));
+        => Ok(new { profiles = await _db.ListProfilesAsync(ct) });
 
     /// <summary>GET /api/profiles/{id}</summary>
     [HttpGet("{id}")]

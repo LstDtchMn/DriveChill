@@ -1,0 +1,24 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GET /api/quiet-hours",
+  "type": "object",
+  "required": ["rules"],
+  "properties": {
+    "rules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "day_of_week", "start_time", "end_time", "profile_id", "enabled"],
+        "properties": {
+          "id": { "type": "integer" },
+          "day_of_week": { "type": "integer" },
+          "start_time": { "type": "string" },
+          "end_time": { "type": "string" },
+          "profile_id": { "type": "string" },
+          "enabled": { "type": "boolean" }
+        }
+      }
+    }
+  },
+  "additionalProperties": true
+}

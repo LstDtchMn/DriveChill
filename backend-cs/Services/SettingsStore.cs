@@ -14,7 +14,8 @@ namespace DriveChill.Services;
 public sealed class SettingsStore
 {
     private readonly string _path;
-    private readonly object _lock = new();
+    private readonly object _lock = new();       // protects in-memory _data
+    private readonly object _diskLock = new();   // serializes file writes (held outside _lock)
     private readonly ILogger<SettingsStore>? _logger;
 
     private StoredData _data;
@@ -41,35 +42,35 @@ public sealed class SettingsStore
     public int PollIntervalMs
     {
         get { lock (_lock) return _data.PollIntervalMs; }
-        set { lock (_lock) { _data.PollIntervalMs = value; Save(); } }
+        set => MutateAndSave(d => d.PollIntervalMs = value);
     }
 
     public int RetentionDays
     {
         get { lock (_lock) return _data.RetentionDays; }
-        set { lock (_lock) { _data.RetentionDays = value; Save(); } }
+        set => MutateAndSave(d => d.RetentionDays = value);
     }
 
     public string TempUnit
     {
         get { lock (_lock) return _data.TempUnit; }
-        set { lock (_lock) { _data.TempUnit = value; Save(); } }
+        set => MutateAndSave(d => d.TempUnit = value);
     }
 
     public double FanRampRatePctPerSec
     {
         get { lock (_lock) return _data.FanRampRatePctPerSec; }
-        set { lock (_lock) { _data.FanRampRatePctPerSec = value; Save(); } }
+        set => MutateAndSave(d => d.FanRampRatePctPerSec = value);
     }
 
     public double Deadband
     {
         get { lock (_lock) return _data.Deadband; }
-        set { lock (_lock) { _data.Deadband = Math.Max(0.0, value); Save(); } }
+        set => MutateAndSave(d => d.Deadband = Math.Max(0.0, value));
     }
 
     public StoredData GetAll() { lock (_lock) return Clone(_data); }
-    public void SetAll(StoredData d) { lock (_lock) { _data = d; Save(); } }
+    public void SetAll(StoredData d) => MutateAndSave(_ => _data = d);
 
     // -----------------------------------------------------------------------
     // Curves / Alerts / Profiles — stored inside settings.json
@@ -81,9 +82,7 @@ public sealed class SettingsStore
     }
 
     public void SaveCurves(IReadOnlyList<FanCurve> curves)
-    {
-        lock (_lock) { _data.Curves = [.. curves]; Save(); }
-    }
+        => MutateAndSave(d => d.Curves = [.. curves]);
 
     public IReadOnlyList<AlertRule> LoadAlerts()
     {
@@ -91,9 +90,7 @@ public sealed class SettingsStore
     }
 
     public void SaveAlerts(IEnumerable<AlertRule> rules)
-    {
-        lock (_lock) { _data.Alerts = [.. rules]; Save(); }
-    }
+        => MutateAndSave(d => d.Alerts = [.. rules]);
 
     public IReadOnlyList<Profile> LoadProfiles()
     {
@@ -101,9 +98,7 @@ public sealed class SettingsStore
     }
 
     public void SaveProfiles(IEnumerable<Profile> profiles)
-    {
-        lock (_lock) { _data.Profiles = [.. profiles]; Save(); }
-    }
+        => MutateAndSave(d => d.Profiles = [.. profiles]);
 
     // -----------------------------------------------------------------------
     // Persistence
@@ -160,16 +155,29 @@ public sealed class SettingsStore
     }
 
     /// <summary>
-    /// Persist current state to disk. MUST be called while holding <c>_lock</c>.
+    /// Mutate in-memory state, serialize, and write to disk.
+    /// <c>_diskLock</c> is held first to ensure write ordering, then <c>_lock</c>
+    /// is held briefly for mutation + serialization. Readers block only during
+    /// the fast in-memory serialize (sub-ms), not during disk I/O.
+    /// Lock order: _diskLock → _lock (never reversed) prevents deadlocks.
     /// </summary>
-    private void Save()
+    private void MutateAndSave(Action<StoredData> mutate)
     {
-        var json = JsonSerializer.Serialize(_data, _json);
-        if (File.Exists(_path))
-            File.Copy(_path, _path + ".bak", overwrite: true);
-        var tmp = _path + ".tmp";
-        File.WriteAllText(tmp, json);
-        File.Move(tmp, _path, overwrite: true);
+        lock (_diskLock)
+        {
+            string json;
+            lock (_lock)
+            {
+                mutate(_data);
+                json = JsonSerializer.Serialize(_data, _json);
+            }
+            // Disk I/O outside _lock — readers can proceed during file writes.
+            if (File.Exists(_path))
+                File.Copy(_path, _path + ".bak", overwrite: true);
+            var tmp = _path + ".tmp";
+            File.WriteAllText(tmp, json);
+            File.Move(tmp, _path, overwrite: true);
+        }
     }
 
     private static StoredData Clone(StoredData d) =>

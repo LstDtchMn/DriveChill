@@ -348,3 +348,179 @@ class TestUpdateCheckContract:
             "deployment": "docker",
         }
         _validate(data, "update_check")
+
+
+# ---------------------------------------------------------------------------
+# GET /api/quiet-hours
+# ---------------------------------------------------------------------------
+
+
+class TestQuietHoursContract:
+    def test_synthetic_response_matches_schema(self):
+        data = {
+            "rules": [
+                {
+                    "id": 1,
+                    "day_of_week": 0,
+                    "start_time": "22:00",
+                    "end_time": "07:00",
+                    "profile_id": "p1",
+                    "enabled": True,
+                }
+            ]
+        }
+        _validate(data, "quiet_hours")
+
+    def test_empty_rules_matches_schema(self):
+        _validate({"rules": []}, "quiet_hours")
+
+
+# ---------------------------------------------------------------------------
+# GET /api/webhooks
+# ---------------------------------------------------------------------------
+
+
+class TestWebhooksContract:
+    def test_synthetic_response_matches_schema(self):
+        data = {
+            "config": {
+                "enabled": True,
+                "target_url": "https://example.com/hook",
+                "has_signing_secret": True,
+                "timeout_seconds": 3.0,
+                "max_retries": 2,
+                "retry_backoff_seconds": 1.0,
+            }
+        }
+        _validate(data, "webhooks")
+
+
+# ---------------------------------------------------------------------------
+# GET /api/temperature-targets
+# ---------------------------------------------------------------------------
+
+
+class TestTemperatureTargetsContract:
+    def test_synthetic_response_matches_schema(self):
+        data = {
+            "targets": [
+                {
+                    "id": "abc123",
+                    "name": "SSD Target",
+                    "drive_id": "drive1",
+                    "sensor_id": "hdd_temp_drive1",
+                    "fan_ids": ["Fan1"],
+                    "target_temp_c": 40.0,
+                    "tolerance_c": 5.0,
+                    "min_fan_speed": 20.0,
+                    "enabled": True,
+                    "pid_mode": False,
+                    "pid_kp": 5.0,
+                    "pid_ki": 0.05,
+                    "pid_kd": 1.0,
+                }
+            ]
+        }
+        _validate(data, "temperature_targets")
+
+    def test_null_drive_id_matches_schema(self):
+        data = {
+            "targets": [
+                {
+                    "id": "t1",
+                    "sensor_id": "cpu_temp_0",
+                    "target_temp_c": 60.0,
+                    "enabled": True,
+                    "drive_id": None,
+                }
+            ]
+        }
+        _validate(data, "temperature_targets")
+
+
+# ---------------------------------------------------------------------------
+# GET /api/machines
+# ---------------------------------------------------------------------------
+
+
+class TestMachinesContract:
+    def test_synthetic_response_matches_schema(self):
+        data = {
+            "machines": [
+                {
+                    "id": "m1",
+                    "name": "Workstation",
+                    "base_url": "http://192.168.1.50:8085",
+                    "has_api_key": True,
+                    "enabled": True,
+                    "poll_interval_seconds": 30.0,
+                    "timeout_ms": 5000,
+                    "status": "online",
+                    "last_seen_at": "2026-03-12T10:00:00+00:00",
+                    "last_error": None,
+                    "consecutive_failures": 0,
+                    "freshness_seconds": 5.2,
+                }
+            ]
+        }
+        _validate(data, "machines")
+
+
+# ---------------------------------------------------------------------------
+# GET /api/profile-schedules
+# ---------------------------------------------------------------------------
+
+
+class TestProfileSchedulesContract:
+    def test_synthetic_response_matches_schema(self):
+        data = {
+            "schedules": [
+                {
+                    "id": "s1",
+                    "name": "Night mode",
+                    "profile_id": "p1",
+                    "cron_expression": "0 22 * * *",
+                    "timezone": "America/New_York",
+                    "enabled": True,
+                    "last_triggered_at": None,
+                    "next_trigger_at": "2026-03-12T22:00:00-04:00",
+                }
+            ]
+        }
+        _validate(data, "profile_schedules")
+
+
+# ---------------------------------------------------------------------------
+# GET /api/virtual-sensors
+# ---------------------------------------------------------------------------
+
+
+class TestVirtualSensorsContract:
+    def test_synthetic_response_matches_schema(self):
+        data = {
+            "sensors": [
+                {
+                    "id": "vs_avg_cpu",
+                    "name": "Avg CPU Temp",
+                    "type": "average",
+                    "source_sensor_ids": ["cpu_temp_0", "cpu_temp_1"],
+                    "enabled": True,
+                    "value": 55.0,
+                }
+            ]
+        }
+        _validate(data, "virtual_sensors")
+
+    def test_null_value_matches_schema(self):
+        data = {
+            "sensors": [
+                {
+                    "id": "vs1",
+                    "name": "Test",
+                    "type": "max",
+                    "enabled": True,
+                    "value": None,
+                }
+            ]
+        }
+        _validate(data, "virtual_sensors")

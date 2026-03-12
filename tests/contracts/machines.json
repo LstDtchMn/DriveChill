@@ -1,0 +1,30 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GET /api/machines",
+  "type": "object",
+  "required": ["machines"],
+  "properties": {
+    "machines": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "base_url", "enabled", "status"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "base_url": { "type": "string" },
+          "has_api_key": { "type": "boolean" },
+          "enabled": { "type": "boolean" },
+          "poll_interval_seconds": { "type": "number" },
+          "timeout_ms": { "type": "integer" },
+          "status": { "type": ["string", "null"] },
+          "last_seen_at": { "type": ["string", "null"] },
+          "last_error": { "type": ["string", "null"] },
+          "consecutive_failures": { "type": "integer" },
+          "freshness_seconds": { "type": ["number", "null"] }
+        }
+      }
+    }
+  },
+  "additionalProperties": true
+}

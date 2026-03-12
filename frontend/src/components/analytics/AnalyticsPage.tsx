@@ -119,7 +119,7 @@ export function AnalyticsPage() {
   // Correlation state
   const [corrX, setCorrX]           = useState('');
   const [corrY, setCorrY]           = useState('');
-  const [corrResult, setCorrResult] = useState<{ coeff: number; samples: AnalyticsCorrelationSample[]; count: number } | null>(null);
+  const [corrResult, setCorrResult] = useState<{ coeff: number | null; samples: AnalyticsCorrelationSample[]; count: number } | null>(null);
   const [corrLoading, setCorrLoading] = useState(false);
   const corrGenRef = useRef(0);
 
@@ -191,7 +191,7 @@ export function AnalyticsPage() {
       setCorrResult({ coeff: r.correlation_coefficient, samples: r.samples, count: r.sample_count });
     } catch {
       if (gen !== corrGenRef.current) return;
-      setCorrResult({ coeff: NaN, samples: [], count: 0 });
+      setCorrResult({ coeff: null, samples: [], count: 0 });
     } finally {
       if (gen === corrGenRef.current) setCorrLoading(false);
     }
@@ -629,7 +629,7 @@ export function AnalyticsPage() {
             </div>
             {corrResult && (
               <div className="mt-3 flex gap-6 flex-wrap items-start">
-                {Number.isNaN(corrResult.coeff) ? (
+                {corrResult.coeff === null ? (
                   <p className="text-sm" style={{ color: 'var(--danger)' }}>Correlation request failed.</p>
                 ) : (<>
                 <div>

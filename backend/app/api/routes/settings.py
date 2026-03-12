@@ -258,22 +258,34 @@ async def import_config(request: Request):
             await alert_service.add_rule(rule)
         imported["alert_rules"] = len(new_rules)
 
-    # --- Temperature targets ---
+    # --- Temperature targets (atomic: delete-all + insert in one transaction) ---
     if "temperature_targets" in body:
         from app.models.temperature_targets import TemperatureTarget
-        temp_repo = request.app.state.temperature_target_service._repo
-        # Clear existing
-        existing_targets = await temp_repo.list_all()
-        for t in existing_targets:
-            await temp_repo.delete(t.id)
-        count = 0
+        # Parse all targets first to fail fast before touching the DB
+        new_targets: list[TemperatureTarget] = []
         for t in body["temperature_targets"]:
-            target = TemperatureTarget(**t)
-            await temp_repo.create(target)
-            count += 1
+            new_targets.append(TemperatureTarget(**t))
+        # Single transaction: delete all then insert all
+        await db.execute("DELETE FROM temperature_targets")
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        for target in new_targets:
+            await db.execute(
+                "INSERT INTO temperature_targets "
+                "(id, name, drive_id, sensor_id, fan_ids_json, "
+                "target_temp_c, tolerance_c, min_fan_speed, enabled, "
+                "pid_mode, pid_kp, pid_ki, pid_kd, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (target.id, target.name, target.drive_id, target.sensor_id,
+                 json.dumps(target.fan_ids), target.target_temp_c,
+                 target.tolerance_c, target.min_fan_speed,
+                 1 if target.enabled else 0,
+                 1 if target.pid_mode else 0,
+                 target.pid_kp, target.pid_ki, target.pid_kd, now, now),
+            )
+        await db.commit()
         # Reload in-memory state
         await request.app.state.temperature_target_service.load()
-        imported["temperature_targets"] = count
+        imported["temperature_targets"] = len(new_targets)
 
     # --- Quiet hours ---
     if "quiet_hours" in body:
@@ -314,6 +326,12 @@ async def import_config(request: Request):
         now = datetime.now(timezone.utc).isoformat()
         count = 0
         for sensor_id, label in body["sensor_labels"].items():
+            if not isinstance(sensor_id, str) or not isinstance(label, str):
+                skipped.append(f"sensor_label invalid types: {sensor_id!r}")
+                continue
+            if len(sensor_id) > 128 or len(label) > 256:
+                skipped.append(f"sensor_label too long: {sensor_id!r}")
+                continue
             await db.execute(
                 "INSERT OR REPLACE INTO sensor_labels (sensor_id, label, updated_at) "
                 "VALUES (?, ?, ?)",
@@ -323,19 +341,30 @@ async def import_config(request: Request):
         await db.commit()
         imported["sensor_labels"] = count
 
-    # --- Settings ---
+    # --- Settings (validated through UpdateSettingsRequest) ---
     if "settings" in body:
+        from pydantic import ValidationError as PydanticValidationError
         settings_repo = request.app.state.settings_repo
         s = body["settings"]
+        # Route through the same Pydantic model used by PUT /api/settings
+        # so validators (poll interval bounds, temp_unit enum, retention cap) apply.
+        try:
+            validated = UpdateSettingsRequest.model_validate({
+                k: v for k, v in s.items()
+                if k in ("sensor_poll_interval", "history_retention_hours",
+                          "temp_unit", "fan_ramp_rate_pct_per_sec")
+            })
+        except PydanticValidationError as exc:
+            raise HTTPException(status_code=422, detail=f"Invalid settings: {exc}") from exc
         updates: dict[str, str] = {}
-        if "sensor_poll_interval" in s:
-            updates["sensor_poll_interval"] = str(s["sensor_poll_interval"])
-        if "history_retention_hours" in s:
-            updates["history_retention_hours"] = str(s["history_retention_hours"])
-        if "temp_unit" in s:
-            updates["temp_unit"] = str(s["temp_unit"])
-        if "fan_ramp_rate_pct_per_sec" in s:
-            updates["fan_ramp_rate_pct_per_sec"] = str(s["fan_ramp_rate_pct_per_sec"])
+        if validated.sensor_poll_interval is not None:
+            updates["sensor_poll_interval"] = str(validated.sensor_poll_interval)
+        if validated.history_retention_hours is not None:
+            updates["history_retention_hours"] = str(validated.history_retention_hours)
+        if validated.temp_unit is not None:
+            updates["temp_unit"] = str(validated.temp_unit)
+        if validated.fan_ramp_rate_pct_per_sec is not None:
+            updates["fan_ramp_rate_pct_per_sec"] = str(validated.fan_ramp_rate_pct_per_sec)
         if updates:
             await settings_repo.set_many(updates)
         imported["settings"] = len(updates)

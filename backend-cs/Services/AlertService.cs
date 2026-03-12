@@ -49,13 +49,31 @@ public sealed class AlertService : IDisposable
     }
 
     /// <summary>Set the callback used to activate a profile by ID.</summary>
-    public void SetActivateProfileFn(Func<string, Task> fn) => _activateProfileFn = fn;
+    public void SetActivateProfileFn(Func<string, Task> fn)
+    {
+        _rwLock.EnterWriteLock();
+        try { _activateProfileFn = fn; }
+        finally { _rwLock.ExitWriteLock(); }
+    }
 
     /// <summary>True if an alert-triggered profile switch is currently active.</summary>
-    public bool HasActiveProfileSwitch => _preAlertProfileId != null;
+    public bool HasActiveProfileSwitch
+    {
+        get
+        {
+            _rwLock.EnterReadLock();
+            try { return _preAlertProfileId != null; }
+            finally { _rwLock.ExitReadLock(); }
+        }
+    }
 
     /// <summary>Record the current profile ID so alert-triggered switches can revert.</summary>
-    public void SetPreAlertProfile(string profileId) => _preAlertProfileId = profileId;
+    public void SetPreAlertProfile(string profileId)
+    {
+        _rwLock.EnterWriteLock();
+        try { _preAlertProfileId = profileId; }
+        finally { _rwLock.ExitWriteLock(); }
+    }
 
     // -----------------------------------------------------------------------
     // Rules CRUD
@@ -206,6 +224,7 @@ public sealed class AlertService : IDisposable
         if (rule.Action == null || rule.Action.Type != "switch_profile") return;
         if (string.IsNullOrEmpty(rule.Action.ProfileId)) return;
 
+        Func<string, Task>? fn;
         _rwLock.EnterWriteLock();
         try
         {
@@ -216,14 +235,15 @@ public sealed class AlertService : IDisposable
                 var r = _rules.FirstOrDefault(x => x.RuleId == rid);
                 return r?.Action?.RevertAfterClear == false;
             });
+            fn = _activateProfileFn;
         }
         finally { _rwLock.ExitWriteLock(); }
 
-        if (_activateProfileFn != null)
+        if (fn != null)
         {
             _logger.LogInformation("Alert rule {RuleId} firing profile switch to {ProfileId}",
                 rule.RuleId, rule.Action.ProfileId);
-            _ = Task.Run(() => _activateProfileFn(rule.Action.ProfileId));
+            _ = Task.Run(() => fn(rule.Action.ProfileId));
         }
     }
 
@@ -254,6 +274,7 @@ public sealed class AlertService : IDisposable
     {
         string? switchToProfileId = null;
         string? revertToProfileId = null;
+        Func<string, Task>? fn;
 
         _rwLock.EnterWriteLock();
         try
@@ -289,14 +310,16 @@ public sealed class AlertService : IDisposable
                     _preAlertProfileId = null;
                 }
             }
+
+            fn = _activateProfileFn;
         }
         finally { _rwLock.ExitWriteLock(); }
 
         // Fire profile callbacks outside the lock to avoid holding it during I/O
-        if (switchToProfileId != null && _activateProfileFn != null)
-            _ = Task.Run(() => _activateProfileFn(switchToProfileId));
-        else if (revertToProfileId != null && _activateProfileFn != null)
-            _ = Task.Run(() => _activateProfileFn(revertToProfileId));
+        if (switchToProfileId != null && fn != null)
+            _ = Task.Run(() => fn(switchToProfileId));
+        else if (revertToProfileId != null && fn != null)
+            _ = Task.Run(() => fn(revertToProfileId));
     }
 
     // -----------------------------------------------------------------------

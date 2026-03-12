@@ -1,0 +1,21 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GET /api/webhooks",
+  "type": "object",
+  "required": ["config"],
+  "properties": {
+    "config": {
+      "type": "object",
+      "required": ["enabled", "target_url"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "target_url": { "type": "string" },
+        "has_signing_secret": { "type": "boolean" },
+        "timeout_seconds": { "type": "number" },
+        "max_retries": { "type": "integer" },
+        "retry_backoff_seconds": { "type": "number" }
+      }
+    }
+  },
+  "additionalProperties": true
+}

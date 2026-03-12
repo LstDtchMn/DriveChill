@@ -66,64 +66,59 @@ async def _deployment_type() -> str:
 async def _fetch_latest() -> dict:
     """Query GitHub releases API and return normalised check result.
 
-    The cache lock is held only for reading/writing the cached result, not
-    during the GitHub HTTP call or the ``sc.exe`` subprocess, so concurrent
-    requests are never blocked behind I/O.
+    Uses a single-flight pattern: the asyncio.Lock is held for the entire
+    operation so concurrent callers coalesce onto one network call rather
+    than each hitting GitHub independently.  Because this is an asyncio lock,
+    other event-loop work proceeds normally while waiters queue.
     """
     global _cached_at, _cached_data
 
-    # Fast path: return cached result without blocking.
     async with _cache_lock:
         now = datetime.now(timezone.utc)
         if _cached_at and _cached_data and (now - _cached_at) < _CACHE_TTL:
             return _cached_data
 
-    # Perform the network call and subprocess *outside* the lock so
-    # concurrent callers are not blocked behind slow I/O.
-    url = f"https://api.github.com/repos/{_GITHUB_REPO}/releases/latest"
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                url, headers={"User-Agent": f"DriveChill/{settings.app_version}"}
-            )
-            resp.raise_for_status()
-            data = resp.json()
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Could not reach GitHub releases API: {exc}",
-        )
-
-    latest_tag = data.get("tag_name", "").lstrip("v")
-    raw_url = data.get("html_url", "")
-    release_url = raw_url if raw_url.startswith("https://github.com/") else ""
-
-    def _ver_tuple(v: str):
+        url = f"https://api.github.com/repos/{_GITHUB_REPO}/releases/latest"
         try:
-            parts = (v.split("-")[0].split(".") + ["0", "0", "0"])[:3]
-            return tuple(int(x) for x in parts)
-        except ValueError:
-            return (0, 0, 0)
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    url, headers={"User-Agent": f"DriveChill/{settings.app_version}"}
+                )
+                resp.raise_for_status()
+                data = resp.json()
+        except httpx.HTTPError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Could not reach GitHub releases API: {exc}",
+            )
 
-    update_available = _ver_tuple(latest_tag) > _ver_tuple(settings.app_version)
+        latest_tag = data.get("tag_name", "").lstrip("v")
+        raw_url = data.get("html_url", "")
+        release_url = raw_url if raw_url.startswith("https://github.com/") else ""
 
-    deploy = await _deployment_type()
+        def _ver_tuple(v: str):
+            try:
+                parts = (v.split("-")[0].split(".") + ["0", "0", "0"])[:3]
+                return tuple(int(x) for x in parts)
+            except ValueError:
+                return (0, 0, 0)
 
-    result = {
-        "current":          settings.app_version,
-        "latest":           latest_tag,
-        "update_available": update_available,
-        "release_url":      release_url,
-        "deployment":       deploy,
-    }
+        update_available = _ver_tuple(latest_tag) > _ver_tuple(settings.app_version)
 
-    # Re-acquire lock to update the cache.  A race may cause a double-fetch
-    # but both will produce the same result; the last write wins harmlessly.
-    async with _cache_lock:
+        deploy = await _deployment_type()
+
+        result = {
+            "current":          settings.app_version,
+            "latest":           latest_tag,
+            "update_available": update_available,
+            "release_url":      release_url,
+            "deployment":       deploy,
+        }
+
         _cached_data = result
         _cached_at = datetime.now(timezone.utc)
 
-    return result
+        return result
 
 
 @router.get("/check")

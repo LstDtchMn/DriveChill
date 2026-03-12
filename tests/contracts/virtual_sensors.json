@@ -1,0 +1,24 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GET /api/virtual-sensors",
+  "type": "object",
+  "required": ["sensors"],
+  "properties": {
+    "sensors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "type", "enabled"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "type": { "type": "string" },
+          "source_sensor_ids": { "type": "array", "items": { "type": "string" } },
+          "enabled": { "type": "boolean" },
+          "value": { "type": ["number", "null"] }
+        }
+      }
+    }
+  },
+  "additionalProperties": true
+}

@@ -257,23 +257,10 @@ async def get_stats(
         sensor_clause = f"AND {clause}"
         base_params.extend(extra)
 
-    agg_sql = f"""
-        SELECT
-          sensor_id,
-          MAX(sensor_name) AS sensor_name,
-          MAX(sensor_type) AS sensor_type,
-          MAX(unit) AS unit,
-          MIN(CAST(value AS REAL)) AS min_value,
-          MAX(CAST(value AS REAL)) AS max_value,
-          AVG(CAST(value AS REAL)) AS avg_value,
-          COUNT(*) AS sample_count
-        FROM sensor_log
-        WHERE timestamp >= ? AND timestamp <= ?
-          {sensor_clause}
-        GROUP BY sensor_id
-    """
-    p95_sql = f"""
-        SELECT sensor_id, CAST(value AS REAL) AS v
+    # Single-pass: fetch sorted values, compute all stats in memory.
+    # Replaces two full table scans (aggregate + sorted values) with one.
+    single_sql = f"""
+        SELECT sensor_id, sensor_name, sensor_type, unit, CAST(value AS REAL) AS v
         FROM sensor_log
         WHERE timestamp >= ? AND timestamp <= ?
           {sensor_clause}
@@ -281,32 +268,45 @@ async def get_stats(
     """
 
     db = request.app.state.db
-    agg_rows = await _fetchall_as_dicts(db, agg_sql, base_params)
-
-    # p95 needs the same params
-    sorted_vals: dict[str, list[float]] = defaultdict(list)
-    async with db.execute(p95_sql, base_params) as cursor:
+    # Accumulate per-sensor: values are already sorted by ORDER BY
+    accum: dict[str, dict] = {}
+    async with db.execute(single_sql, base_params) as cursor:
         async for row in cursor:
-            sorted_vals[row[0]].append(row[1])
+            sid = row[0]
+            val = row[4]
+            if sid not in accum:
+                accum[sid] = {
+                    "sensor_name": row[1], "sensor_type": row[2], "unit": row[3],
+                    "min_value": val, "max_value": val, "sum": 0.0,
+                    "count": 0, "values": [],
+                }
+            acc = accum[sid]
+            if val < acc["min_value"]:
+                acc["min_value"] = val
+            if val > acc["max_value"]:
+                acc["max_value"] = val
+            acc["sum"] += val
+            acc["count"] += 1
+            acc["values"].append(val)
 
     stats = []
-    for row in agg_rows:
-        sid = row["sensor_id"]
-        vals = sorted_vals.get(sid, [])
+    for sid, acc in accum.items():
+        vals = acc["values"]
         p95_value: float | None = None
         if vals:
             idx = min(int(len(vals) * 0.95), len(vals) - 1)
             p95_value = vals[idx]
+        count = acc["count"]
         stats.append({
             "sensor_id": sid,
-            "sensor_name": row["sensor_name"],
-            "sensor_type": row["sensor_type"],
-            "unit": row["unit"],
-            "min_value": row["min_value"],
-            "max_value": row["max_value"],
-            "avg_value": row["avg_value"],
+            "sensor_name": acc["sensor_name"],
+            "sensor_type": acc["sensor_type"],
+            "unit": acc["unit"],
+            "min_value": acc["min_value"],
+            "max_value": acc["max_value"],
+            "avg_value": acc["sum"] / max(1, count),
             "p95_value": p95_value,
-            "sample_count": row["sample_count"],
+            "sample_count": count,
         })
 
     # Returned range: actual data extent

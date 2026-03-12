@@ -50,13 +50,7 @@ public sealed class SessionService
         var attempts = _rateLimits.GetOrAdd(ip, _ => []);
         lock (attempts)
         {
-            int before = attempts.Count;
             attempts.RemoveAll(t => t < cutoff);
-            // Evict only when stale entries were pruned away, not on first-ever call.
-            // This prevents a new empty list from being immediately removed from the dict,
-            // which would cause the count to never accumulate.
-            if (attempts.Count == 0 && before > 0)
-                _rateLimits.TryRemove(ip, out _);
             if (attempts.Count >= MaxAttemptsPerMinute) return false;
             attempts.Add(now);
         }

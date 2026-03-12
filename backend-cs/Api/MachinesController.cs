@@ -26,6 +26,11 @@ public sealed class MachinesController : ControllerBase
     /// </summary>
     private static readonly ConcurrentDictionary<(string MachineId, string BaseUrl), HttpClient> _clientPool = new();
 
+    /// <summary>
+    /// Per-machine semaphore to prevent concurrent client creation (DNS resolution + handler setup).
+    /// </summary>
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> _creationLocks = new();
+
     public MachinesController(DbService db, AppSettings settings)
     {
         _db       = db;
@@ -101,6 +106,19 @@ public sealed class MachinesController : ControllerBase
             TimeoutMs           = body.TryGetProperty("timeout_ms", out var t) ? (t.TryGetInt32(out var ti) ? ti : existing.TimeoutMs) : existing.TimeoutMs,
         };
         await _db.UpdateMachineAsync(machineId, patch, ct);
+
+        // Evict pooled client if base_url or api_key changed — stale credentials/connections
+        bool urlChanged = patch.BaseUrl != existing.BaseUrl;
+        bool keyChanged = body.TryGetProperty("api_key", out var apiKeyProp) && apiKeyProp.ValueKind != JsonValueKind.Null;
+        if (urlChanged || keyChanged)
+        {
+            foreach (var poolKey in _clientPool.Keys)
+            {
+                if (poolKey.MachineId == machineId && _clientPool.TryRemove(poolKey, out var stale))
+                    stale.Dispose();
+            }
+        }
+
         var updated = await _db.GetMachineAsync(machineId, ct);
         return Ok(new { machine = ToView(updated!) });
     }
@@ -111,12 +129,13 @@ public sealed class MachinesController : ControllerBase
         var deleted = await _db.DeleteMachineAsync(machineId, ct);
         if (!deleted) return NotFound(new { detail = "Machine not found" });
 
-        // Evict pooled HttpClients for this machine to avoid leaked connections
+        // Evict pooled HttpClients and creation lock for this machine
         foreach (var key in _clientPool.Keys)
         {
             if (key.MachineId == machineId && _clientPool.TryRemove(key, out var stale))
                 stale.Dispose();
         }
+        _creationLocks.TryRemove(machineId, out _);
 
         return Ok(new { success = true });
     }
@@ -249,6 +268,9 @@ public sealed class MachinesController : ControllerBase
                 content, ct);
             resp.EnsureSuccessStatusCode();
             await _db.SetMachineLastCommandAsync(machineId, ct);
+            var contentType = resp.Content.Headers.ContentType?.MediaType ?? "";
+            if (!contentType.Contains("json", StringComparison.OrdinalIgnoreCase))
+                return StatusCode(502, new { detail = $"Unexpected upstream Content-Type: {contentType}" });
             var responseBody = await resp.Content.ReadAsStringAsync(ct);
             return Content(responseBody, "application/json");
         }
@@ -280,90 +302,94 @@ public sealed class MachinesController : ControllerBase
         if (_clientPool.TryGetValue(key, out var existing))
             return existing;
 
-        // Evict stale entries for this machine (e.g. base_url changed)
-        foreach (var k in _clientPool.Keys)
+        // Serialize creation per machine to avoid redundant DNS resolution + handler setup
+        var semaphore = _creationLocks.GetOrAdd(machine.Id, _ => new SemaphoreSlim(1, 1));
+        await semaphore.WaitAsync(ct);
+        try
         {
-            if (k.MachineId == machine.Id && k.BaseUrl != machine.BaseUrl)
+            // Double-check after acquiring the lock
+            if (_clientPool.TryGetValue(key, out existing))
+                return existing;
+
+            // Evict stale entries for this machine (e.g. base_url changed)
+            foreach (var k in _clientPool.Keys)
             {
-                if (_clientPool.TryRemove(k, out var stale))
-                    stale.Dispose();
-            }
-        }
-
-        if (!Uri.TryCreate(machine.BaseUrl, UriKind.Absolute, out var uri))
-            throw new InvalidOperationException("Invalid machine base_url.");
-
-        var timeoutMs    = machine.TimeoutMs > 0 ? machine.TimeoutMs : 5000;
-        var originalHost = uri.DnsSafeHost;
-        var port         = uri.IsDefaultPort
-            ? (uri.Scheme == "https" ? 443 : 80)
-            : uri.Port;
-
-        IPAddress lockedIp;
-        if (_settings.AllowPrivateOutboundTargets)
-        {
-            var addrs = await Dns.GetHostAddressesAsync(originalHost, ct);
-            lockedIp = addrs.FirstOrDefault()
-                       ?? throw new InvalidOperationException($"Cannot resolve host '{originalHost}'.");
-        }
-        else
-        {
-            IPAddress[] addrs;
-            try { addrs = await Dns.GetHostAddressesAsync(originalHost, ct); }
-            catch (SocketException ex)
-            {
-                throw new InvalidOperationException(
-                    $"Cannot resolve host '{originalHost}': {ex.Message}");
-            }
-
-            lockedIp = addrs.FirstOrDefault(ip => !IsPrivateOrLoopback(ip))
-                       ?? throw new InvalidOperationException(
-                           $"Outbound requests to private/loopback addresses are not allowed " +
-                           $"(all resolved addresses for '{originalHost}' are private). " +
-                           $"Set DRIVECHILL_ALLOW_PRIVATE_OUTBOUND_TARGETS=true to override.");
-        }
-
-        var handler = new SocketsHttpHandler
-        {
-            AllowAutoRedirect = false,
-            // Bound connection reuse so DNS changes propagate and ephemeral ports recycle.
-            PooledConnectionLifetime = TimeSpan.FromMinutes(5),
-            MaxConnectionsPerServer = 4,
-            // Route every TCP connection to the pre-resolved IP — no second DNS lookup.
-            ConnectCallback = async (ctx, cToken) =>
-            {
-                var socket = new Socket(lockedIp.AddressFamily, SocketType.Stream, ProtocolType.Tcp)
+                if (k.MachineId == machine.Id && k.BaseUrl != machine.BaseUrl)
                 {
-                    NoDelay = true,
-                };
-                await socket.ConnectAsync(new IPEndPoint(lockedIp, port), cToken);
-                return new NetworkStream(socket, ownsSocket: true);
-            },
-            // For HTTPS, TargetHost tells SslStream which hostname to present in SNI
-            // so the server certificate is validated against the original hostname.
-            SslOptions = new SslClientAuthenticationOptions
+                    if (_clientPool.TryRemove(k, out var stale))
+                        stale.Dispose();
+                }
+            }
+
+            if (!Uri.TryCreate(machine.BaseUrl, UriKind.Absolute, out var uri))
+                throw new InvalidOperationException("Invalid machine base_url.");
+
+            var timeoutMs    = machine.TimeoutMs > 0 ? machine.TimeoutMs : 5000;
+            var originalHost = uri.DnsSafeHost;
+            var port         = uri.IsDefaultPort
+                ? (uri.Scheme == "https" ? 443 : 80)
+                : uri.Port;
+
+            IPAddress lockedIp;
+            if (_settings.AllowPrivateOutboundTargets)
             {
-                TargetHost = originalHost,
-            },
-        };
+                var addrs = await Dns.GetHostAddressesAsync(originalHost, ct);
+                lockedIp = addrs.FirstOrDefault()
+                           ?? throw new InvalidOperationException($"Cannot resolve host '{originalHost}'.");
+            }
+            else
+            {
+                IPAddress[] addrs;
+                try { addrs = await Dns.GetHostAddressesAsync(originalHost, ct); }
+                catch (SocketException ex)
+                {
+                    throw new InvalidOperationException(
+                        $"Cannot resolve host '{originalHost}': {ex.Message}");
+                }
 
-        var client = new HttpClient(handler, disposeHandler: true)
-        {
-            Timeout = TimeSpan.FromMilliseconds(timeoutMs),
-        };
+                lockedIp = addrs.FirstOrDefault(ip => !IsPrivateOrLoopback(ip))
+                           ?? throw new InvalidOperationException(
+                               $"Outbound requests to private/loopback addresses are not allowed " +
+                               $"(all resolved addresses for '{originalHost}' are private). " +
+                               $"Set DRIVECHILL_ALLOW_PRIVATE_OUTBOUND_TARGETS=true to override.");
+            }
 
-        if (!string.IsNullOrEmpty(machine.ApiKeyHash))
-        {
-            var rawKey = CredentialEncryption.Decrypt(machine.ApiKeyHash, _settings.SecretKey);
-            client.DefaultRequestHeaders.Authorization =
-                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", rawKey);
+            var handler = new SocketsHttpHandler
+            {
+                AllowAutoRedirect = false,
+                PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+                MaxConnectionsPerServer = 4,
+                ConnectCallback = async (ctx, cToken) =>
+                {
+                    var socket = new Socket(lockedIp.AddressFamily, SocketType.Stream, ProtocolType.Tcp)
+                    {
+                        NoDelay = true,
+                    };
+                    await socket.ConnectAsync(new IPEndPoint(lockedIp, port), cToken);
+                    return new NetworkStream(socket, ownsSocket: true);
+                },
+                SslOptions = new SslClientAuthenticationOptions
+                {
+                    TargetHost = originalHost,
+                },
+            };
+
+            var client = new HttpClient(handler, disposeHandler: true)
+            {
+                Timeout = TimeSpan.FromMilliseconds(timeoutMs),
+            };
+
+            if (!string.IsNullOrEmpty(machine.ApiKeyHash))
+            {
+                var rawKey = CredentialEncryption.Decrypt(machine.ApiKeyHash, _settings.SecretKey);
+                client.DefaultRequestHeaders.Authorization =
+                    new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", rawKey);
+            }
+
+            _clientPool[key] = client;
+            return client;
         }
-
-        // Race-safe: if another thread created the client first, use theirs and dispose ours.
-        var winner = _clientPool.GetOrAdd(key, client);
-        if (!ReferenceEquals(winner, client))
-            client.Dispose();
-        return winner;
+        finally { semaphore.Release(); }
     }
 
     // -----------------------------------------------------------------------

@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GET /api/profile-schedules",
+  "type": "object",
+  "required": ["schedules"],
+  "properties": {
+    "schedules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "profile_id", "enabled"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "profile_id": { "type": "string" },
+          "cron_expression": { "type": "string" },
+          "timezone": { "type": "string" },
+          "enabled": { "type": "boolean" },
+          "last_triggered_at": { "type": ["string", "null"] },
+          "next_trigger_at": { "type": ["string", "null"] }
+        }
+      }
+    }
+  },
+  "additionalProperties": true
+}

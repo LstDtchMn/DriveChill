@@ -161,9 +161,15 @@ public sealed class ApiContractTests : IDisposable
                     $"Expected string but got {data.ValueKind}");
                 break;
             case "number":
-            case "integer":
                 Assert.True(data.ValueKind == JsonValueKind.Number,
                     $"Expected number but got {data.ValueKind}");
+                break;
+            case "integer":
+                Assert.True(data.ValueKind == JsonValueKind.Number,
+                    $"Expected integer but got {data.ValueKind}");
+                if (data.TryGetDouble(out var dbl))
+                    Assert.True(dbl == Math.Floor(dbl),
+                        $"Expected integer but got fractional number {dbl}");
                 break;
             case "boolean":
                 Assert.True(data.ValueKind is JsonValueKind.True or JsonValueKind.False,
@@ -412,6 +418,136 @@ public sealed class ApiContractTests : IDisposable
         """).RootElement;
 
         ValidateAgainstSchema(data, LoadSchema("update_check"));
+    }
+
+    // -------------------------------------------------------------------
+    // Synthetic — quiet hours, webhooks, temperature targets, machines,
+    // profile schedules, virtual sensors
+    // -------------------------------------------------------------------
+
+    [Fact]
+    public void QuietHoursSchema_ValidatesSyntheticData()
+    {
+        var data = JsonDocument.Parse("""
+        {
+            "rules": [{
+                "id": 1,
+                "day_of_week": 0,
+                "start_time": "22:00",
+                "end_time": "07:00",
+                "profile_id": "p1",
+                "enabled": true
+            }]
+        }
+        """).RootElement;
+
+        ValidateAgainstSchema(data, LoadSchema("quiet_hours"));
+    }
+
+    [Fact]
+    public void WebhooksSchema_ValidatesSyntheticData()
+    {
+        var data = JsonDocument.Parse("""
+        {
+            "config": {
+                "enabled": true,
+                "target_url": "https://example.com/hook",
+                "has_signing_secret": true,
+                "timeout_seconds": 3.0,
+                "max_retries": 2,
+                "retry_backoff_seconds": 1.0
+            }
+        }
+        """).RootElement;
+
+        ValidateAgainstSchema(data, LoadSchema("webhooks"));
+    }
+
+    [Fact]
+    public void TemperatureTargetsSchema_ValidatesSyntheticData()
+    {
+        var data = JsonDocument.Parse("""
+        {
+            "targets": [{
+                "id": "t1",
+                "name": "SSD Target",
+                "sensor_id": "hdd_temp_drive1",
+                "fan_ids": ["Fan1"],
+                "target_temp_c": 40.0,
+                "tolerance_c": 5.0,
+                "min_fan_speed": 20.0,
+                "enabled": true,
+                "pid_mode": false,
+                "pid_kp": 5.0,
+                "pid_ki": 0.05,
+                "pid_kd": 1.0
+            }]
+        }
+        """).RootElement;
+
+        ValidateAgainstSchema(data, LoadSchema("temperature_targets"));
+    }
+
+    [Fact]
+    public void MachinesSchema_ValidatesSyntheticData()
+    {
+        var data = JsonDocument.Parse("""
+        {
+            "machines": [{
+                "id": "m1",
+                "name": "Workstation",
+                "base_url": "http://192.168.1.50:8085",
+                "has_api_key": true,
+                "enabled": true,
+                "poll_interval_seconds": 30.0,
+                "timeout_ms": 5000,
+                "status": "online",
+                "consecutive_failures": 0
+            }]
+        }
+        """).RootElement;
+
+        ValidateAgainstSchema(data, LoadSchema("machines"));
+    }
+
+    [Fact]
+    public void ProfileSchedulesSchema_ValidatesSyntheticData()
+    {
+        var data = JsonDocument.Parse("""
+        {
+            "schedules": [{
+                "id": "s1",
+                "name": "Night mode",
+                "profile_id": "p1",
+                "cron_expression": "0 22 * * *",
+                "timezone": "America/New_York",
+                "enabled": true,
+                "last_triggered_at": null,
+                "next_trigger_at": "2026-03-12T22:00:00"
+            }]
+        }
+        """).RootElement;
+
+        ValidateAgainstSchema(data, LoadSchema("profile_schedules"));
+    }
+
+    [Fact]
+    public void VirtualSensorsSchema_ValidatesSyntheticData()
+    {
+        var data = JsonDocument.Parse("""
+        {
+            "sensors": [{
+                "id": "vs1",
+                "name": "Avg CPU",
+                "type": "average",
+                "source_sensor_ids": ["cpu_temp_0"],
+                "enabled": true,
+                "value": 55.0
+            }]
+        }
+        """).RootElement;
+
+        ValidateAgainstSchema(data, LoadSchema("virtual_sensors"));
     }
 
     // -------------------------------------------------------------------

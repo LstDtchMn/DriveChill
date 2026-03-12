@@ -381,6 +381,7 @@ public sealed class DbService : IDisposable
     public async Task LogReadingsAsync(IReadOnlyList<SensorReading> readings,
         CancellationToken ct = default)
     {
+        if (readings.Count == 0) return;
         await EnsureInitialisedAsync(ct);
         await using var conn = new SqliteConnection(_connStr);
         await conn.OpenAsync(ct);
@@ -388,19 +389,32 @@ public sealed class DbService : IDisposable
 
         var ts = DateTimeOffset.UtcNow.ToString("o");
 
-        foreach (var r in readings)
+        // Batch INSERT: build a single multi-row VALUES statement to avoid N round-trips.
+        // SQLite supports up to 999 parameters; each row uses 6, so batch ≤166 rows.
+        const int maxRowsPerBatch = 166;
+
+        for (int offset = 0; offset < readings.Count; offset += maxRowsPerBatch)
         {
+            var batch = readings.Skip(offset).Take(maxRowsPerBatch).ToList();
             await using var cmd = conn.CreateCommand();
-            cmd.CommandText = """
-                INSERT INTO sensor_log (timestamp, sensor_id, sensor_name, sensor_type, value, unit)
-                VALUES ($ts, $sid, $name, $type, $val, $unit)
-                """;
-            cmd.Parameters.AddWithValue("$ts",   ts);
-            cmd.Parameters.AddWithValue("$sid",  r.Id);
-            cmd.Parameters.AddWithValue("$name", r.Name);
-            cmd.Parameters.AddWithValue("$type", r.SensorType);
-            cmd.Parameters.AddWithValue("$val",  r.Value);
-            cmd.Parameters.AddWithValue("$unit", r.Unit);
+            cmd.Transaction = (Microsoft.Data.Sqlite.SqliteTransaction)tx;
+
+            var valueClauses = new List<string>(batch.Count);
+            int paramIdx = 0;
+            foreach (var r in batch)
+            {
+                var p = paramIdx;
+                valueClauses.Add($"($p{p}_ts, $p{p}_sid, $p{p}_name, $p{p}_type, $p{p}_val, $p{p}_unit)");
+                cmd.Parameters.AddWithValue($"$p{p}_ts",   ts);
+                cmd.Parameters.AddWithValue($"$p{p}_sid",  r.Id);
+                cmd.Parameters.AddWithValue($"$p{p}_name", r.Name);
+                cmd.Parameters.AddWithValue($"$p{p}_type", r.SensorType);
+                cmd.Parameters.AddWithValue($"$p{p}_val",  r.Value);
+                cmd.Parameters.AddWithValue($"$p{p}_unit", r.Unit);
+                paramIdx++;
+            }
+
+            cmd.CommandText = $"INSERT INTO sensor_log (timestamp, sensor_id, sensor_name, sensor_type, value, unit) VALUES {string.Join(", ", valueClauses)}";
             await cmd.ExecuteNonQueryAsync(ct);
         }
 
@@ -647,75 +661,72 @@ public sealed class DbService : IDisposable
         await using var conn = new SqliteConnection(_connStr);
         await conn.OpenAsync(ct);
 
+        // Single-pass: fetch all values sorted by sensor_id + value, compute stats in memory.
+        // This replaces two full table scans (aggregate + sorted values) with one.
         await using var cmd = conn.CreateCommand();
         var sensorCond = BuildSensorCondition(sensorIds, cmd);
         cmd.CommandText = $"""
-            SELECT sensor_id, MAX(sensor_name), MAX(sensor_type), MAX(unit),
-                   MIN(CAST(value AS REAL)), MAX(CAST(value AS REAL)),
-                   AVG(CAST(value AS REAL)), COUNT(*),
-                   MIN(timestamp), MAX(timestamp)
+            SELECT sensor_id, sensor_name, sensor_type, unit,
+                   CAST(value AS REAL), timestamp
             FROM sensor_log
             WHERE timestamp >= $start AND timestamp <= $end AND {sensorCond}
-            GROUP BY sensor_id
+            ORDER BY sensor_id, CAST(value AS REAL) ASC
             """;
         cmd.Parameters.AddWithValue("$start", startStr);
         cmd.Parameters.AddWithValue("$end",   endStr);
 
-        var rows = new List<(string Id, string Name, string Type, string Unit, double Min, double Max, double Avg, int Count, string TsMin, string TsMax)>();
+        // Accumulate per-sensor stats in a single pass over sorted results.
+        var accum = new Dictionary<string, (string Name, string Type, string Unit,
+            double Min, double Max, double Sum, int Count, List<double> Values,
+            string TsMin, string TsMax)>();
+
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
-            rows.Add((reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
-                      reader.GetDouble(4), reader.GetDouble(5), reader.GetDouble(6), reader.GetInt32(7),
-                      reader.GetString(8), reader.GetString(9)));
-
-        // Fetch all sensor values in a single sorted query for p95 computation.
-        await using var cmd2 = conn.CreateCommand();
-        var sensorCond2 = BuildSensorCondition(sensorIds, cmd2);
-        cmd2.CommandText = $"""
-            SELECT sensor_id, CAST(value AS REAL)
-            FROM sensor_log
-            WHERE timestamp >= $start AND timestamp <= $end AND {sensorCond2}
-            ORDER BY sensor_id, CAST(value AS REAL) ASC
-            """;
-        cmd2.Parameters.AddWithValue("$start", startStr);
-        cmd2.Parameters.AddWithValue("$end",   endStr);
-
-        var sortedVals = new Dictionary<string, List<double>>();
-        await using (var r2 = await cmd2.ExecuteReaderAsync(ct))
         {
-            while (await r2.ReadAsync(ct))
+            var sid  = reader.GetString(0);
+            var val  = reader.GetDouble(4);
+            var ts   = reader.GetString(5);
+
+            if (!accum.TryGetValue(sid, out var acc))
             {
-                var sid = r2.GetString(0);
-                if (!sortedVals.TryGetValue(sid, out var list))
-                    sortedVals[sid] = list = new List<double>();
-                list.Add(r2.GetDouble(1));
+                acc = (reader.GetString(1), reader.GetString(2), reader.GetString(3),
+                       val, val, 0.0, 0, new List<double>(), ts, ts);
             }
+
+            acc.Min = Math.Min(acc.Min, val);
+            acc.Max = Math.Max(acc.Max, val);
+            acc.Sum += val;
+            acc.Count++;
+            acc.Values.Add(val); // already sorted by ORDER BY
+            if (string.Compare(ts, acc.TsMin, StringComparison.Ordinal) < 0) acc.TsMin = ts;
+            if (string.Compare(ts, acc.TsMax, StringComparison.Ordinal) > 0) acc.TsMax = ts;
+            accum[sid] = acc;
         }
 
         var stats = new List<AnalyticsStat>();
         DateTimeOffset? actualStart = null, actualEnd = null;
-        foreach (var row in rows)
+        foreach (var (sid, acc) in accum)
         {
-            double p95 = row.Avg;
-            if (sortedVals.TryGetValue(row.Id, out var vals) && vals.Count > 0)
-                p95 = vals[Math.Min(vals.Count - 1, (int)(vals.Count * 0.95))];
+            var p95 = acc.Values.Count > 0
+                ? acc.Values[Math.Min(acc.Values.Count - 1, (int)(acc.Values.Count * 0.95))]
+                : acc.Sum / Math.Max(1, acc.Count);
 
             stats.Add(new AnalyticsStat
             {
-                SensorId    = row.Id,
-                SensorName  = row.Name,
-                SensorType  = row.Type,
-                Unit        = row.Unit,
-                MinValue    = row.Min,
-                MaxValue    = row.Max,
-                AvgValue    = row.Avg,
+                SensorId    = sid,
+                SensorName  = acc.Name,
+                SensorType  = acc.Type,
+                Unit        = acc.Unit,
+                MinValue    = acc.Min,
+                MaxValue    = acc.Max,
+                AvgValue    = acc.Sum / Math.Max(1, acc.Count),
                 P95Value    = p95,
-                SampleCount = row.Count,
+                SampleCount = acc.Count,
             });
 
-            if (DateTimeOffset.TryParse(row.TsMin, out var ts1) && (actualStart == null || ts1 < actualStart))
+            if (DateTimeOffset.TryParse(acc.TsMin, out var ts1) && (actualStart == null || ts1 < actualStart))
                 actualStart = ts1;
-            if (DateTimeOffset.TryParse(row.TsMax, out var ts2) && (actualEnd == null || ts2 > actualEnd))
+            if (DateTimeOffset.TryParse(acc.TsMax, out var ts2) && (actualEnd == null || ts2 > actualEnd))
                 actualEnd = ts2;
         }
         return (stats, actualStart, actualEnd);

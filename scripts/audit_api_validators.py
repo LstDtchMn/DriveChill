@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Audit POST/PUT route handlers for request-body validation.
+"""Audit POST/PUT/PATCH route handlers for request-body validation.
 
-Scans both backends and reports any POST/PUT endpoint that accepts a request
-body without a typed/validated model.
+Scans both backends and reports any POST/PUT/PATCH endpoint that accepts a
+request body without a typed/validated model.
 
 Python (FastAPI): flags handlers with POST/PUT decorator that have no Pydantic
 BaseModel parameter (e.g. raw dict, no body when one is expected).
@@ -28,9 +28,9 @@ from pathlib import Path
 # Python scanner
 # ---------------------------------------------------------------------------
 
-# Matches @router.post(...) or @router.put(...)
+# Matches @router.post(...), @router.put(...), or @router.patch(...)
 _PY_ROUTE_RE = re.compile(
-    r"@router\.(post|put)\s*\(",
+    r"@router\.(post|put|patch)\s*\(",
     re.IGNORECASE,
 )
 
@@ -144,7 +144,7 @@ def scan_python(backend_dir: Path) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 _CS_ROUTE_RE = re.compile(
-    r"\[(HttpPost|HttpPut)",
+    r"\[(HttpPost|HttpPut|HttpPatch)",
     re.IGNORECASE,
 )
 
@@ -192,7 +192,8 @@ def scan_csharp(backend_dir: Path) -> list[dict]:
             if not m:
                 continue
 
-            method = "POST" if "Post" in m.group(1) else "PUT"
+            tag = m.group(1)
+            method = "POST" if "Post" in tag else ("PATCH" if "Patch" in tag else "PUT")
 
             # Check for audit:skip
             context = "\n".join(lines[max(0, i - 1) : min(len(lines), i + 8)])
@@ -264,7 +265,7 @@ def main() -> int:
         all_issues.extend(scan_csharp(cs_backend))
 
     if not all_issues:
-        print("OK: All POST/PUT routes have validated request bodies (or audit:skip).")
+        print("OK: All POST/PUT/PATCH routes have validated request bodies (or audit:skip).")
         return 0
 
     print(f"FAIL: {len(all_issues)} route(s) missing request body validation:\n")

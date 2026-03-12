@@ -7,6 +7,7 @@ import { Plus, Trash2, Edit3, Moon } from 'lucide-react';
 import { useConfirm } from '@/components/ui/ConfirmDialog';
 import { useCanWrite } from '@/hooks/useCanWrite';
 import { ViewerBanner } from '@/components/ui/ViewerBanner';
+import { useToast } from '@/components/ui/ToastProvider';
 
 const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 const DAY_SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -35,6 +36,7 @@ const emptyForm: RuleFormData = {
 export function QuietHoursPage() {
   const canWrite = useCanWrite();
   const confirm = useConfirm();
+  const toast = useToast();
   const [rules, setRules] = useState<QuietHoursRule[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(true);
@@ -92,7 +94,9 @@ export function QuietHoursPage() {
     try {
       await api.quietHours.delete(rule.id);
       await fetchData();
-    } catch { /* ignore */ }
+    } catch {
+      toast('Failed to delete quiet hours rule', 'error');
+    }
   };
 
   const handleSave = async () => {

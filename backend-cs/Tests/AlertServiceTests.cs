@@ -230,17 +230,33 @@ public sealed class AlertServiceTests : IDisposable
         }).GetAwaiter().GetResult();
     }
 
+    /// <summary>
+    /// Creates a profile-switch callback that signals a semaphore on each invocation,
+    /// replacing Thread.Sleep with deterministic waiting.
+    /// </summary>
+    private static (List<string> Activated, SemaphoreSlim Signal, Func<string, Task> Fn) MakeSignalingCallback()
+    {
+        var activated = new List<string>();
+        var signal = new SemaphoreSlim(0);
+        return (activated, signal, id => { activated.Add(id); signal.Release(); return Task.CompletedTask; });
+    }
+
+    private static void WaitForCallback(SemaphoreSlim signal, int timeoutMs = 2000)
+    {
+        Assert.True(signal.Wait(timeoutMs), "Profile callback was not invoked within timeout");
+    }
+
     [Fact]
     public void ProfileSwitch_Fires_WhenAlertTriggered()
     {
-        var activated = new List<string>();
-        _svc.SetActivateProfileFn(id => { activated.Add(id); return Task.CompletedTask; });
+        var (activated, signal, fn) = MakeSignalingCallback();
+        _svc.SetActivateProfileFn(fn);
         _svc.SetPreAlertProfile("default");
 
         AddActionRule(70, "perf");
 
         _svc.Evaluate([Reading("cpu", 75)]);
-        System.Threading.Thread.Sleep(50);
+        WaitForCallback(signal);
 
         Assert.Contains("perf", activated);
     }
@@ -248,18 +264,18 @@ public sealed class AlertServiceTests : IDisposable
     [Fact]
     public void ProfileSwitch_Reverts_WhenRevertAfterClearTrue()
     {
-        var activated = new List<string>();
-        _svc.SetActivateProfileFn(id => { activated.Add(id); return Task.CompletedTask; });
+        var (activated, signal, fn) = MakeSignalingCallback();
+        _svc.SetActivateProfileFn(fn);
         _svc.SetPreAlertProfile("default");
 
         AddActionRule(70, "perf", revertAfterClear: true);
 
         _svc.Evaluate([Reading("cpu", 75)]); // fire
-        System.Threading.Thread.Sleep(50);
+        WaitForCallback(signal);
         activated.Clear();
 
         _svc.Evaluate([Reading("cpu", 60)]); // clear
-        System.Threading.Thread.Sleep(50);
+        WaitForCallback(signal);
 
         Assert.Contains("default", activated);
     }
@@ -267,18 +283,19 @@ public sealed class AlertServiceTests : IDisposable
     [Fact]
     public void ProfileSwitch_DoesNotRevert_WhenRevertAfterClearFalse()
     {
-        var activated = new List<string>();
-        _svc.SetActivateProfileFn(id => { activated.Add(id); return Task.CompletedTask; });
+        var (activated, signal, fn) = MakeSignalingCallback();
+        _svc.SetActivateProfileFn(fn);
         _svc.SetPreAlertProfile("default");
 
         AddActionRule(70, "perf", revertAfterClear: false);
 
         _svc.Evaluate([Reading("cpu", 75)]); // fire
-        System.Threading.Thread.Sleep(50);
+        WaitForCallback(signal);
         activated.Clear();
 
         _svc.Evaluate([Reading("cpu", 60)]); // clear
-        System.Threading.Thread.Sleep(50);
+        // No callback expected — wait briefly to confirm no activation
+        Assert.False(signal.Wait(100), "Unexpected profile callback");
 
         Assert.DoesNotContain("default", activated);
     }
@@ -286,17 +303,18 @@ public sealed class AlertServiceTests : IDisposable
     [Fact]
     public void ProfileSwitch_NoRevertWhenNoPreAlertProfile()
     {
-        var activated = new List<string>();
-        _svc.SetActivateProfileFn(id => { activated.Add(id); return Task.CompletedTask; });
+        var (activated, signal, fn) = MakeSignalingCallback();
+        _svc.SetActivateProfileFn(fn);
 
         AddActionRule(70, "perf", revertAfterClear: true);
 
         _svc.Evaluate([Reading("cpu", 75)]); // fire
-        System.Threading.Thread.Sleep(50);
+        WaitForCallback(signal);
         activated.Clear();
 
         _svc.Evaluate([Reading("cpu", 60)]); // clear
-        System.Threading.Thread.Sleep(50);
+        // No callback expected
+        Assert.False(signal.Wait(100), "Unexpected profile callback");
 
         Assert.Empty(activated);
     }
@@ -304,19 +322,21 @@ public sealed class AlertServiceTests : IDisposable
     [Fact]
     public void ProfileSwitch_MixedRevertAfterClear_NoRevertWins()
     {
-        var activated = new List<string>();
-        _svc.SetActivateProfileFn(id => { activated.Add(id); return Task.CompletedTask; });
+        var (activated, signal, fn) = MakeSignalingCallback();
+        _svc.SetActivateProfileFn(fn);
         _svc.SetPreAlertProfile("default");
 
         AddActionRule(70,  "profile_A", revertAfterClear: true,  sensorId: "cpu");
         AddActionRule(80,  "profile_B", revertAfterClear: false, sensorId: "cpu");
 
         _svc.Evaluate([Reading("cpu", 85)]);
-        System.Threading.Thread.Sleep(50);
+        WaitForCallback(signal); // profile_A fires first
+        WaitForCallback(signal); // profile_B fires second
         activated.Clear();
 
         _svc.Evaluate([Reading("cpu", 60)]);
-        System.Threading.Thread.Sleep(50);
+        // No revert expected
+        Assert.False(signal.Wait(100), "Unexpected revert callback");
 
         Assert.DoesNotContain("default", activated);
     }
