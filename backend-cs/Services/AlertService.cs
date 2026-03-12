@@ -252,6 +252,9 @@ public sealed class AlertService : IDisposable
 
     private void HandleActionReeval()
     {
+        string? switchToProfileId = null;
+        string? revertToProfileId = null;
+
         _rwLock.EnterWriteLock();
         try
         {
@@ -262,36 +265,38 @@ public sealed class AlertService : IDisposable
                 if (rule?.Action is { Type: "switch_profile" } action
                     && !string.IsNullOrEmpty(action.ProfileId))
                 {
-                    if (_activateProfileFn != null)
-                    {
-                        _logger.LogInformation(
-                            "Re-evaluating: switching to profile {ProfileId} (rule {RuleId} still active)",
-                            action.ProfileId, rid);
-                        _ = Task.Run(() => _activateProfileFn(action.ProfileId));
-                    }
-                    return;
+                    switchToProfileId = action.ProfileId;
+                    _logger.LogInformation(
+                        "Re-evaluating: switching to profile {ProfileId} (rule {RuleId} still active)",
+                        action.ProfileId, rid);
+                    break;
+                }
+            }
+
+            if (switchToProfileId == null && _preAlertProfileId != null)
+            {
+                if (_suppressRevert)
+                {
+                    _logger.LogInformation(
+                        "All alert actions cleared but revert suppressed by RevertAfterClear=false");
+                    _suppressRevert = false;
+                    _preAlertProfileId = null;
+                }
+                else
+                {
+                    revertToProfileId = _preAlertProfileId;
+                    _logger.LogInformation("All alert actions cleared, reverting to profile {ProfileId}", revertToProfileId);
+                    _preAlertProfileId = null;
                 }
             }
         }
         finally { _rwLock.ExitWriteLock(); }
 
-        if (_preAlertProfileId != null)
-        {
-            if (_suppressRevert)
-            {
-                _logger.LogInformation(
-                    "All alert actions cleared but revert suppressed by RevertAfterClear=false");
-                _suppressRevert = false;
-                _preAlertProfileId = null;
-            }
-            else if (_activateProfileFn != null)
-            {
-                var revertId = _preAlertProfileId;
-                _logger.LogInformation("All alert actions cleared, reverting to profile {ProfileId}", revertId);
-                _preAlertProfileId = null;
-                _ = Task.Run(() => _activateProfileFn(revertId));
-            }
-        }
+        // Fire profile callbacks outside the lock to avoid holding it during I/O
+        if (switchToProfileId != null && _activateProfileFn != null)
+            _ = Task.Run(() => _activateProfileFn(switchToProfileId));
+        else if (revertToProfileId != null && _activateProfileFn != null)
+            _ = Task.Run(() => _activateProfileFn(revertToProfileId));
     }
 
     // -----------------------------------------------------------------------

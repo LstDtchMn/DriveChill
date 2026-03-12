@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GET /api/alerts/events",
+  "type": "object",
+  "required": ["events"],
+  "properties": {
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["rule_id", "sensor_id", "threshold", "condition"],
+        "properties": {
+          "rule_id":      { "type": "string" },
+          "sensor_id":    { "type": "string" },
+          "sensor_name":  { "type": "string" },
+          "actual_value": { "type": "number" },
+          "threshold":    { "type": "number" },
+          "condition":    { "type": "string" },
+          "cleared":      { "type": "boolean" }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GET /api/update/check",
+  "type": "object",
+  "required": ["current", "latest", "update_available"],
+  "properties": {
+    "current":          { "type": "string" },
+    "latest":           { "type": "string" },
+    "update_available": { "type": "boolean" },
+    "release_url":      { "type": "string" },
+    "deployment":       { "type": "string" }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,24 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GET /api/notification-channels",
+  "type": "object",
+  "required": ["channels"],
+  "properties": {
+    "channels": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "type", "name", "enabled"],
+        "properties": {
+          "id":      { "type": "string" },
+          "type":    { "type": "string" },
+          "name":    { "type": "string" },
+          "enabled": { "type": "boolean" },
+          "config":  { "type": "object" }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

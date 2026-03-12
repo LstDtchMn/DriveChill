@@ -1,0 +1,41 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GET /api/analytics/stats",
+  "type": "object",
+  "required": ["stats"],
+  "properties": {
+    "stats": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["sensor_id", "min_value", "max_value", "avg_value", "sample_count"],
+        "properties": {
+          "sensor_id":    { "type": "string" },
+          "sensor_name":  { "type": "string" },
+          "sensor_type":  { "type": "string" },
+          "unit":         { "type": "string" },
+          "min_value":    { "type": "number" },
+          "max_value":    { "type": "number" },
+          "avg_value":    { "type": "number" },
+          "sample_count": { "type": "integer" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "requested_range": {
+      "type": "object",
+      "properties": {
+        "start": { "type": "string" },
+        "end":   { "type": "string" }
+      }
+    },
+    "returned_range": {
+      "type": "object",
+      "properties": {
+        "start": { "type": ["string", "null"] },
+        "end":   { "type": ["string", "null"] }
+      }
+    }
+  },
+  "additionalProperties": true
+}

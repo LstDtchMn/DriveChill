@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GET /api/alerts/rules",
+  "type": "object",
+  "required": ["rules"],
+  "properties": {
+    "rules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["sensor_id", "threshold", "condition", "enabled"],
+        "properties": {
+          "sensor_id": { "type": "string" },
+          "threshold": { "type": "number" },
+          "condition": { "type": "string", "enum": ["above", "below"] },
+          "enabled":   { "type": "boolean" }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

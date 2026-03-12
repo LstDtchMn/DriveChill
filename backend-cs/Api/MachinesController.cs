@@ -110,6 +110,14 @@ public sealed class MachinesController : ControllerBase
     {
         var deleted = await _db.DeleteMachineAsync(machineId, ct);
         if (!deleted) return NotFound(new { detail = "Machine not found" });
+
+        // Evict pooled HttpClients for this machine to avoid leaked connections
+        foreach (var key in _clientPool.Keys)
+        {
+            if (key.MachineId == machineId && _clientPool.TryRemove(key, out var stale))
+                stale.Dispose();
+        }
+
         return Ok(new { success = true });
     }
 

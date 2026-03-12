@@ -1,0 +1,25 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GET /api/sensors",
+  "type": "object",
+  "required": ["readings", "backend"],
+  "properties": {
+    "readings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "sensor_type", "value", "unit"],
+        "properties": {
+          "id":          { "type": "string" },
+          "name":        { "type": "string" },
+          "sensor_type": { "type": "string" },
+          "value":       { "type": "number" },
+          "unit":        { "type": "string" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "backend": { "type": "string" }
+  },
+  "additionalProperties": true
+}
