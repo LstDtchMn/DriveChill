@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using DriveChill.Services;
 using DriveChill.Models;
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
@@ -16,6 +17,14 @@ public sealed class MachinesController : ControllerBase
 {
     private readonly DbService   _db;
     private readonly AppSettings _settings;
+
+    /// <summary>
+    /// Pooled HttpClient instances keyed by (machineId, baseUrl).
+    /// Each client has an IP-locked SocketsHttpHandler for SSRF protection.
+    /// A new client is created if the machine's base_url changes.
+    /// Connection lifetime is bounded by PooledConnectionLifetime (5 min).
+    /// </summary>
+    private static readonly ConcurrentDictionary<(string MachineId, string BaseUrl), HttpClient> _clientPool = new();
 
     public MachinesController(DbService db, AppSettings settings)
     {
@@ -123,7 +132,7 @@ public sealed class MachinesController : ControllerBase
 
         try
         {
-            using var client = await BuildProxyClientAsync(machine, ct);
+            var client = await GetOrCreateProxyClientAsync(machine, ct);
             var resp = await client.GetAsync($"{machine.BaseUrl}/api/health", ct);
             resp.EnsureSuccessStatusCode();
             await _db.UpdateMachineStatusAsync(machineId, "online",
@@ -146,7 +155,7 @@ public sealed class MachinesController : ControllerBase
 
         try
         {
-            using var client = await BuildProxyClientAsync(machine, ct);
+            var client = await GetOrCreateProxyClientAsync(machine, ct);
             var profilesTask = client.GetStringAsync($"{machine.BaseUrl}/api/profiles", ct);
             var sensorsTask  = client.GetStringAsync($"{machine.BaseUrl}/api/sensors",  ct);
             var fansTask     = client.GetStringAsync($"{machine.BaseUrl}/api/fans",     ct);
@@ -180,7 +189,7 @@ public sealed class MachinesController : ControllerBase
 
         try
         {
-            using var client = await BuildProxyClientAsync(machine, ct);
+            var client = await GetOrCreateProxyClientAsync(machine, ct);
             var resp = await client.PutAsync(
                 $"{machine.BaseUrl}/api/profiles/{Uri.EscapeDataString(profileId)}/activate",
                 new StringContent("{}", Encoding.UTF8, "application/json"), ct);
@@ -202,7 +211,7 @@ public sealed class MachinesController : ControllerBase
 
         try
         {
-            using var client = await BuildProxyClientAsync(machine, ct);
+            var client = await GetOrCreateProxyClientAsync(machine, ct);
             var resp = await client.PostAsync(
                 $"{machine.BaseUrl}/api/fans/release",
                 new StringContent("{}", Encoding.UTF8, "application/json"), ct);
@@ -225,7 +234,7 @@ public sealed class MachinesController : ControllerBase
 
         try
         {
-            using var client = await BuildProxyClientAsync(machine, ct);
+            var client = await GetOrCreateProxyClientAsync(machine, ct);
             var content = new StringContent(body.GetRawText(), Encoding.UTF8, "application/json");
             var resp = await client.PutAsync(
                 $"{machine.BaseUrl}/api/fans/{Uri.EscapeDataString(fanId)}/settings",
@@ -246,16 +255,33 @@ public sealed class MachinesController : ControllerBase
     // -----------------------------------------------------------------------
 
     /// <summary>
-    /// Resolves the machine's hostname once, validates the resolved IP against SSRF rules,
-    /// then returns an <see cref="HttpClient"/> whose <see cref="SocketsHttpHandler"/> routes
-    /// TCP connections directly to that locked IP — closing the DNS-rebinding window.
+    /// Returns a pooled <see cref="HttpClient"/> for the given machine. Each machine gets its
+    /// own client keyed by (machineId, baseUrl). The underlying <see cref="SocketsHttpHandler"/>
+    /// locks all TCP connections to the IP resolved at creation time (SSRF protection).
     ///
-    /// For HTTPS the original hostname is still used for TLS SNI (so the server certificate
-    /// can be validated against the hostname the user configured), and the Host header is set
-    /// automatically by HttpClient from the request URI.
+    /// If the machine's base_url changes, a new client is created and the old one is evicted.
+    /// <see cref="SocketsHttpHandler.PooledConnectionLifetime"/> bounds connection reuse to
+    /// 5 minutes, so DNS changes propagate within that window.
+    ///
+    /// Callers must NOT dispose the returned client (it is shared across requests).
     /// </summary>
-    private async Task<HttpClient> BuildProxyClientAsync(MachineRecord machine, CancellationToken ct)
+    private async Task<HttpClient> GetOrCreateProxyClientAsync(MachineRecord machine, CancellationToken ct)
     {
+        var key = (machine.Id, machine.BaseUrl);
+
+        if (_clientPool.TryGetValue(key, out var existing))
+            return existing;
+
+        // Evict stale entries for this machine (e.g. base_url changed)
+        foreach (var k in _clientPool.Keys)
+        {
+            if (k.MachineId == machine.Id && k.BaseUrl != machine.BaseUrl)
+            {
+                if (_clientPool.TryRemove(k, out var stale))
+                    stale.Dispose();
+            }
+        }
+
         if (!Uri.TryCreate(machine.BaseUrl, UriKind.Absolute, out var uri))
             throw new InvalidOperationException("Invalid machine base_url.");
 
@@ -292,6 +318,9 @@ public sealed class MachinesController : ControllerBase
         var handler = new SocketsHttpHandler
         {
             AllowAutoRedirect = false,
+            // Bound connection reuse so DNS changes propagate and ephemeral ports recycle.
+            PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+            MaxConnectionsPerServer = 4,
             // Route every TCP connection to the pre-resolved IP — no second DNS lookup.
             ConnectCallback = async (ctx, cToken) =>
             {
@@ -322,7 +351,11 @@ public sealed class MachinesController : ControllerBase
                 new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", rawKey);
         }
 
-        return client;
+        // Race-safe: if another thread created the client first, use theirs and dispose ours.
+        var winner = _clientPool.GetOrAdd(key, client);
+        if (!ReferenceEquals(winner, client))
+            client.Dispose();
+        return winner;
     }
 
     // -----------------------------------------------------------------------

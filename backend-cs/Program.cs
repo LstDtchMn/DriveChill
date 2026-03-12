@@ -224,8 +224,8 @@ internal static class Program
             {
                 AllowAutoRedirect = false,
             });
-        // Note: MachinesController creates its own SocketsHttpHandler per request
-        // to lock DNS resolution and prevent DNS rebinding. No shared "machines" client needed.
+        // Note: MachinesController pools HttpClient instances per machine (keyed by
+        // machineId + baseUrl) with IP-locked SocketsHttpHandler for SSRF protection.
 
         // Background worker: polls hardware, broadcasts WebSocket messages
         builder.Services.AddHostedService<SensorWorker>();

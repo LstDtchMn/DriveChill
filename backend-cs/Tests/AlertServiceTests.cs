@@ -29,6 +29,7 @@ public sealed class AlertServiceTests : IDisposable
 
     public void Dispose()
     {
+        _svc.Dispose();
         _db.Dispose();
         Environment.SetEnvironmentVariable("DRIVECHILL_DATA_DIR", null);
         try { Directory.Delete(_tempDir, recursive: true); } catch { /* best-effort */ }
@@ -318,5 +319,81 @@ public sealed class AlertServiceTests : IDisposable
         System.Threading.Thread.Sleep(50);
 
         Assert.DoesNotContain("default", activated);
+    }
+
+    [Fact]
+    public void ConcurrentEvaluateAndMutate_NoDeadlockOrLostUpdates()
+    {
+        // Seed 5 rules
+        for (int i = 0; i < 5; i++)
+            AddAboveRule(50 + i, $"sensor_{i}");
+
+        var readings = new List<SensorReading>();
+        for (int i = 0; i < 5; i++)
+            readings.Add(Reading($"sensor_{i}", 80));
+
+        var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var exceptions = new System.Collections.Concurrent.ConcurrentBag<Exception>();
+
+        // Thread 1: rapid Evaluate calls (hot path)
+        var evalTask = Task.Run(() =>
+        {
+            while (!cts.Token.IsCancellationRequested)
+            {
+                try { _svc.Evaluate(readings); }
+                catch (Exception ex) { exceptions.Add(ex); }
+            }
+        });
+
+        // Thread 2: concurrent reads
+        var readTask = Task.Run(() =>
+        {
+            while (!cts.Token.IsCancellationRequested)
+            {
+                try
+                {
+                    _ = _svc.GetRules();
+                    _ = _svc.GetEvents();
+                    _ = _svc.GetActiveEvents();
+                }
+                catch (Exception ex) { exceptions.Add(ex); }
+            }
+        });
+
+        // Thread 3: add and delete rules
+        var mutateTask = Task.Run(async () =>
+        {
+            int n = 0;
+            while (!cts.Token.IsCancellationRequested)
+            {
+                try
+                {
+                    var rule = await _svc.AddRuleAsync(new CreateAlertRuleRequest
+                    {
+                        SensorId = $"dynamic_{n++}",
+                        SensorName = "Dynamic",
+                        Threshold = 99,
+                        Condition = "above",
+                    });
+                    await _svc.DeleteRuleAsync(rule.RuleId);
+                }
+                catch (Exception ex) { exceptions.Add(ex); }
+            }
+        });
+
+        // Let all three threads hammer the service for 2 seconds
+        Task.Delay(2000).Wait();
+        cts.Cancel();
+
+        // Must not deadlock (timeout is 5s) and must not throw
+        Assert.True(Task.WaitAll([evalTask, readTask, mutateTask], TimeSpan.FromSeconds(5)),
+            "Concurrent tasks did not complete — possible deadlock");
+        Assert.Empty(exceptions);
+
+        // Verify structural integrity: rules and events are still accessible
+        var rules = _svc.GetRules();
+        Assert.True(rules.Count >= 5); // original 5 still present
+        var events = _svc.GetEvents();
+        Assert.NotNull(events);
     }
 }

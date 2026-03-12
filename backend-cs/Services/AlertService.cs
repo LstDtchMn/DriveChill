@@ -6,16 +6,14 @@ namespace DriveChill.Services;
 /// <summary>
 /// Threshold-based alerting with hysteresis.
 /// A rule fires once when condition becomes true, and clears once the condition becomes false.
-/// Thread-safe: all state changes are serialised through a lock.
+/// Thread-safe: reads use a shared reader lock, mutations use an exclusive writer lock.
 /// </summary>
-public sealed class AlertService
+public sealed class AlertService : IDisposable
 {
     private readonly DbService _db;
     private readonly ILogger<AlertService> _logger;
-    private readonly object _lock = new();
+    private readonly ReaderWriterLockSlim _rwLock = new();
 
-    // TODO(v3.2): _rules is a List guarded by _lock; consider ConcurrentBag or
-    //   reader-writer lock for better read concurrency on the hot Evaluate() path.
     private readonly List<AlertRule>  _rules  = [];
     private readonly List<AlertEvent> _events = [];
     // Events injected from outside Evaluate() (e.g. SmartTrendService) pending fan-out dispatch
@@ -33,18 +31,21 @@ public sealed class AlertService
     {
         _db = db;
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<AlertService>.Instance;
-        // Rules are loaded asynchronously via InitializeAsync()
     }
+
+    public void Dispose() => _rwLock.Dispose();
 
     /// <summary>Load rules from DB. Must be called after construction.</summary>
     public async Task InitializeAsync(CancellationToken ct = default)
     {
         var rules = await _db.ListAlertRulesAsync(ct);
-        lock (_lock)
+        _rwLock.EnterWriteLock();
+        try
         {
             _rules.Clear();
             _rules.AddRange(rules);
         }
+        finally { _rwLock.ExitWriteLock(); }
     }
 
     /// <summary>Set the callback used to activate a profile by ID.</summary>
@@ -64,16 +65,20 @@ public sealed class AlertService
     public async Task ReloadRulesAsync(CancellationToken ct = default)
     {
         var rules = await _db.ListAlertRulesAsync(ct);
-        lock (_lock)
+        _rwLock.EnterWriteLock();
+        try
         {
             _rules.Clear();
             _rules.AddRange(rules);
         }
+        finally { _rwLock.ExitWriteLock(); }
     }
 
     public IReadOnlyList<AlertRule> GetRules()
     {
-        lock (_lock) return [.. _rules];
+        _rwLock.EnterReadLock();
+        try { return [.. _rules]; }
+        finally { _rwLock.ExitReadLock(); }
     }
 
     public async Task<AlertRule> AddRuleAsync(CreateAlertRuleRequest req, CancellationToken ct = default)
@@ -88,19 +93,20 @@ public sealed class AlertService
             Action     = req.Action,
         };
         await _db.CreateAlertRuleAsync(rule, ct);
-        lock (_lock) { _rules.Add(rule); }
+        _rwLock.EnterWriteLock();
+        try { _rules.Add(rule); }
+        finally { _rwLock.ExitWriteLock(); }
         return rule;
     }
 
     public async Task<bool> DeleteRuleAsync(string ruleId, CancellationToken ct = default)
     {
         bool wasInOrder;
-        bool deletedRuleWasNoRevert;
-        lock (_lock)
+        _rwLock.EnterWriteLock();
+        try
         {
             var rule = _rules.FirstOrDefault(r => r.RuleId == ruleId);
             if (rule == null) return false;
-            deletedRuleWasNoRevert = rule.Action?.RevertAfterClear == false;
             _rules.Remove(rule);
             _active.Remove(ruleId);
             wasInOrder = _actionFiredOrder.Remove(ruleId);
@@ -114,6 +120,7 @@ public sealed class AlertService
                 _suppressRevert = remainingSuppress;
             }
         }
+        finally { _rwLock.ExitWriteLock(); }
         await _db.DeleteAlertRuleAsync(ruleId, ct);
         if (wasInOrder) HandleActionReeval();
         return true;
@@ -125,17 +132,23 @@ public sealed class AlertService
 
     public IReadOnlyList<AlertEvent> GetEvents(int limit = 100)
     {
-        lock (_lock) return _events.TakeLast(limit).ToList();
+        _rwLock.EnterReadLock();
+        try { return _events.TakeLast(limit).ToList(); }
+        finally { _rwLock.ExitReadLock(); }
     }
 
     public IReadOnlyList<AlertEvent> GetActiveEvents()
     {
-        lock (_lock) return _events.Where(e => _active.Contains(e.RuleId) && !e.Cleared).ToList();
+        _rwLock.EnterReadLock();
+        try { return _events.Where(e => _active.Contains(e.RuleId) && !e.Cleared).ToList(); }
+        finally { _rwLock.ExitReadLock(); }
     }
 
     public void ClearEvents()
     {
-        lock (_lock) { _events.Clear(); _active.Clear(); _suppressRevert = false; }
+        _rwLock.EnterWriteLock();
+        try { _events.Clear(); _active.Clear(); _suppressRevert = false; }
+        finally { _rwLock.ExitWriteLock(); }
     }
 
     /// <summary>
@@ -156,12 +169,14 @@ public sealed class AlertService
             Condition   = condition,
             Message     = message,
         };
-        lock (_lock)
+        _rwLock.EnterWriteLock();
+        try
         {
             _events.Add(ev);
             while (_events.Count > 500) _events.RemoveAt(0);
             _pendingInjected.Add(ev);
         }
+        finally { _rwLock.ExitWriteLock(); }
         return ev;
     }
 
@@ -172,12 +187,14 @@ public sealed class AlertService
     /// </summary>
     public List<AlertEvent> DrainInjectedEvents()
     {
-        lock (_lock)
+        _rwLock.EnterWriteLock();
+        try
         {
             var result = new List<AlertEvent>(_pendingInjected);
             _pendingInjected.Clear();
             return result;
         }
+        finally { _rwLock.ExitWriteLock(); }
     }
 
     // -----------------------------------------------------------------------
@@ -189,7 +206,8 @@ public sealed class AlertService
         if (rule.Action == null || rule.Action.Type != "switch_profile") return;
         if (string.IsNullOrEmpty(rule.Action.ProfileId)) return;
 
-        lock (_lock)
+        _rwLock.EnterWriteLock();
+        try
         {
             _actionFiredOrder.Remove(rule.RuleId);
             _actionFiredOrder.Add(rule.RuleId);
@@ -199,6 +217,7 @@ public sealed class AlertService
                 return r?.Action?.RevertAfterClear == false;
             });
         }
+        finally { _rwLock.ExitWriteLock(); }
 
         if (_activateProfileFn != null)
         {
@@ -215,7 +234,8 @@ public sealed class AlertService
     private void HandleBatchActionClear(List<AlertRule> clearedRules)
     {
         bool batchSuppress = clearedRules.Any(r => r.Action?.RevertAfterClear == false);
-        lock (_lock)
+        _rwLock.EnterWriteLock();
+        try
         {
             foreach (var rule in clearedRules)
                 _actionFiredOrder.Remove(rule.RuleId);
@@ -226,12 +246,14 @@ public sealed class AlertService
             });
             _suppressRevert = remainingSuppress || batchSuppress;
         }
+        finally { _rwLock.ExitWriteLock(); }
         HandleActionReeval();
     }
 
     private void HandleActionReeval()
     {
-        lock (_lock)
+        _rwLock.EnterWriteLock();
+        try
         {
             for (int i = _actionFiredOrder.Count - 1; i >= 0; i--)
             {
@@ -251,6 +273,7 @@ public sealed class AlertService
                 }
             }
         }
+        finally { _rwLock.ExitWriteLock(); }
 
         if (_preAlertProfileId != null)
         {
@@ -281,7 +304,8 @@ public sealed class AlertService
         var firedRules = new List<AlertRule>();
         var clearedActionRules = new List<AlertRule>();
 
-        lock (_lock)
+        _rwLock.EnterWriteLock();
+        try
         {
             foreach (var rule in _rules)
             {
@@ -325,6 +349,7 @@ public sealed class AlertService
                 }
             }
         }
+        finally { _rwLock.ExitWriteLock(); }
 
         foreach (var rule in firedRules)
         {
