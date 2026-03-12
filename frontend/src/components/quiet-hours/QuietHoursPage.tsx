@@ -247,7 +247,7 @@ export function QuietHoursPage() {
         <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--text)' }}>Weekly Schedule</h3>
         {rules.length === 0 ? (
           <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-            No quiet hours rules configured. Click "Add Rule" to create one.
+            No quiet hours rules configured. Click &ldquo;Add Rule&rdquo; to create one.
           </p>
         ) : (
           <div className="space-y-1">

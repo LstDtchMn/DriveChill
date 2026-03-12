@@ -38,8 +38,8 @@ export function CurveEditor({
 
   const tempToX = (temp: number) => PADDING + (temp / 110) * chartW;
   const speedToY = (speed: number) => PADDING + chartH - (speed / 100) * chartH;
-  const xToTemp = (x: number) => Math.max(0, Math.min(110, ((x - PADDING) / chartW) * 110));
-  const yToSpeed = (y: number) => Math.max(0, Math.min(100, ((PADDING + chartH - y) / chartH) * 100));
+  const xToTemp = useCallback((x: number) => Math.max(0, Math.min(110, ((x - PADDING) / chartW) * 110)), [chartW]);
+  const yToSpeed = useCallback((y: number) => Math.max(0, Math.min(100, ((PADDING + chartH - y) / chartH) * 100)), [chartH]);
 
   const getSVGPoint = useCallback((e: { clientX: number; clientY: number }) => {
     if (!svgRef.current) return { x: 0, y: 0 };
@@ -101,8 +101,9 @@ export function CurveEditor({
     const speed = Math.round(yToSpeed(y));
 
     if (temp >= 0 && temp <= 110 && speed >= 0 && speed <= 100) {
-      const newPoints = [...points, { temp, speed }].sort((a, b) => a.temp - b.temp);
-      const newIdx = newPoints.findIndex((p) => p.temp === temp && p.speed === speed);
+      const added = { temp, speed };
+      const newPoints = [...points, added].sort((a, b) => a.temp - b.temp);
+      const newIdx = newPoints.indexOf(added);
       setSelectedPoint(newIdx >= 0 ? newIdx : null);
       onChange(newPoints);
     }
@@ -137,22 +138,22 @@ export function CurveEditor({
     switch (e.key) {
       case 'ArrowRight': {
         e.preventDefault();
-        const newTemp = Math.min(110, p.temp + step);
-        const newPoints = sorted.map((pt, i) => i === selectedPoint ? { ...pt, temp: newTemp } : pt);
-        const re = [...newPoints].sort((a, b) => a.temp - b.temp);
-        const ni = re.findIndex((pt) => pt.temp === newTemp && pt.speed === p.speed);
-        setSelectedPoint(ni >= 0 ? ni : selectedPoint);
-        onChange(re);
+        const nudgedR = { temp: Math.min(110, p.temp + step), speed: p.speed };
+        const newPointsR = sorted.map((pt, i) => i === selectedPoint ? nudgedR : pt);
+        const reR = [...newPointsR].sort((a, b) => a.temp - b.temp);
+        const niR = reR.indexOf(nudgedR);
+        setSelectedPoint(niR >= 0 ? niR : selectedPoint);
+        onChange(reR);
         break;
       }
       case 'ArrowLeft': {
         e.preventDefault();
-        const newTemp = Math.max(0, p.temp - step);
-        const newPoints = sorted.map((pt, i) => i === selectedPoint ? { ...pt, temp: newTemp } : pt);
-        const re = [...newPoints].sort((a, b) => a.temp - b.temp);
-        const ni = re.findIndex((pt) => pt.temp === newTemp && pt.speed === p.speed);
-        setSelectedPoint(ni >= 0 ? ni : selectedPoint);
-        onChange(re);
+        const nudgedL = { temp: Math.max(0, p.temp - step), speed: p.speed };
+        const newPointsL = sorted.map((pt, i) => i === selectedPoint ? nudgedL : pt);
+        const reL = [...newPointsL].sort((a, b) => a.temp - b.temp);
+        const niL = reL.indexOf(nudgedL);
+        setSelectedPoint(niL >= 0 ? niL : selectedPoint);
+        onChange(reL);
         break;
       }
       case 'ArrowUp': {

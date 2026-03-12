@@ -293,4 +293,30 @@ public sealed class SettingsControllerTests : IDisposable
         var cfg = _webhooks.GetConfigRaw();
         Assert.Equal("my-secret-key", cfg.SigningSecret);
     }
+
+    // -----------------------------------------------------------------------
+    // v3.2 regression: SettingsStore concurrent setter race
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void SettingsStore_ConcurrentSetters_BothValuesPersist()
+    {
+        // Simulate two concurrent PUT requests setting different fields.
+        // Before the fix, Save() was called outside the lock so thread A's
+        // write could overwrite thread B's mutation.
+        var tasks = new Task[20];
+        for (var i = 0; i < 10; i++)
+            tasks[i] = Task.Run(() => _store.TempUnit = "F");
+        for (var i = 10; i < 20; i++)
+            tasks[i] = Task.Run(() => _store.Deadband = 7.0);
+        Task.WaitAll(tasks);
+
+        Assert.Equal("F", _store.TempUnit);
+        Assert.Equal(7.0, _store.Deadband);
+
+        // Reload from disk to verify the file also has both values
+        var reloaded = new SettingsStore(_appSettings);
+        Assert.Equal("F", reloaded.TempUnit);
+        Assert.Equal(7.0, reloaded.Deadband);
+    }
 }

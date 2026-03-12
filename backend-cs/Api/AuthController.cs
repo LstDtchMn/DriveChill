@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 using DriveChill.Models;
 using DriveChill.Services;
 using System.Security.Cryptography;
@@ -13,16 +14,29 @@ public sealed class AuthController : ControllerBase
     private readonly SessionService  _sessions;
     private readonly AppSettings     _settings;
     private readonly DbService       _db;
+    private readonly ILogger<AuthController> _logger;
 
     private const string SessionCookieName = "drivechill_session";
     private const string CsrfCookieName    = "drivechill_csrf";
 
-    public AuthController(ApiKeyService apiKeys, SessionService sessions, AppSettings settings, DbService db)
+    public AuthController(ApiKeyService apiKeys, SessionService sessions, AppSettings settings, DbService db,
+                          ILogger<AuthController> logger)
     {
         _apiKeys  = apiKeys;
         _sessions = sessions;
         _settings = settings;
         _db       = db;
+        _logger   = logger;
+    }
+
+    /// <summary>Log an auth event without blocking the request. Failures are logged, not swallowed.</summary>
+    private void LogAuthEvent(string action, string? ip, string? username, string outcome, string? detail = null)
+    {
+        _ = Task.Run(async () =>
+        {
+            try { await _db.LogAuthEventAsync(action, ip, username, outcome, detail); }
+            catch (Exception ex) { _logger.LogWarning(ex, "Failed to log auth event {Action} for {User}", action, username); }
+        });
     }
 
     // -----------------------------------------------------------------------
@@ -99,11 +113,7 @@ public sealed class AuthController : ControllerBase
         var session = await _sessions.ValidateSessionAsync(token, ct);
         await _sessions.LogoutAsync(token, ct);
         var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
-        // TODO(v3.2): Fire-and-forget LogAuthEventAsync calls throughout this controller
-        // silently swallow exceptions. Wrap in try/catch or use a background channel so
-        // failures are logged rather than lost. Deferred because the risk is low (SQLite
-        // writes rarely fail) and fixing requires an async error-reporting pattern.
-        _ = _db.LogAuthEventAsync("logout", ip, session?.Username, "success", null);
+        LogAuthEvent("logout", ip, session?.Username, "success");
         Response.Cookies.Delete(SessionCookieName);
         Response.Cookies.Delete(CsrfCookieName);
         return Ok(new { success = true });
@@ -144,7 +154,7 @@ public sealed class AuthController : ControllerBase
             return Conflict(new { detail = "Username already exists" });
         }
         var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
-        _ = _db.LogAuthEventAsync("user_created", ip, req.Username.Trim(), "success", $"role={req.Role}");
+        LogAuthEvent("user_created", ip, req.Username.Trim(), "success", $"role={req.Role}");
         return Ok(new { success = true, username = req.Username.Trim(), role = req.Role });
     }
 
@@ -168,7 +178,7 @@ public sealed class AuthController : ControllerBase
         var updated = await _db.SetUserRoleAsync(userId, req.Role, ct);
         if (!updated) return NotFound(new { detail = "User not found" });
         var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
-        _ = _db.LogAuthEventAsync("user_role_changed", ip, null, "success", $"user_id={userId} role={req.Role}");
+        LogAuthEvent("user_role_changed", ip, null, "success", $"user_id={userId} role={req.Role}");
         return Ok(new { success = true });
     }
 
@@ -187,7 +197,7 @@ public sealed class AuthController : ControllerBase
         // an admin resets the password (GAP-2).
         await _db.DeleteUserSessionsByUsernameAsync(user.Username, ct);
         var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
-        _ = _db.LogAuthEventAsync("password_changed", ip, user.Username, "success", $"user_id={userId}");
+        LogAuthEvent("password_changed", ip, user.Username, "success", $"user_id={userId}");
         return Ok(new { success = true });
     }
 
@@ -202,7 +212,7 @@ public sealed class AuthController : ControllerBase
             return Conflict(new { detail = "Cannot delete the last admin user" });
         await _db.DeleteUserAsync(userId, ct);
         var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
-        _ = _db.LogAuthEventAsync("user_deleted", ip, user.Username, "success", $"user_id={userId}");
+        LogAuthEvent("user_deleted", ip, user.Username, "success", $"user_id={userId}");
         return Ok(new { success = true });
     }
 
@@ -248,7 +258,7 @@ public sealed class AuthController : ControllerBase
         var (newSessionToken, newCsrfToken) = await _sessions.CreateSessionDirectAsync(
             session.Value.Username, ip, Request.Headers.UserAgent.ToString(), ct);
 
-        _ = _db.LogAuthEventAsync("self_password_changed", ip, session.Value.Username, "success", "");
+        LogAuthEvent("self_password_changed", ip, session.Value.Username, "success");
 
         SetSessionCookies(newSessionToken, newCsrfToken);
         return Ok(new { success = true });

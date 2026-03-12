@@ -8,13 +8,13 @@ namespace DriveChill.Services;
 /// Persists runtime-mutable settings and profile/alert/curve data to
 /// %APPDATA%\DriveChill\settings.json.
 ///
-/// All public methods are thread-safe (lock-protected reads and atomic file writes).
+/// All public methods are thread-safe: a single lock serialises reads, mutations,
+/// and file writes so concurrent callers never interleave or lose updates.
 /// </summary>
 public sealed class SettingsStore
 {
     private readonly string _path;
     private readonly object _lock = new();
-    private readonly object _saveLock = new();
     private readonly ILogger<SettingsStore>? _logger;
 
     private StoredData _data;
@@ -41,35 +41,35 @@ public sealed class SettingsStore
     public int PollIntervalMs
     {
         get { lock (_lock) return _data.PollIntervalMs; }
-        set { lock (_lock) { _data.PollIntervalMs = value; } Save(); }
+        set { lock (_lock) { _data.PollIntervalMs = value; Save(); } }
     }
 
     public int RetentionDays
     {
         get { lock (_lock) return _data.RetentionDays; }
-        set { lock (_lock) { _data.RetentionDays = value; } Save(); }
+        set { lock (_lock) { _data.RetentionDays = value; Save(); } }
     }
 
     public string TempUnit
     {
         get { lock (_lock) return _data.TempUnit; }
-        set { lock (_lock) { _data.TempUnit = value; } Save(); }
+        set { lock (_lock) { _data.TempUnit = value; Save(); } }
     }
 
     public double FanRampRatePctPerSec
     {
         get { lock (_lock) return _data.FanRampRatePctPerSec; }
-        set { lock (_lock) { _data.FanRampRatePctPerSec = value; } Save(); }
+        set { lock (_lock) { _data.FanRampRatePctPerSec = value; Save(); } }
     }
 
     public double Deadband
     {
         get { lock (_lock) return _data.Deadband; }
-        set { lock (_lock) { _data.Deadband = Math.Max(0.0, value); } Save(); }
+        set { lock (_lock) { _data.Deadband = Math.Max(0.0, value); Save(); } }
     }
 
     public StoredData GetAll() { lock (_lock) return Clone(_data); }
-    public void SetAll(StoredData d) { lock (_lock) { _data = d; } Save(); }
+    public void SetAll(StoredData d) { lock (_lock) { _data = d; Save(); } }
 
     // -----------------------------------------------------------------------
     // Curves / Alerts / Profiles — stored inside settings.json
@@ -82,8 +82,7 @@ public sealed class SettingsStore
 
     public void SaveCurves(IReadOnlyList<FanCurve> curves)
     {
-        lock (_lock) { _data.Curves = [.. curves]; }
-        Save();
+        lock (_lock) { _data.Curves = [.. curves]; Save(); }
     }
 
     public IReadOnlyList<AlertRule> LoadAlerts()
@@ -93,8 +92,7 @@ public sealed class SettingsStore
 
     public void SaveAlerts(IEnumerable<AlertRule> rules)
     {
-        lock (_lock) { _data.Alerts = [.. rules]; }
-        Save();
+        lock (_lock) { _data.Alerts = [.. rules]; Save(); }
     }
 
     public IReadOnlyList<Profile> LoadProfiles()
@@ -104,8 +102,7 @@ public sealed class SettingsStore
 
     public void SaveProfiles(IEnumerable<Profile> profiles)
     {
-        lock (_lock) { _data.Profiles = [.. profiles]; }
-        Save();
+        lock (_lock) { _data.Profiles = [.. profiles]; Save(); }
     }
 
     // -----------------------------------------------------------------------
@@ -162,18 +159,17 @@ public sealed class SettingsStore
         return data;
     }
 
+    /// <summary>
+    /// Persist current state to disk. MUST be called while holding <c>_lock</c>.
+    /// </summary>
     private void Save()
     {
-        string json;
-        lock (_lock) { json = JsonSerializer.Serialize(_data, _json); }
-        lock (_saveLock)
-        {
-            if (File.Exists(_path))
-                File.Copy(_path, _path + ".bak", overwrite: true);
-            var tmp = _path + ".tmp";
-            File.WriteAllText(tmp, json);
-            File.Move(tmp, _path, overwrite: true);
-        }
+        var json = JsonSerializer.Serialize(_data, _json);
+        if (File.Exists(_path))
+            File.Copy(_path, _path + ".bak", overwrite: true);
+        var tmp = _path + ".tmp";
+        File.WriteAllText(tmp, json);
+        File.Move(tmp, _path, overwrite: true);
     }
 
     private static StoredData Clone(StoredData d) =>

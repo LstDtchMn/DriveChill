@@ -132,6 +132,7 @@ async def check_update():
     return await _fetch_latest()
 
 
+# audit:skip action endpoint — body is version string validated via semver regex
 @router.post("/apply", dependencies=[Depends(require_csrf)])
 async def apply_update(request: Request):
     """

@@ -182,6 +182,7 @@ async def export_config(request: Request):
     }
 
 
+# audit:skip raw JSON import — schema validated inline (export_version check + per-table parsing)
 @router.post("/import", dependencies=[Depends(require_auth), Depends(require_admin), Depends(require_csrf)])
 async def import_config(request: Request):
     """Import application configuration from a previously exported JSON object."""

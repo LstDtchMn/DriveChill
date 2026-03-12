@@ -42,6 +42,7 @@ export function ProfileScheduleEditor({ isAdmin, toast, confirm }: ProfileSchedu
       })
       .catch(() => toast('Failed to load profile schedules', 'error'))
       .finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function toggleDay(day: number) {

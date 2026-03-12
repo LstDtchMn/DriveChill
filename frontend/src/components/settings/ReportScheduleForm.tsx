@@ -23,6 +23,7 @@ export function ReportScheduleForm({ isAdmin, toast, confirm }: ReportScheduleFo
       .then(data => setSchedules(data.schedules))
       .catch(() => toast('Failed to load report schedules', 'error'))
       .finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function handleCreate(e: React.FormEvent) {

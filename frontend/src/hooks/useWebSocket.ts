@@ -39,23 +39,16 @@ export function useWebSocket(enabled = true) {
   const enabledRef = useRef(enabled);
   enabledRef.current = enabled;
 
-  // TODO(v3.2): This destructured call subscribes to the entire store, causing
-  // re-renders on every state change. Replace with individual useAppStore selectors
-  // (e.g. useAppStore(s => s.setReadings)) to avoid unnecessary re-renders.
-  // Deferred because the hook is only mounted once at the app root and the
-  // performance impact is negligible in practice.
-  const {
-    setReadings,
-    addHistoryPoint,
-    setAppliedSpeeds,
-    setControlSources,
-    addAlertEvents,
-    setActiveAlerts,
-    setFanTestProgress,
-    setSafeMode,
-    setConnected,
-    setBackendName,
-  } = useAppStore();
+  const setReadings       = useAppStore((s) => s.setReadings);
+  const addHistoryPoint   = useAppStore((s) => s.addHistoryPoint);
+  const setAppliedSpeeds  = useAppStore((s) => s.setAppliedSpeeds);
+  const setControlSources = useAppStore((s) => s.setControlSources);
+  const addAlertEvents    = useAppStore((s) => s.addAlertEvents);
+  const setActiveAlerts   = useAppStore((s) => s.setActiveAlerts);
+  const setFanTestProgress = useAppStore((s) => s.setFanTestProgress);
+  const setSafeMode       = useAppStore((s) => s.setSafeMode);
+  const setConnected      = useAppStore((s) => s.setConnected);
+  const setBackendName    = useAppStore((s) => s.setBackendName);
 
   const scheduleReconnect = useCallback(() => {
     // Guard: don't reconnect if WS has been disabled (auth expired, etc.)

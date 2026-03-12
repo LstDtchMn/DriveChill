@@ -60,6 +60,31 @@ Generated: 2026-02-26
 | A1 | **Windows `schtasks` uses `ONLOGON` trigger** — verify `/RL HIGHEST` (elevated) is actually needed; may cause UAC prompt | `backend/app/services/autostart_service.py` | UAC popup on every login |
 | A2 | **Linux systemd user service** — verify `loginctl enable-linger` is documented as a requirement; without it, service stops on logout | `backend/app/services/autostart_service.py` | Service silently stops when user logs out of SSH |
 
+## API Route Validation Convention
+
+All POST/PUT route handlers that accept a request body **must** use a typed,
+validated model:
+
+- **Python**: function parameter typed as a Pydantic `BaseModel` subclass
+- **C#**: `[FromBody] TypedModel` parameter (not raw `JsonElement`) or manual
+  validation (BadRequest/Math.Clamp/range checks) in the handler body
+
+Routes that intentionally skip this (e.g., raw JSON import, action endpoints
+with no body) must include a comment:
+
+```python
+# audit:skip <reason>
+@router.post("/import", ...)
+```
+
+```csharp
+// audit:skip <reason>
+[HttpPost("import")]
+```
+
+The CI enforces this via `scripts/audit_api_validators.py` (runs in the E2E
+workflow). Exit code 1 fails the build if unvalidated routes are found.
+
 ## Test Coverage Gaps
 
 | # | Item | Why it matters |

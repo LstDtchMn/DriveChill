@@ -45,6 +45,19 @@ public sealed class AppSettings
         }
     }
 
+    /// <summary>
+    /// Auto-creates an admin user at startup (matches Python DRIVECHILL_PASSWORD).
+    /// Required when binding to non-localhost without existing users.
+    /// </summary>
+    public string? Password
+    {
+        get
+        {
+            var v = Environment.GetEnvironmentVariable("DRIVECHILL_PASSWORD")?.Trim();
+            return string.IsNullOrEmpty(v) ? null : v;
+        }
+    }
+
     public bool ForceAuth =>
         string.Equals(
             Environment.GetEnvironmentVariable("DRIVECHILL_FORCE_AUTH"),

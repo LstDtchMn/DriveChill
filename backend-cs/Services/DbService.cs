@@ -2196,24 +2196,53 @@ public sealed class DbService : IDisposable
 
     public async Task<DriveSettings> LoadDriveSettingsAsync(CancellationToken ct = default)
     {
-        async Task<string?> G(string k) => await GetSettingAsync(k, ct);
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+
+        // Batch-fetch all 15 drive_* keys in a single query instead of 15 round-trips.
+        var keys = new[]
+        {
+            "drive_monitoring_enabled", "drive_native_provider_enabled", "drive_smartctl_provider_enabled",
+            "drive_smartctl_path", "drive_fast_poll_seconds", "drive_health_poll_seconds",
+            "drive_rescan_poll_seconds", "drive_hdd_temp_warning_c", "drive_hdd_temp_critical_c",
+            "drive_ssd_temp_warning_c", "drive_ssd_temp_critical_c", "drive_nvme_temp_warning_c",
+            "drive_nvme_temp_critical_c", "drive_wear_warning_percent_used", "drive_wear_critical_percent_used",
+        };
+        var placeholders = string.Join(", ", keys.Select((_, i) => $"$k{i}"));
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"SELECT key, value FROM settings WHERE key IN ({placeholders})";
+        for (var i = 0; i < keys.Length; i++)
+            cmd.Parameters.AddWithValue($"$k{i}", keys[i]);
+
+        var dict = new Dictionary<string, string>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var k = reader.GetString(0);
+            if (!reader.IsDBNull(1))
+                dict[k] = reader.GetString(1);
+        }
+
+        string? G(string k) => dict.TryGetValue(k, out var v) ? v : null;
+
         return new DriveChill.Models.DriveSettings
         {
-            Enabled                  = (await G("drive_monitoring_enabled"))        is "1" or null,
-            NativeProviderEnabled    = (await G("drive_native_provider_enabled"))   is "1" or null,
-            SmartctlProviderEnabled  = (await G("drive_smartctl_provider_enabled")) is "1" or null,
-            SmartctlPath             = await G("drive_smartctl_path")              ?? "smartctl",
-            FastPollSeconds          = int.TryParse(await G("drive_fast_poll_seconds"),   out var fps)  ? fps  : 15,
-            HealthPollSeconds        = int.TryParse(await G("drive_health_poll_seconds"),  out var hps)  ? hps  : 300,
-            RescanPollSeconds        = int.TryParse(await G("drive_rescan_poll_seconds"),  out var rps)  ? rps  : 900,
-            HddTempWarningC          = double.TryParse(await G("drive_hdd_temp_warning_c"),  out var hw)  ? hw  : 45.0,
-            HddTempCriticalC         = double.TryParse(await G("drive_hdd_temp_critical_c"), out var hc)  ? hc  : 50.0,
-            SsdTempWarningC          = double.TryParse(await G("drive_ssd_temp_warning_c"),  out var sw)  ? sw  : 55.0,
-            SsdTempCriticalC         = double.TryParse(await G("drive_ssd_temp_critical_c"), out var sc)  ? sc  : 65.0,
-            NvmeTempWarningC         = double.TryParse(await G("drive_nvme_temp_warning_c"), out var nw)  ? nw  : 65.0,
-            NvmeTempCriticalC        = double.TryParse(await G("drive_nvme_temp_critical_c"),out var nc)  ? nc  : 75.0,
-            WearWarningPercentUsed   = double.TryParse(await G("drive_wear_warning_percent_used"),  out var ww) ? ww : 80.0,
-            WearCriticalPercentUsed  = double.TryParse(await G("drive_wear_critical_percent_used"), out var wc) ? wc : 90.0,
+            Enabled                  = G("drive_monitoring_enabled")        is "1" or null,
+            NativeProviderEnabled    = G("drive_native_provider_enabled")   is "1" or null,
+            SmartctlProviderEnabled  = G("drive_smartctl_provider_enabled") is "1" or null,
+            SmartctlPath             = G("drive_smartctl_path")             ?? "smartctl",
+            FastPollSeconds          = int.TryParse(G("drive_fast_poll_seconds"),    out var fps)  ? fps  : 15,
+            HealthPollSeconds        = int.TryParse(G("drive_health_poll_seconds"),  out var hps)  ? hps  : 300,
+            RescanPollSeconds        = int.TryParse(G("drive_rescan_poll_seconds"),  out var rps)  ? rps  : 900,
+            HddTempWarningC          = double.TryParse(G("drive_hdd_temp_warning_c"),  out var hw)  ? hw  : 45.0,
+            HddTempCriticalC         = double.TryParse(G("drive_hdd_temp_critical_c"), out var hc)  ? hc  : 50.0,
+            SsdTempWarningC          = double.TryParse(G("drive_ssd_temp_warning_c"),  out var sw)  ? sw  : 55.0,
+            SsdTempCriticalC         = double.TryParse(G("drive_ssd_temp_critical_c"), out var sc)  ? sc  : 65.0,
+            NvmeTempWarningC         = double.TryParse(G("drive_nvme_temp_warning_c"), out var nw)  ? nw  : 65.0,
+            NvmeTempCriticalC        = double.TryParse(G("drive_nvme_temp_critical_c"),out var nc)  ? nc  : 75.0,
+            WearWarningPercentUsed   = double.TryParse(G("drive_wear_warning_percent_used"),  out var ww) ? ww : 80.0,
+            WearCriticalPercentUsed  = double.TryParse(G("drive_wear_critical_percent_used"), out var wc) ? wc : 90.0,
         };
     }
 

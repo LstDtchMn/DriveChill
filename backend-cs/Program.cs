@@ -71,6 +71,31 @@ internal static class Program
 
         // Build ASP.NET Core host
         var host = BuildHost(args, settings, listenUrl);
+
+        // Auth guard: when binding to non-localhost, refuse to start if no
+        // users exist and DRIVECHILL_PASSWORD is not set. Matches Python backend.
+        if (settings.AuthRequired)
+        {
+            var db = host.Services.GetRequiredService<DbService>();
+            var hasUser = db.UserExistsAsync().GetAwaiter().GetResult();
+            if (!hasUser && settings.Password is null)
+            {
+                Console.Error.WriteLine(
+                    "ERROR: Session auth required for non-localhost binding " +
+                    $"(host={settings.Host}). Set DRIVECHILL_PASSWORD environment " +
+                    "variable before starting so the admin user can be created automatically.");
+                Environment.Exit(1);
+            }
+            if (!hasUser && settings.Password is not null)
+            {
+                var sessions = host.Services.GetRequiredService<SessionService>();
+                sessions.SetupAsync("admin", settings.Password).GetAwaiter().GetResult();
+                Console.WriteLine("Created admin user from DRIVECHILL_PASSWORD env var");
+                db.LogAuthEventAsync("user_created", "localhost", "admin", "success",
+                    "Auto-created from DRIVECHILL_PASSWORD env var").GetAwaiter().GetResult();
+            }
+        }
+
         using var cts = new CancellationTokenSource();
 
         // Start host on a background Task

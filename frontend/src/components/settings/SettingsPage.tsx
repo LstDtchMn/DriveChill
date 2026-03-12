@@ -264,6 +264,7 @@ export function SettingsPage() {
     fetchWebhookDeliveries(0);
     fetchPushSubs();
     fetchEmailSettings();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleSave = async () => {

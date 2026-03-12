@@ -151,28 +151,33 @@ export function AnalyticsPage() {
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true); setError(null);
-    const opts = buildOpts();
-    // Let the backend auto-size buckets — do not send explicit bucket_seconds
-    Promise.all([
-      api.analytics.getStats(hours, undefined, opts),
-      api.analytics.getAnomalies(hours, 3.0, opts),
-      api.analytics.getHistory(hours, undefined, undefined, opts),
-      api.analytics.getRegression(30, Math.min(hours, 168), 5.0, opts),
-      api.annotations.list(opts.start, opts.end),
-    ])
-      .then(([sR, aR, hR, rR, annR]) => {
-        if (cancelled) return;
-        setStats(sR.stats);
-        setAnomalies(aR.anomalies);
-        setHistory(hR.buckets);
-        setRegressions(rR.regressions);
-        setRetentionLimited(hR.retention_limited);
-        setAnnotations(annR);
-      })
-      .catch(() => { if (!cancelled) setError('Failed to load analytics data.'); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
+    // Debounce 300ms to avoid firing 5 parallel API calls on every rapid
+    // sensor chip click. The timer is cleared on cleanup so only the final
+    // selection triggers a fetch.
+    const timer = setTimeout(() => {
+      setLoading(true); setError(null);
+      const opts = buildOpts();
+      // Let the backend auto-size buckets — do not send explicit bucket_seconds
+      Promise.all([
+        api.analytics.getStats(hours, undefined, opts),
+        api.analytics.getAnomalies(hours, 3.0, opts),
+        api.analytics.getHistory(hours, undefined, undefined, opts),
+        api.analytics.getRegression(30, Math.min(hours, 168), 5.0, opts),
+        api.annotations.list(opts.start, opts.end),
+      ])
+        .then(([sR, aR, hR, rR, annR]) => {
+          if (cancelled) return;
+          setStats(sR.stats);
+          setAnomalies(aR.anomalies);
+          setHistory(hR.buckets);
+          setRegressions(rR.regressions);
+          setRetentionLimited(hR.retention_limited);
+          setAnnotations(annR);
+        })
+        .catch(() => { if (!cancelled) setError('Failed to load analytics data.'); })
+        .finally(() => { if (!cancelled) setLoading(false); });
+    }, 300);
+    return () => { cancelled = true; clearTimeout(timer); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hours, customStart, customEnd, selectedSensorIds]);
 

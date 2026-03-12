@@ -47,6 +47,7 @@ export function NotificationChannelForm({ isAdmin, toast, confirm }: Notificatio
 
   useEffect(() => {
     api.notificationChannels.list().then(r => setChannels(r.channels)).catch(() => toast('Failed to load notification channels.', 'error'));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const resetForm = () => {

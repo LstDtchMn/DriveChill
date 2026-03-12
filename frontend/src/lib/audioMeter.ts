@@ -30,8 +30,7 @@ export class AudioMeter {
   private stream: MediaStream | null = null;
   private source: MediaStreamAudioSourceNode | null = null;
   private fftSize = 2048;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private _fftBuffer: any = null;
+  private _fftBuffer: Float32Array<ArrayBuffer> | null = null;
 
   /**
    * Request microphone access, create AudioContext, wire up AnalyserNode.
