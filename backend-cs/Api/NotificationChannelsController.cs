@@ -10,12 +10,17 @@ namespace DriveChill.Api;
 public sealed class NotificationChannelsController : ControllerBase
 {
     private readonly NotificationChannelService _svc;
+    private readonly AppSettings _settings;
     private static readonly string[] UrlConfigKeys = ["url", "webhook_url", "broker_url"];
 
-    public NotificationChannelsController(NotificationChannelService svc) => _svc = svc;
+    public NotificationChannelsController(NotificationChannelService svc, AppSettings settings)
+    {
+        _svc = svc;
+        _settings = settings;
+    }
 
     /// <summary>Returns an error detail string if any URL-typed config field fails SSRF validation.</summary>
-    private static async Task<string?> ValidateConfigUrlsAsync(Dictionary<string, JsonElement>? config)
+    private async Task<string?> ValidateConfigUrlsAsync(Dictionary<string, JsonElement>? config)
     {
         if (config is null) return null;
         foreach (var key in UrlConfigKeys)
@@ -32,7 +37,8 @@ public sealed class NotificationChannelsController : ControllerBase
                     checkVal = System.Text.RegularExpressions.Regex.Replace(
                         val, @"^(mqtts?|ssl)://", "http://", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
-                var (valid, reason) = await UrlSecurity.TryValidateOutboundHttpUrlAsync(checkVal, allowPrivateTargets: false);
+                var allowPrivate = key == "broker_url" && _settings.AllowPrivateBrokerTargets;
+                var (valid, reason) = await UrlSecurity.TryValidateOutboundHttpUrlAsync(checkVal, allowPrivateTargets: allowPrivate);
                 if (!valid)
                     return $"Config '{key}': {reason}";
             }

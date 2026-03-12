@@ -8,7 +8,7 @@ using Xunit;
 namespace DriveChill.Tests;
 
 /// <summary>
-/// Tests for <see cref="MqttCommandHandler.DispatchCommand"/> — the synchronous
+/// Tests for <see cref="MqttCommandHandler.DispatchCommandAsync"/> -- the
 /// command parsing/dispatch logic. No real MQTT broker needed.
 /// </summary>
 public sealed class MqttCommandTests : IDisposable
@@ -17,7 +17,7 @@ public sealed class MqttCommandTests : IDisposable
     private readonly MqttCommandHandler _handler;
     private readonly MockBackend _hw;
     private readonly FanService _fans;
-    private readonly SettingsStore _store;
+    private readonly DbService _db;
 
     public MqttCommandTests()
     {
@@ -26,23 +26,24 @@ public sealed class MqttCommandTests : IDisposable
         Environment.SetEnvironmentVariable("DRIVECHILL_DATA_DIR", _tempDir);
 
         var settings = new AppSettings();
-        var db = new DbService(settings, NullLogger<DbService>.Instance);
+        _db = new DbService(settings, NullLogger<DbService>.Instance);
         _hw = new MockBackend();
         _hw.Initialize();
-        _store = new SettingsStore(settings);
-        _fans = new FanService(_hw, _store);
+        var store = new SettingsStore(settings);
+        _fans = new FanService(_hw, store);
 
         var channelSvc = new NotificationChannelService(
-            db, new NullHttpClientFactory(),
-            NullLogger<NotificationChannelService>.Instance);
+            _db, new NullHttpClientFactory(),
+            NullLogger<NotificationChannelService>.Instance, settings);
 
         _handler = new MqttCommandHandler(
-            channelSvc, _fans, _store, _hw,
+            channelSvc, _fans, _db, _hw,
             NullLogger<MqttCommandHandler>.Instance);
     }
 
     public void Dispose()
     {
+        _db.Dispose();
         Environment.SetEnvironmentVariable("DRIVECHILL_DATA_DIR", null);
         try { Directory.Delete(_tempDir, recursive: true); } catch { }
     }
@@ -52,58 +53,52 @@ public sealed class MqttCommandTests : IDisposable
     // -----------------------------------------------------------------------
 
     [Fact]
-    public void FanSpeed_ValidPercent_SetsSpeed()
+    public async Task FanSpeed_ValidPercent_SetsSpeed()
     {
         var payload = JsonSerializer.Serialize(new { percent = 75.0 });
-        _handler.DispatchCommand("drivechill/commands/fans/fan_1/speed", payload, "drivechill");
-
-        // MockBackend records speed via SetFanSpeed — verify it was called
-        // by checking through the fan service (no direct call tracking in MockBackend,
-        // but no exception means success)
+        await _handler.DispatchCommandAsync("drivechill/commands/fans/fan_1/speed", payload, "drivechill");
     }
 
     [Fact]
-    public void FanSpeed_ZeroPercent_Accepted()
+    public async Task FanSpeed_ZeroPercent_Accepted()
     {
         var payload = JsonSerializer.Serialize(new { percent = 0.0 });
-        // Should not throw
-        _handler.DispatchCommand("drivechill/commands/fans/fan_1/speed", payload, "drivechill");
+        await _handler.DispatchCommandAsync("drivechill/commands/fans/fan_1/speed", payload, "drivechill");
     }
 
     [Fact]
-    public void FanSpeed_HundredPercent_Accepted()
+    public async Task FanSpeed_HundredPercent_Accepted()
     {
         var payload = JsonSerializer.Serialize(new { percent = 100.0 });
-        _handler.DispatchCommand("drivechill/commands/fans/fan_1/speed", payload, "drivechill");
+        await _handler.DispatchCommandAsync("drivechill/commands/fans/fan_1/speed", payload, "drivechill");
     }
 
     [Fact]
-    public void FanSpeed_NegativePercent_Rejected()
+    public async Task FanSpeed_NegativePercent_Rejected()
     {
         var payload = JsonSerializer.Serialize(new { percent = -10.0 });
-        // Should not throw, just log warning
-        _handler.DispatchCommand("drivechill/commands/fans/fan_1/speed", payload, "drivechill");
+        await _handler.DispatchCommandAsync("drivechill/commands/fans/fan_1/speed", payload, "drivechill");
     }
 
     [Fact]
-    public void FanSpeed_Over100_Rejected()
+    public async Task FanSpeed_Over100_Rejected()
     {
         var payload = JsonSerializer.Serialize(new { percent = 150.0 });
-        _handler.DispatchCommand("drivechill/commands/fans/fan_1/speed", payload, "drivechill");
+        await _handler.DispatchCommandAsync("drivechill/commands/fans/fan_1/speed", payload, "drivechill");
     }
 
     [Fact]
-    public void FanSpeed_MissingPercent_Rejected()
+    public async Task FanSpeed_MissingPercent_Rejected()
     {
         var payload = JsonSerializer.Serialize(new { speed = 50.0 });
-        _handler.DispatchCommand("drivechill/commands/fans/fan_1/speed", payload, "drivechill");
+        await _handler.DispatchCommandAsync("drivechill/commands/fans/fan_1/speed", payload, "drivechill");
     }
 
     [Fact]
-    public void FanSpeed_StringPercent_Rejected()
+    public async Task FanSpeed_StringPercent_Rejected()
     {
         var payload = JsonSerializer.Serialize(new { percent = "fifty" });
-        _handler.DispatchCommand("drivechill/commands/fans/fan_1/speed", payload, "drivechill");
+        await _handler.DispatchCommandAsync("drivechill/commands/fans/fan_1/speed", payload, "drivechill");
     }
 
     // -----------------------------------------------------------------------
@@ -111,9 +106,9 @@ public sealed class MqttCommandTests : IDisposable
     // -----------------------------------------------------------------------
 
     [Fact]
-    public void ProfileActivate_ValidId_ActivatesProfile()
+    public async Task ProfileActivate_ValidId_ActivatesProfile()
     {
-        // First create a profile in the store
+        // First create a profile in the DB
         var profile = new Profile
         {
             Id = "test_prof",
@@ -121,38 +116,36 @@ public sealed class MqttCommandTests : IDisposable
             IsActive = false,
             Curves = [],
         };
-        _store.SaveProfiles([profile]);
+        await _db.CreateProfileAsync(profile);
 
         var payload = JsonSerializer.Serialize(new { profile_id = "test_prof" });
-        _handler.DispatchCommand("drivechill/commands/profiles/activate", payload, "drivechill");
+        await _handler.DispatchCommandAsync("drivechill/commands/profiles/activate", payload, "drivechill");
 
         // Verify profile was activated
-        var profiles = _store.LoadProfiles().ToList();
-        var activated = profiles.FirstOrDefault(p => p.Id == "test_prof");
+        var activated = await _db.GetProfileAsync("test_prof");
         Assert.NotNull(activated);
-        Assert.True(activated.IsActive);
+        Assert.True(activated!.IsActive);
     }
 
     [Fact]
-    public void ProfileActivate_NotFound_NoException()
+    public async Task ProfileActivate_NotFound_NoException()
     {
         var payload = JsonSerializer.Serialize(new { profile_id = "nonexistent" });
-        // Should not throw
-        _handler.DispatchCommand("drivechill/commands/profiles/activate", payload, "drivechill");
+        await _handler.DispatchCommandAsync("drivechill/commands/profiles/activate", payload, "drivechill");
     }
 
     [Fact]
-    public void ProfileActivate_MissingField_NoException()
+    public async Task ProfileActivate_MissingField_NoException()
     {
         var payload = JsonSerializer.Serialize(new { name = "silent" });
-        _handler.DispatchCommand("drivechill/commands/profiles/activate", payload, "drivechill");
+        await _handler.DispatchCommandAsync("drivechill/commands/profiles/activate", payload, "drivechill");
     }
 
     [Fact]
-    public void ProfileActivate_NumericId_Rejected()
+    public async Task ProfileActivate_NumericId_Rejected()
     {
         var payload = JsonSerializer.Serialize(new { profile_id = 123 });
-        _handler.DispatchCommand("drivechill/commands/profiles/activate", payload, "drivechill");
+        await _handler.DispatchCommandAsync("drivechill/commands/profiles/activate", payload, "drivechill");
     }
 
     // -----------------------------------------------------------------------
@@ -160,16 +153,16 @@ public sealed class MqttCommandTests : IDisposable
     // -----------------------------------------------------------------------
 
     [Fact]
-    public void FanRelease_NoPayload_ReleasesControl()
+    public async Task FanRelease_NoPayload_ReleasesControl()
     {
-        _handler.DispatchCommand("drivechill/commands/fans/release", null, "drivechill");
+        await _handler.DispatchCommandAsync("drivechill/commands/fans/release", null, "drivechill");
         Assert.True(_fans.IsReleased);
     }
 
     [Fact]
-    public void FanRelease_WithPayload_ReleasesControl()
+    public async Task FanRelease_WithPayload_ReleasesControl()
     {
-        _handler.DispatchCommand("drivechill/commands/fans/release", "{}", "drivechill");
+        await _handler.DispatchCommandAsync("drivechill/commands/fans/release", "{}", "drivechill");
         Assert.True(_fans.IsReleased);
     }
 
@@ -178,36 +171,35 @@ public sealed class MqttCommandTests : IDisposable
     // -----------------------------------------------------------------------
 
     [Fact]
-    public void MalformedJson_NoException()
+    public async Task MalformedJson_NoException()
     {
-        _handler.DispatchCommand("drivechill/commands/fans/fan_1/speed", "not-json", "drivechill");
+        await _handler.DispatchCommandAsync("drivechill/commands/fans/fan_1/speed", "not-json", "drivechill");
     }
 
     [Fact]
-    public void EmptyPayload_NonRelease_NoException()
+    public async Task EmptyPayload_NonRelease_NoException()
     {
-        _handler.DispatchCommand("drivechill/commands/fans/fan_1/speed", null, "drivechill");
+        await _handler.DispatchCommandAsync("drivechill/commands/fans/fan_1/speed", null, "drivechill");
     }
 
     [Fact]
-    public void UnknownCommandTopic_NoException()
+    public async Task UnknownCommandTopic_NoException()
     {
         var payload = JsonSerializer.Serialize(new { key = "value" });
-        _handler.DispatchCommand("drivechill/commands/unknown/action", payload, "drivechill");
+        await _handler.DispatchCommandAsync("drivechill/commands/unknown/action", payload, "drivechill");
     }
 
     [Fact]
-    public void WrongPrefix_Ignored()
+    public async Task WrongPrefix_Ignored()
     {
         var payload = JsonSerializer.Serialize(new { percent = 50.0 });
-        _handler.DispatchCommand("other/commands/fans/fan_1/speed", payload, "drivechill");
+        await _handler.DispatchCommandAsync("other/commands/fans/fan_1/speed", payload, "drivechill");
     }
 
     [Fact]
-    public void CustomPrefix_Works()
+    public async Task CustomPrefix_Works()
     {
         var payload = JsonSerializer.Serialize(new { percent = 60.0 });
-        _handler.DispatchCommand("mypc/commands/fans/fan_1/speed", payload, "mypc");
-        // Should not throw — fan speed command is accepted with custom prefix
+        await _handler.DispatchCommandAsync("mypc/commands/fans/fan_1/speed", payload, "mypc");
     }
 }

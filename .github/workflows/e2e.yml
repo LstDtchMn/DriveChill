@@ -59,6 +59,10 @@ jobs:
           # NODE_OPTIONS guards against memory pressure during compilation.
           NODE_OPTIONS: "--max-old-space-size=4096"
 
+      # TODO(v3.2): This SHA (65462800) differs from release.yml (ea165f8d).
+      # Align both to the same upload-artifact v4 commit SHA for consistency.
+      # Deferred because both SHAs resolve to valid v4 releases and the
+      # functional behavior is identical.
       - name: Upload Playwright report
         if: always()
         uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0efa2083  # v4

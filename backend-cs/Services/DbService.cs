@@ -258,7 +258,7 @@ public sealed class DbService : IDisposable
 
                 CREATE TABLE IF NOT EXISTS profile_schedules (
                     id           TEXT PRIMARY KEY,
-                    profile_id   TEXT NOT NULL,
+                    profile_id   TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
                     start_time   TEXT NOT NULL,
                     end_time     TEXT NOT NULL,
                     days_of_week TEXT NOT NULL,
@@ -277,13 +277,16 @@ public sealed class DbService : IDisposable
                 );
 
                 CREATE TABLE IF NOT EXISTS report_schedules (
-                    id           TEXT PRIMARY KEY,
-                    frequency    TEXT NOT NULL CHECK(frequency IN ('daily', 'weekly')),
-                    time_utc     TEXT NOT NULL,
-                    timezone     TEXT NOT NULL DEFAULT 'UTC',
-                    enabled      INTEGER NOT NULL DEFAULT 1,
-                    last_sent_at TEXT,
-                    created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+                    id                    TEXT PRIMARY KEY,
+                    frequency             TEXT NOT NULL CHECK(frequency IN ('daily', 'weekly')),
+                    time_utc              TEXT NOT NULL,
+                    timezone              TEXT NOT NULL DEFAULT 'UTC',
+                    enabled               INTEGER NOT NULL DEFAULT 1,
+                    last_sent_at          TEXT,
+                    created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+                    last_error            TEXT,
+                    last_attempted_at     TEXT,
+                    consecutive_failures  INTEGER NOT NULL DEFAULT 0
                 );
 
                 CREATE TABLE IF NOT EXISTS event_log (
@@ -318,6 +321,38 @@ public sealed class DbService : IDisposable
                     ('drive_nvme_temp_critical_c',      '75'),
                     ('drive_wear_warning_percent_used', '80'),
                     ('drive_wear_critical_percent_used','90');
+
+                CREATE TABLE IF NOT EXISTS profiles (
+                    id          TEXT PRIMARY KEY,
+                    name        TEXT NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
+                    is_active   INTEGER NOT NULL DEFAULT 0,
+                    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+                    updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+
+                CREATE TABLE IF NOT EXISTS profile_curves (
+                    id              TEXT PRIMARY KEY,
+                    profile_id      TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+                    fan_id          TEXT NOT NULL DEFAULT '',
+                    sensor_id       TEXT NOT NULL DEFAULT '',
+                    enabled         INTEGER NOT NULL DEFAULT 1,
+                    points_json     TEXT NOT NULL DEFAULT '[]',
+                    sensor_ids_json TEXT NOT NULL DEFAULT '[]'
+                );
+                CREATE INDEX IF NOT EXISTS idx_profile_curves_profile ON profile_curves(profile_id);
+
+                CREATE TABLE IF NOT EXISTS alert_rules (
+                    id          TEXT PRIMARY KEY,
+                    sensor_id   TEXT NOT NULL,
+                    sensor_name TEXT NOT NULL DEFAULT '',
+                    threshold   REAL NOT NULL,
+                    condition   TEXT NOT NULL DEFAULT 'above',
+                    message     TEXT NOT NULL DEFAULT '',
+                    enabled     INTEGER NOT NULL DEFAULT 1,
+                    action_json TEXT,
+                    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+                );
                 """;
             await cmd.ExecuteNonQueryAsync(ct);
 
@@ -1293,7 +1328,8 @@ public sealed class DbService : IDisposable
         await conn.OpenAsync(ct);
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT id, frequency, time_utc, timezone, enabled, last_sent_at, created_at
+            SELECT id, frequency, time_utc, timezone, enabled, last_sent_at, created_at,
+                   last_error, last_attempted_at, consecutive_failures
             FROM report_schedules
             ORDER BY created_at ASC
             """;
@@ -1312,7 +1348,8 @@ public sealed class DbService : IDisposable
         await conn.OpenAsync(ct);
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT id, frequency, time_utc, timezone, enabled, last_sent_at, created_at
+            SELECT id, frequency, time_utc, timezone, enabled, last_sent_at, created_at,
+                   last_error, last_attempted_at, consecutive_failures
             FROM report_schedules
             WHERE id = $id
             """;
@@ -1394,6 +1431,34 @@ public sealed class DbService : IDisposable
         return await cmd.ExecuteNonQueryAsync(ct) > 0;
     }
 
+    public async Task<bool> UpdateReportScheduleStatusAsync(
+        string id,
+        string? lastSentAt,
+        string lastAttemptedAt,
+        string? lastError,
+        int consecutiveFailures,
+        CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            UPDATE report_schedules
+            SET last_sent_at = COALESCE($lastSentAt, last_sent_at),
+                last_attempted_at = $lastAttemptedAt,
+                last_error = $lastError,
+                consecutive_failures = $consecutiveFailures
+            WHERE id = $id
+            """;
+        cmd.Parameters.AddWithValue("$id", id);
+        cmd.Parameters.AddWithValue("$lastSentAt", (object?)lastSentAt ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$lastAttemptedAt", lastAttemptedAt);
+        cmd.Parameters.AddWithValue("$lastError", (object?)lastError ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$consecutiveFailures", consecutiveFailures);
+        return await cmd.ExecuteNonQueryAsync(ct) > 0;
+    }
+
     private static ReportScheduleRecord ReadReportSchedule(SqliteDataReader reader)
     {
         return new ReportScheduleRecord
@@ -1405,6 +1470,9 @@ public sealed class DbService : IDisposable
             Enabled = reader.GetInt32(4) != 0,
             LastSentAt = reader.IsDBNull(5) ? null : reader.GetString(5),
             CreatedAt = reader.GetString(6),
+            LastError = reader.IsDBNull(7) ? null : reader.GetString(7),
+            LastAttemptedAt = reader.IsDBNull(8) ? null : reader.GetString(8),
+            ConsecutiveFailures = reader.IsDBNull(9) ? 0 : reader.GetInt32(9),
         };
     }
 
@@ -1670,24 +1738,16 @@ public sealed class DbService : IDisposable
         // Determine what to store for the password:
         // • If caller passed an empty string, preserve the existing stored value.
         // • Otherwise encrypt the new value (falls back to plaintext when no key).
-        string storedPassword;
-        if (string.IsNullOrEmpty(s.SmtpPassword))
-        {
-            // Preserve current stored value (could be encrypted or empty)
-            await using var rc = new SqliteConnection(_connStr);
-            await rc.OpenAsync(ct);
-            await using var rCmd = rc.CreateCommand();
-            rCmd.CommandText = "SELECT smtp_password FROM email_notification_settings WHERE id = 1";
-            storedPassword = (await rCmd.ExecuteScalarAsync(ct) as string) ?? "";
-        }
-        else if (string.IsNullOrEmpty(_settings.SecretKey))
+        string storedPassword = "";
+        bool preservePassword = string.IsNullOrEmpty(s.SmtpPassword);
+        if (!preservePassword && string.IsNullOrEmpty(_settings.SecretKey))
         {
             _log.LogWarning(
                 "DRIVECHILL_SECRET_KEY is not set — SMTP password will be stored in plaintext. " +
                 "Set the environment variable to enable AES-256-GCM encryption at rest.");
             storedPassword = s.SmtpPassword;
         }
-        else
+        else if (!preservePassword)
         {
             storedPassword = CredentialEncryption.Encrypt(s.SmtpPassword, _settings.SecretKey);
         }
@@ -1695,7 +1755,15 @@ public sealed class DbService : IDisposable
         await using var conn = new SqliteConnection(_connStr);
         await conn.OpenAsync(ct);
         await using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
+        cmd.CommandText = preservePassword
+            ? """
+            UPDATE email_notification_settings SET enabled=$en, smtp_host=$host, smtp_port=$port,
+                smtp_username=$user, sender_address=$sender,
+                recipient_list=$recipients, use_tls=$tls, use_ssl=$ssl,
+                updated_at=datetime('now')
+            WHERE id = 1
+            """
+            : """
             UPDATE email_notification_settings SET enabled=$en, smtp_host=$host, smtp_port=$port,
                 smtp_username=$user, smtp_password=$pass, sender_address=$sender,
                 recipient_list=$recipients, use_tls=$tls, use_ssl=$ssl,
@@ -1706,7 +1774,7 @@ public sealed class DbService : IDisposable
         cmd.Parameters.AddWithValue("$host",       s.SmtpHost);
         cmd.Parameters.AddWithValue("$port",       s.SmtpPort);
         cmd.Parameters.AddWithValue("$user",       s.SmtpUsername);
-        cmd.Parameters.AddWithValue("$pass",       storedPassword);
+        if (!preservePassword) cmd.Parameters.AddWithValue("$pass", storedPassword);
         cmd.Parameters.AddWithValue("$sender",     s.SenderAddress);
         cmd.Parameters.AddWithValue("$recipients", s.RecipientList);
         cmd.Parameters.AddWithValue("$tls",        s.UseTls ? 1 : 0);
@@ -1879,6 +1947,7 @@ public sealed class DbService : IDisposable
         await EnsureInitialisedAsync(ct);
         await using var conn = new SqliteConnection(_connStr);
         await conn.OpenAsync(ct);
+        await using var txn = await conn.BeginTransactionAsync(ct);
 
         // Resolve username first so we can invalidate their sessions.
         await using var getUserCmd = conn.CreateCommand();
@@ -1901,6 +1970,7 @@ public sealed class DbService : IDisposable
             await sessionCmd.ExecuteNonQueryAsync(ct);
         }
 
+        await txn.CommitAsync(ct);
         return deleted;
     }
 
@@ -2803,6 +2873,331 @@ public sealed class DbService : IDisposable
             Config    = config,
             CreatedAt = rdr.IsDBNull(5) ? "" : rdr.GetString(5),
             UpdatedAt = rdr.IsDBNull(6) ? "" : rdr.GetString(6),
+        };
+    }
+
+    // -----------------------------------------------------------------------
+    // Profiles + profile curves
+    // -----------------------------------------------------------------------
+
+    private static readonly System.Text.Json.JsonSerializerOptions _profileJsonOpts = new()
+    {
+        PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.SnakeCaseLower,
+        PropertyNameCaseInsensitive = true,
+    };
+
+    public async Task<List<Profile>> ListProfilesAsync(CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+
+        // Load all profiles
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT id, name, description, is_active, created_at, updated_at FROM profiles ORDER BY created_at ASC";
+        var profiles = new List<Profile>();
+        await using (var reader = await cmd.ExecuteReaderAsync(ct))
+        {
+            while (await reader.ReadAsync(ct))
+                profiles.Add(ReadProfileRow(reader));
+        }
+
+        // Load all curves in bulk
+        await using var cmd2 = conn.CreateCommand();
+        cmd2.CommandText = "SELECT id, profile_id, fan_id, sensor_id, enabled, points_json, sensor_ids_json FROM profile_curves ORDER BY rowid ASC";
+        var curvesByProfile = new Dictionary<string, List<FanCurve>>();
+        await using (var reader2 = await cmd2.ExecuteReaderAsync(ct))
+        {
+            while (await reader2.ReadAsync(ct))
+            {
+                var profileId = reader2.GetString(1);
+                if (!curvesByProfile.TryGetValue(profileId, out var list))
+                    curvesByProfile[profileId] = list = [];
+                list.Add(ReadCurveRow(reader2));
+            }
+        }
+
+        foreach (var p in profiles)
+            p.Curves = curvesByProfile.TryGetValue(p.Id, out var c) ? c : [];
+
+        return profiles;
+    }
+
+    public async Task<Profile?> GetProfileAsync(string id, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT id, name, description, is_active, created_at, updated_at FROM profiles WHERE id = $id";
+        cmd.Parameters.AddWithValue("$id", id);
+        Profile? profile = null;
+        await using (var reader = await cmd.ExecuteReaderAsync(ct))
+        {
+            if (await reader.ReadAsync(ct))
+                profile = ReadProfileRow(reader);
+        }
+        if (profile == null) return null;
+
+        // Load curves
+        await using var cmd2 = conn.CreateCommand();
+        cmd2.CommandText = "SELECT id, profile_id, fan_id, sensor_id, enabled, points_json, sensor_ids_json FROM profile_curves WHERE profile_id = $pid ORDER BY rowid ASC";
+        cmd2.Parameters.AddWithValue("$pid", id);
+        profile.Curves = [];
+        await using (var reader2 = await cmd2.ExecuteReaderAsync(ct))
+        {
+            while (await reader2.ReadAsync(ct))
+                profile.Curves.Add(ReadCurveRow(reader2));
+        }
+        return profile;
+    }
+
+    public async Task CreateProfileAsync(Profile profile, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO profiles (id, name, description, is_active, created_at, updated_at)
+            VALUES ($id, $name, $desc, $active, $created, $updated)
+            """;
+        cmd.Parameters.AddWithValue("$id", profile.Id);
+        cmd.Parameters.AddWithValue("$name", profile.Name);
+        cmd.Parameters.AddWithValue("$desc", profile.Description);
+        cmd.Parameters.AddWithValue("$active", profile.IsActive ? 1 : 0);
+        cmd.Parameters.AddWithValue("$created", profile.CreatedAt.ToString("o"));
+        cmd.Parameters.AddWithValue("$updated", profile.UpdatedAt.ToString("o"));
+        await cmd.ExecuteNonQueryAsync(ct);
+
+        await InsertCurvesAsync(conn, profile.Id, profile.Curves, ct);
+
+        await tx.CommitAsync(ct);
+    }
+
+    public async Task UpdateProfileAsync(Profile profile, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            UPDATE profiles SET name = $name, description = $desc, is_active = $active, updated_at = $updated
+            WHERE id = $id
+            """;
+        cmd.Parameters.AddWithValue("$id", profile.Id);
+        cmd.Parameters.AddWithValue("$name", profile.Name);
+        cmd.Parameters.AddWithValue("$desc", profile.Description);
+        cmd.Parameters.AddWithValue("$active", profile.IsActive ? 1 : 0);
+        cmd.Parameters.AddWithValue("$updated", profile.UpdatedAt.ToString("o"));
+        await cmd.ExecuteNonQueryAsync(ct);
+
+        // Replace curves: delete all, re-insert
+        await using var del = conn.CreateCommand();
+        del.CommandText = "DELETE FROM profile_curves WHERE profile_id = $pid";
+        del.Parameters.AddWithValue("$pid", profile.Id);
+        await del.ExecuteNonQueryAsync(ct);
+
+        await InsertCurvesAsync(conn, profile.Id, profile.Curves, ct);
+
+        await tx.CommitAsync(ct);
+    }
+
+    public async Task<bool> DeleteProfileAsync(string id, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM profiles WHERE id = $id";
+        cmd.Parameters.AddWithValue("$id", id);
+        return await cmd.ExecuteNonQueryAsync(ct) > 0;
+    }
+
+    public async Task ActivateProfileAsync(string id, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+
+        await using var reset = conn.CreateCommand();
+        reset.CommandText = "UPDATE profiles SET is_active = 0";
+        await reset.ExecuteNonQueryAsync(ct);
+
+        await using var set = conn.CreateCommand();
+        set.CommandText = "UPDATE profiles SET is_active = 1 WHERE id = $id";
+        set.Parameters.AddWithValue("$id", id);
+        await set.ExecuteNonQueryAsync(ct);
+
+        await tx.CommitAsync(ct);
+    }
+
+    private async Task InsertCurvesAsync(SqliteConnection conn, string profileId,
+        List<FanCurve> curves, CancellationToken ct)
+    {
+        foreach (var curve in curves)
+        {
+            var curveId = Guid.NewGuid().ToString();
+            var pointsJson = System.Text.Json.JsonSerializer.Serialize(curve.Points, _profileJsonOpts);
+            var sensorIdsJson = System.Text.Json.JsonSerializer.Serialize(curve.SensorIds, _profileJsonOpts);
+
+            await using var ins = conn.CreateCommand();
+            ins.CommandText = """
+                INSERT INTO profile_curves (id, profile_id, fan_id, sensor_id, enabled, points_json, sensor_ids_json)
+                VALUES ($id, $pid, $fanId, $sensorId, $enabled, $points, $sensorIds)
+                """;
+            ins.Parameters.AddWithValue("$id", curveId);
+            ins.Parameters.AddWithValue("$pid", profileId);
+            ins.Parameters.AddWithValue("$fanId", curve.FanId);
+            ins.Parameters.AddWithValue("$sensorId", curve.SensorId);
+            ins.Parameters.AddWithValue("$enabled", curve.Enabled ? 1 : 0);
+            ins.Parameters.AddWithValue("$points", pointsJson);
+            ins.Parameters.AddWithValue("$sensorIds", sensorIdsJson);
+            await ins.ExecuteNonQueryAsync(ct);
+        }
+    }
+
+    private static Profile ReadProfileRow(SqliteDataReader reader) => new()
+    {
+        Id          = reader.GetString(0),
+        Name        = reader.GetString(1),
+        Description = reader.GetString(2),
+        IsActive    = reader.GetInt32(3) != 0,
+        CreatedAt   = DateTimeOffset.TryParse(reader.GetString(4), out var ca) ? ca : DateTimeOffset.UtcNow,
+        UpdatedAt   = DateTimeOffset.TryParse(reader.GetString(5), out var ua) ? ua : DateTimeOffset.UtcNow,
+    };
+
+    private FanCurve ReadCurveRow(SqliteDataReader reader)
+    {
+        var pointsJson = reader.GetString(5);
+        var sensorIdsJson = reader.GetString(6);
+        return new FanCurve
+        {
+            FanId     = reader.GetString(2),
+            SensorId  = reader.GetString(3),
+            Enabled   = reader.GetInt32(4) != 0,
+            Points    = System.Text.Json.JsonSerializer.Deserialize<List<FanCurvePoint>>(pointsJson, _profileJsonOpts) ?? [],
+            SensorIds = System.Text.Json.JsonSerializer.Deserialize<List<string>>(sensorIdsJson, _profileJsonOpts) ?? [],
+        };
+    }
+
+    // -----------------------------------------------------------------------
+    // Alert rules
+    // -----------------------------------------------------------------------
+
+    public async Task<List<AlertRule>> ListAlertRulesAsync(CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT id, sensor_id, sensor_name, threshold, condition, message, enabled, action_json, created_at FROM alert_rules ORDER BY created_at ASC";
+        var results = new List<AlertRule>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            results.Add(ReadAlertRuleRow(reader));
+        return results;
+    }
+
+    public async Task CreateAlertRuleAsync(AlertRule rule, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        var actionJson = rule.Action != null
+            ? System.Text.Json.JsonSerializer.Serialize(rule.Action, _profileJsonOpts)
+            : null;
+        cmd.CommandText = """
+            INSERT INTO alert_rules (id, sensor_id, sensor_name, threshold, condition, message, enabled, action_json, created_at)
+            VALUES ($id, $sid, $sname, $threshold, $cond, $msg, $enabled, $action, $created)
+            """;
+        cmd.Parameters.AddWithValue("$id", rule.RuleId);
+        cmd.Parameters.AddWithValue("$sid", rule.SensorId);
+        cmd.Parameters.AddWithValue("$sname", rule.SensorName);
+        cmd.Parameters.AddWithValue("$threshold", rule.Threshold);
+        cmd.Parameters.AddWithValue("$cond", rule.Condition);
+        cmd.Parameters.AddWithValue("$msg", rule.Message);
+        cmd.Parameters.AddWithValue("$enabled", rule.Enabled ? 1 : 0);
+        cmd.Parameters.AddWithValue("$action", (object?)actionJson ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$created", rule.CreatedAt.ToString("o"));
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<bool> DeleteAlertRuleAsync(string id, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM alert_rules WHERE id = $id";
+        cmd.Parameters.AddWithValue("$id", id);
+        return await cmd.ExecuteNonQueryAsync(ct) > 0;
+    }
+
+    public async Task SaveAlertRulesAsync(IEnumerable<AlertRule> rules, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+
+        await using var del = conn.CreateCommand();
+        del.CommandText = "DELETE FROM alert_rules";
+        await del.ExecuteNonQueryAsync(ct);
+
+        foreach (var rule in rules)
+        {
+            var actionJson = rule.Action != null
+                ? System.Text.Json.JsonSerializer.Serialize(rule.Action, _profileJsonOpts)
+                : null;
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                INSERT INTO alert_rules (id, sensor_id, sensor_name, threshold, condition, message, enabled, action_json, created_at)
+                VALUES ($id, $sid, $sname, $threshold, $cond, $msg, $enabled, $action, $created)
+                """;
+            cmd.Parameters.AddWithValue("$id", rule.RuleId);
+            cmd.Parameters.AddWithValue("$sid", rule.SensorId);
+            cmd.Parameters.AddWithValue("$sname", rule.SensorName);
+            cmd.Parameters.AddWithValue("$threshold", rule.Threshold);
+            cmd.Parameters.AddWithValue("$cond", rule.Condition);
+            cmd.Parameters.AddWithValue("$msg", rule.Message);
+            cmd.Parameters.AddWithValue("$enabled", rule.Enabled ? 1 : 0);
+            cmd.Parameters.AddWithValue("$action", (object?)actionJson ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$created", rule.CreatedAt.ToString("o"));
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+
+        await tx.CommitAsync(ct);
+    }
+
+    private static AlertRule ReadAlertRuleRow(SqliteDataReader reader)
+    {
+        AlertAction? action = null;
+        if (!reader.IsDBNull(7))
+        {
+            var actionJson = reader.GetString(7);
+            action = System.Text.Json.JsonSerializer.Deserialize<AlertAction>(actionJson,
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        }
+
+        return new AlertRule
+        {
+            RuleId     = reader.GetString(0),
+            SensorId   = reader.GetString(1),
+            SensorName = reader.GetString(2),
+            Threshold  = reader.GetDouble(3),
+            Condition  = reader.GetString(4),
+            Message    = reader.GetString(5),
+            Enabled    = reader.GetInt32(6) != 0,
+            Action     = action,
+            CreatedAt  = DateTimeOffset.TryParse(reader.GetString(8), out var ca) ? ca : DateTimeOffset.UtcNow,
         };
     }
 }

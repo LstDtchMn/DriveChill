@@ -30,6 +30,10 @@ tsconfig.tsbuildinfo
 # Local env overrides
 .env.local
 .env.*.local
+# TODO(v3.2): Add explicit docker/.env* pattern to prevent accidental commit of
+# Docker environment files containing secrets (VAPID keys, passwords).
+# Deferred because docker/.env.example is tracked intentionally and a blanket
+# pattern needs care to avoid excluding it.
 
 # OS
 .DS_Store

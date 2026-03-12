@@ -29,7 +29,10 @@ _API_KEY_SCOPE_PREFIX_RULES: tuple[tuple[str, str], ...] = (
     ("/api/profile-schedules", "profiles"),
     ("/api/noise-profiles", "settings"),
     ("/api/report-schedules", "settings"),
+    ("/api/scheduler", "settings"),
     ("/api/annotations", "analytics"),
+    ("/api/integrations", "settings"),
+    ("/api/update", "settings"),
 )
 
 

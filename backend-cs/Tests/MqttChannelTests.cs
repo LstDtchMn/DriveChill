@@ -32,7 +32,7 @@ public sealed class MqttChannelTests : IDisposable
         _settings = new AppSettings();
         _db       = new DbService(_settings, NullLogger<DbService>.Instance);
         _svc      = new NotificationChannelService(_db, new NullHttpClientFactory(),
-                        NullLogger<NotificationChannelService>.Instance);
+                        NullLogger<NotificationChannelService>.Instance, _settings);
     }
 
     public void Dispose()

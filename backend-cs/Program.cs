@@ -48,7 +48,10 @@ internal static class Program
         ("/api/profile-schedules", "profiles"),
         ("/api/noise-profiles", "settings"),
         ("/api/report-schedules", "settings"),
+        ("/api/scheduler", "settings"),
         ("/api/annotations", "analytics"),
+        ("/api/integrations", "settings"),
+        ("/api/update", "settings"),
     ];
     private static readonly HashSet<string> _readMethods = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -175,7 +178,8 @@ internal static class Program
                 sp.GetRequiredService<AppSettings>(),
                 sp.GetRequiredService<TemperatureTargetService>(),
                 sp.GetRequiredService<VirtualSensorService>()));
-        builder.Services.AddSingleton<AlertService>();
+        builder.Services.AddSingleton<AlertService>(sp =>
+            new AlertService(sp.GetRequiredService<DbService>()));
         builder.Services.AddSingleton<AlertDeliveryService>();
         builder.Services.AddSingleton<DbService>();
         builder.Services.AddSingleton<SettingsStore>();
@@ -205,9 +209,12 @@ internal static class Program
         // Background worker: subscribes to MQTT command topics for external control
         builder.Services.AddHostedService<MqttCommandHandler>();
         // Background worker: profile scheduling (time-of-day profile switching)
-        builder.Services.AddHostedService<ProfileSchedulerService>();
+        // Registered as singleton + hosted service so the status API can read state.
+        builder.Services.AddSingleton<ProfileSchedulerService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<ProfileSchedulerService>());
         // Background worker: scheduled analytics report emails
-        builder.Services.AddHostedService<ReportSchedulerService>();
+        builder.Services.AddSingleton<ReportSchedulerService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<ReportSchedulerService>());
 
         // CORS for Next.js dev server.
         // AllowCredentials() is required for session cookies to be forwarded on
@@ -350,6 +357,9 @@ internal static class Program
             await next();
         });
 
+        // One-time migration: move profiles and alert rules from settings.json to SQLite
+        MigrateProfilesAndAlertsToDb(app.Services).GetAwaiter().GetResult();
+
         app.MapControllers();
 
         // WebSocket endpoint auth parity with Python:
@@ -378,6 +388,28 @@ internal static class Program
         });
 
         return app;
+    }
+
+    /// <summary>
+    /// One-time migration: if profiles/alert_rules exist in settings.json but not in SQLite,
+    /// copy them to the database.
+    /// </summary>
+    private static async Task MigrateProfilesAndAlertsToDb(IServiceProvider services)
+    {
+        var db    = services.GetRequiredService<DbService>();
+        var store = services.GetRequiredService<SettingsStore>();
+
+        var existingProfiles = await db.ListProfilesAsync();
+        if (existingProfiles.Count == 0)
+        {
+            var jsonProfiles = store.LoadProfiles();
+            foreach (var p in jsonProfiles)
+                await db.CreateProfileAsync(p);
+
+            var jsonAlerts = store.LoadAlerts();
+            foreach (var a in jsonAlerts)
+                await db.CreateAlertRuleAsync(a);
+        }
     }
 
     private static string BuildListenUrl(string host, int port)

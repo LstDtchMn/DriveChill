@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useAppStore } from '@/stores/appStore';
 import { useAuthStore } from '@/stores/authStore';
 import { ThemeToggle } from './ThemeToggle';
@@ -14,6 +14,7 @@ const PAGE_TITLES: Record<string, string> = {
   alerts: 'Alerts & Logging',
   drives: 'Drives',
   analytics: 'Analytics',
+  'quiet-hours': 'Quiet Hours',
   settings: 'Settings',
 };
 
@@ -23,6 +24,8 @@ export function Header() {
   const [releasing, setReleasing] = useState(false);
   const [resuming, setResuming] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  useEffect(() => () => { if (toastTimerRef.current) clearTimeout(toastTimerRef.current); }, []);
 
   const handleLogout = async () => {
     try {
@@ -35,7 +38,8 @@ export function Header() {
 
   const showToast = (msg: string) => {
     setToast(msg);
-    setTimeout(() => setToast(null), 3000);
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToast(null), 3000);
   };
 
   const handleRelease = async () => {

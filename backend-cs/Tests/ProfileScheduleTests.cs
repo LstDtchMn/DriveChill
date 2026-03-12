@@ -14,7 +14,6 @@ public sealed class ProfileScheduleTests : IDisposable
 {
     private readonly string _tempDir;
     private readonly DbService _db;
-    private readonly SettingsStore _store;
     private readonly ProfileSchedulesController _ctrl;
 
     public ProfileScheduleTests()
@@ -25,8 +24,7 @@ public sealed class ProfileScheduleTests : IDisposable
 
         var settings = new AppSettings();
         _db    = new DbService(settings, NullLogger<DbService>.Instance);
-        _store = new SettingsStore(settings);
-        _ctrl  = new ProfileSchedulesController(_db, _store);
+        _ctrl  = new ProfileSchedulesController(_db);
     }
 
     public void Dispose()
@@ -36,12 +34,10 @@ public sealed class ProfileScheduleTests : IDisposable
         try { Directory.Delete(_tempDir, recursive: true); } catch { }
     }
 
-    private string CreateTestProfile(string name = "TestProfile")
+    private async Task<string> CreateTestProfileAsync(string name = "TestProfile")
     {
         var profile = new Profile { Name = name, Description = "test" };
-        var profiles = _store.LoadProfiles().ToList();
-        profiles.Add(profile);
-        _store.SaveProfiles(profiles);
+        await _db.CreateProfileAsync(profile);
         return profile.Id;
     }
 
@@ -59,7 +55,7 @@ public sealed class ProfileScheduleTests : IDisposable
     [Fact]
     public async Task CreateSchedule_ReturnsOk_WithValidBody()
     {
-        var profileId = CreateTestProfile();
+        var profileId = await CreateTestProfileAsync();
         var body = new ProfileScheduleRequest
         {
             ProfileId  = profileId,
@@ -88,7 +84,7 @@ public sealed class ProfileScheduleTests : IDisposable
     [Fact]
     public async Task CreateSchedule_ReturnsUnprocessable_WithInvalidTime()
     {
-        var profileId = CreateTestProfile();
+        var profileId = await CreateTestProfileAsync();
         var body = new ProfileScheduleRequest
         {
             ProfileId  = profileId,
@@ -103,7 +99,7 @@ public sealed class ProfileScheduleTests : IDisposable
     [Fact]
     public async Task CreateSchedule_ReturnsUnprocessable_WithInvalidDay()
     {
-        var profileId = CreateTestProfile();
+        var profileId = await CreateTestProfileAsync();
         var body = new ProfileScheduleRequest
         {
             ProfileId  = profileId,
@@ -139,7 +135,7 @@ public sealed class ProfileScheduleTests : IDisposable
     [Fact]
     public async Task DeleteSchedule_RemovesCreatedSchedule()
     {
-        var profileId = CreateTestProfile();
+        var profileId = await CreateTestProfileAsync();
         var body = new ProfileScheduleRequest
         {
             ProfileId  = profileId,
@@ -163,7 +159,7 @@ public sealed class ProfileScheduleTests : IDisposable
     [Fact]
     public async Task UpdateSchedule_ReturnsNotFound_ForMissingId()
     {
-        var profileId = CreateTestProfile();
+        var profileId = await CreateTestProfileAsync();
         var body = new ProfileScheduleRequest
         {
             ProfileId  = profileId,
@@ -178,7 +174,7 @@ public sealed class ProfileScheduleTests : IDisposable
     [Fact]
     public async Task UpdateSchedule_ReturnsOk_ForExistingSchedule()
     {
-        var profileId = CreateTestProfile();
+        var profileId = await CreateTestProfileAsync();
         var createBody = new ProfileScheduleRequest
         {
             ProfileId  = profileId,
@@ -234,24 +230,17 @@ public sealed class ProfileScheduleTests : IDisposable
     [Fact]
     public void FindActiveSchedule_UsesIanaTimezone_NotUtc()
     {
-        // The frontend sends IANA IDs (e.g. "America/New_York") via
-        // Intl.DateTimeFormat().resolvedOptions().timeZone.
-        // .NET 6+ FindSystemTimeZoneById handles IANA IDs on all platforms.
         var utcNow = DateTimeOffset.UtcNow;
         var utcTime = utcNow.ToString("HH:mm");
         var utcDay = (int)utcNow.DayOfWeek;
         var utcDayMon = utcDay == 0 ? 6 : utcDay - 1;
 
-        // Use "America/New_York" — the most common IANA ID the frontend sends
         var nyTz = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
         var nyLocal = TimeZoneInfo.ConvertTime(utcNow, nyTz);
         var nyTime = nyLocal.ToString("HH:mm");
 
-        // Only assert mismatch if times actually differ (they always will
-        // unless the machine is running in exactly UTC-5/UTC-4)
         if (utcTime != nyTime)
         {
-            // 1-minute window at current UTC time, tagged with IANA timezone
             var endMinute = (int.Parse(utcTime.Split(':')[1]) + 1) % 60;
             var endHour = int.Parse(utcTime.Split(':')[0]) + (endMinute == 0 ? 1 : 0);
             var endTime = $"{endHour % 24:D2}:{endMinute:D2}";
@@ -263,16 +252,14 @@ public sealed class ProfileScheduleTests : IDisposable
                     Id = "ny-test", ProfileId = "p1",
                     StartTime = utcTime, EndTime = endTime,
                     DaysOfWeek = $"{utcDayMon}",
-                    Timezone = "America/New_York", // IANA ID from frontend
+                    Timezone = "America/New_York",
                     Enabled = true, CreatedAt = "2026-01-01",
                 },
             };
-            // Should NOT match — schedule time is in NY local time, not UTC
             var result = ProfileSchedulerService.FindActiveSchedule(schedules);
             Assert.Null(result);
         }
 
-        // Same window with UTC timezone DOES match
         {
             var endMinute = (int.Parse(utcTime.Split(':')[1]) + 1) % 60;
             var endHour = int.Parse(utcTime.Split(':')[0]) + (endMinute == 0 ? 1 : 0);
@@ -293,6 +280,97 @@ public sealed class ProfileScheduleTests : IDisposable
             Assert.NotNull(result);
             Assert.Equal("utc-test", result!.Id);
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // DST regression tests
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void FindActiveSchedule_SpringForward_MatchesInLocalTime()
+    {
+        // 2026-03-08 12:00 UTC = 08:00 EDT (spring-forward Sunday).
+        // Schedule: 07:00-09:00 on Sunday (day 6 in Mon=0 convention),
+        // timezone America/New_York.
+        var utcNow = new DateTimeOffset(2026, 3, 8, 12, 0, 0, TimeSpan.Zero);
+        var schedules = new List<ProfileScheduleRecord>
+        {
+            new()
+            {
+                Id = "dst-spring", ProfileId = "p1",
+                StartTime = "07:00", EndTime = "09:00",
+                DaysOfWeek = "6",  // Sunday = 6 (Mon=0)
+                Timezone = "America/New_York",
+                Enabled = true, CreatedAt = "2026-01-01",
+            },
+        };
+        var result = ProfileSchedulerService.FindActiveSchedule(schedules, utcNow);
+        Assert.NotNull(result);
+        Assert.Equal("dst-spring", result!.Id);
+    }
+
+    [Fact]
+    public void FindActiveSchedule_SpringForward_NoMatchOutsideWindow()
+    {
+        // 2026-03-08 14:00 UTC = 10:00 EDT — outside 07:00-09:00 window.
+        var utcNow = new DateTimeOffset(2026, 3, 8, 14, 0, 0, TimeSpan.Zero);
+        var schedules = new List<ProfileScheduleRecord>
+        {
+            new()
+            {
+                Id = "dst-no", ProfileId = "p1",
+                StartTime = "07:00", EndTime = "09:00",
+                DaysOfWeek = "6",
+                Timezone = "America/New_York",
+                Enabled = true, CreatedAt = "2026-01-01",
+            },
+        };
+        var result = ProfileSchedulerService.FindActiveSchedule(schedules, utcNow);
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void FindActiveSchedule_FallBack_HandlesDuplicateHour()
+    {
+        // 2026-11-01 06:30 UTC = 01:30 EST (after fall-back).
+        // Schedule: 01:00-03:00 Sunday, America/New_York.
+        var utcNow = new DateTimeOffset(2026, 11, 1, 6, 30, 0, TimeSpan.Zero);
+        var schedules = new List<ProfileScheduleRecord>
+        {
+            new()
+            {
+                Id = "dst-fall", ProfileId = "p1",
+                StartTime = "01:00", EndTime = "03:00",
+                DaysOfWeek = "6",  // Sunday
+                Timezone = "America/New_York",
+                Enabled = true, CreatedAt = "2026-01-01",
+            },
+        };
+        var result = ProfileSchedulerService.FindActiveSchedule(schedules, utcNow);
+        Assert.NotNull(result);
+        Assert.Equal("dst-fall", result!.Id);
+    }
+
+    [Fact]
+    public void FindActiveSchedule_OvernightAcrossDstBoundary()
+    {
+        // 2026-03-08 04:00 UTC = 23:00 Saturday EST (before spring-forward).
+        // Overnight schedule 23:00-06:00 on Saturday (day 5, Mon=0).
+        var utcNow = new DateTimeOffset(2026, 3, 8, 4, 0, 0, TimeSpan.Zero);
+        var schedules = new List<ProfileScheduleRecord>
+        {
+            new()
+            {
+                Id = "dst-overnight", ProfileId = "p1",
+                StartTime = "23:00", EndTime = "06:00",
+                DaysOfWeek = "5",  // Saturday (local time is 23:00 Saturday)
+                Timezone = "America/New_York",
+                Enabled = true, CreatedAt = "2026-01-01",
+            },
+        };
+        var result = ProfileSchedulerService.FindActiveSchedule(schedules, utcNow);
+        Assert.NotNull(result);
+        Assert.Equal("dst-overnight", result!.Id);
     }
 
     [Fact]
@@ -318,7 +396,6 @@ public sealed class ProfileScheduleTests : IDisposable
                 Enabled = true, CreatedAt = "2026-01-01",
             },
         };
-        // Invalid timezone falls back to UTC — should still match
         var result = ProfileSchedulerService.FindActiveSchedule(schedules);
         Assert.NotNull(result);
         Assert.Equal("bad-tz", result!.Id);

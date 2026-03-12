@@ -32,16 +32,30 @@ public sealed class NotificationChannelService
     private readonly DbService _db;
     private readonly IHttpClientFactory _httpFactory;
     private readonly ILogger<NotificationChannelService> _logger;
+    private readonly AppSettings _settings;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, MqttClientWrapper> _mqttClients = new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, HashSet<string>> _haAdvertised = new();
     private readonly SemaphoreSlim _mqttConnectLock = new(1, 1);
 
+    // ── Integration health tracking ──────────────────────────────────────
+    private long _successCount;
+    private long _failureCount;
+    private DateTimeOffset? _lastSentAt;
+    private string? _lastError;
+
+    public long SuccessCount => Interlocked.Read(ref _successCount);
+    public long FailureCount => Interlocked.Read(ref _failureCount);
+    public DateTimeOffset? LastSentAt => _lastSentAt;
+    public string? LastError => _lastError;
+
     public NotificationChannelService(DbService db, IHttpClientFactory httpFactory,
-                                       ILogger<NotificationChannelService> logger)
+                                       ILogger<NotificationChannelService> logger,
+                                       AppSettings settings)
     {
         _db         = db;
         _httpFactory = httpFactory;
         _logger     = logger;
+        _settings   = settings;
     }
 
     public static bool IsValidType(string type) => ValidTypes.Contains(type);
@@ -79,11 +93,23 @@ public sealed class NotificationChannelService
             try
             {
                 if (await SendAsync(ch, sensorName, value, threshold, false, ct))
+                {
                     successes++;
+                    _lastSentAt = DateTimeOffset.UtcNow;
+                    Interlocked.Increment(ref _successCount);
+                    _lastError = null;
+                }
+                else
+                {
+                    Interlocked.Increment(ref _failureCount);
+                }
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to send via channel {Name} ({Type})", ch.Name, ch.Type);
+                Interlocked.Increment(ref _failureCount);
+                _lastError = ex.Message;
+                _logger.LogWarning(ex, "Channel delivery failed: {Service} channel={Name} type={Type}",
+                    "notification_channel", ch.Name, ch.Type);
             }
         }
         return successes;
@@ -241,7 +267,7 @@ public sealed class NotificationChannelService
         var checkUrl = System.Text.RegularExpressions.Regex.Replace(
             brokerUrl, @"^(mqtts?|ssl)://", "http://",
             System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-        var (mqttValid, ssrfReason) = await UrlSecurity.TryValidateOutboundHttpUrlAsync(checkUrl, allowPrivateTargets: false);
+        var (mqttValid, ssrfReason) = await UrlSecurity.TryValidateOutboundHttpUrlAsync(checkUrl, allowPrivateTargets: _settings.AllowPrivateBrokerTargets);
         if (!mqttValid)
         {
             _logger.LogWarning("MQTT connection blocked (SSRF): {Reason}", ssrfReason);
@@ -464,6 +490,30 @@ public sealed class NotificationChannelService
         return successes;
     }
 
+    /// <summary>
+    /// Returns summary info about active MQTT channels for the integration health endpoint.
+    /// </summary>
+    public async Task<List<MqttChannelStatus>> GetMqttStatusAsync(CancellationToken ct = default)
+    {
+        var channels = await ListAsync(ct);
+        var result = new List<MqttChannelStatus>();
+        foreach (var ch in channels)
+        {
+            if (ch.Type != "mqtt") continue;
+            var brokerUrl = GetStr(ch.Config, "broker_url") ?? "";
+            var connected = _mqttClients.TryGetValue(ch.Id, out var w) && w.IsConnected;
+            result.Add(new MqttChannelStatus
+            {
+                ChannelId = ch.Id,
+                Name = ch.Name,
+                BrokerUrl = brokerUrl,
+                Connected = connected,
+                Enabled = ch.Enabled,
+            });
+        }
+        return result;
+    }
+
     public async Task CloseMqttClientsAsync()
     {
         foreach (var (_, wrapper) in _mqttClients)
@@ -501,6 +551,15 @@ internal sealed class MqttClientWrapper(IMqttClient client)
 {
     public IMqttClient Client { get; } = client;
     public bool IsConnected => Client.IsConnected;
+}
+
+public sealed class MqttChannelStatus
+{
+    [JsonPropertyName("channel_id")] public string ChannelId { get; set; } = "";
+    [JsonPropertyName("name")]       public string Name { get; set; } = "";
+    [JsonPropertyName("broker_url")] public string BrokerUrl { get; set; } = "";
+    [JsonPropertyName("connected")]  public bool Connected { get; set; }
+    [JsonPropertyName("enabled")]    public bool Enabled { get; set; }
 }
 
 public sealed class TelemetryReading

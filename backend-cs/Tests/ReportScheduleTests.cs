@@ -187,6 +187,67 @@ public sealed class ReportScheduleTests : IDisposable
         Assert.Null(updated!.LastSentAt);
     }
 
+    // -----------------------------------------------------------------------
+    // DST regression tests
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void IsDue_Daily_SpringForwardDay_FiresCorrectly()
+    {
+        // The C# IsDue operates in UTC (no timezone conversion), so DST
+        // does not affect the hour/minute comparison.  This test confirms
+        // that a daily schedule at 08:00 UTC fires on a US spring-forward
+        // day (2026-03-08) when the UTC clock reads 08:00.
+        var now = new DateTimeOffset(2026, 3, 8, 8, 0, 0, TimeSpan.Zero);
+        Assert.True(ReportSchedulerService.IsDue(new ReportScheduleRecord
+        {
+            Frequency = "daily",
+            TimeUtc = "08:00",
+            Enabled = true,
+            LastSentAt = "2026-03-07T08:00:00+00:00",
+        }, now));
+    }
+
+    [Fact]
+    public void IsDue_Daily_FallBackDay_DoesNotFireTwice()
+    {
+        // On US fall-back day (2026-11-01), if already sent today at 06:00
+        // UTC, a second check at 08:00 UTC should NOT fire again.
+        var now = new DateTimeOffset(2026, 11, 1, 8, 0, 0, TimeSpan.Zero);
+        Assert.False(ReportSchedulerService.IsDue(new ReportScheduleRecord
+        {
+            Frequency = "daily",
+            TimeUtc = "08:00",
+            Enabled = true,
+            LastSentAt = "2026-11-01T06:00:00+00:00",
+        }, now));
+    }
+
+    [Fact]
+    public void WeekStartUtc_DstTransitionSunday()
+    {
+        // 2026-03-08 is the US spring-forward Sunday.
+        // WeekStartUtc should still return the previous Monday (2026-03-02).
+        var springForwardSunday = new DateTimeOffset(2026, 3, 8, 12, 0, 0, TimeSpan.Zero);
+        var weekStart = ReportSchedulerService.WeekStartUtc(springForwardSunday);
+        Assert.Equal(new DateTimeOffset(2026, 3, 2, 0, 0, 0, TimeSpan.Zero), weekStart);
+    }
+
+    [Fact]
+    public void IsDue_Weekly_AcrossDstBoundary()
+    {
+        // Monday 2026-03-09 08:00 UTC.  Last sent previous Monday 2026-03-02.
+        // Different ISO weeks — should fire even though DST changed between.
+        var now = new DateTimeOffset(2026, 3, 9, 8, 0, 0, TimeSpan.Zero);
+        Assert.True(ReportSchedulerService.IsDue(new ReportScheduleRecord
+        {
+            Frequency = "weekly",
+            TimeUtc = "08:00",
+            Enabled = true,
+            LastSentAt = "2026-03-02T08:00:00+00:00",
+        }, now));
+    }
+
     private sealed class FakeEmailNotificationService : EmailNotificationService
     {
         public bool NextResult { get; set; } = true;

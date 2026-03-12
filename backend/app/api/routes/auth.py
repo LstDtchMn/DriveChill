@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sqlite3
+
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
@@ -306,8 +308,10 @@ async def create_user(body: CreateUserRequest, request: Request):
     ip = request.client.host if request.client else "unknown"
     try:
         user_id = await auth_service.create_user(body.username, body.password, role=body.role)
-    except Exception as exc:
+    except (sqlite3.IntegrityError, ValueError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to create user")
     await auth_service._log_auth_event(
         "user_created", ip, body.username, "success",
         f"user_id={user_id} role={body.role}",

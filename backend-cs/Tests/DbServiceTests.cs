@@ -948,6 +948,11 @@ public class DbServiceTests : IDisposable
     [Fact]
     public async Task ProfileSchedule_CRUD()
     {
+        // Create referenced profiles so FK constraint is satisfied
+        var now = DateTimeOffset.UtcNow;
+        await _db.CreateProfileAsync(new Profile { Id = "silent", Name = "Silent", CreatedAt = now, UpdatedAt = now });
+        await _db.CreateProfileAsync(new Profile { Id = "performance", Name = "Performance", CreatedAt = now, UpdatedAt = now });
+
         var schedule = new ProfileScheduleRecord
         {
             Id = "ps1",

@@ -1,23 +1,32 @@
-using System.Net.Mail;
 using System.Text.Json;
+using MailKit.Net.Smtp;
+using MailKit.Security;
+using MimeKit;
 using DriveChill.Models;
 
 namespace DriveChill.Services;
 
 /// <summary>
-/// Sends alert notification emails via SMTP.
+/// Sends alert notification emails via SMTP using MailKit.
+/// Supports STARTTLS (port 587) via use_tls and implicit TLS (port 465) via use_ssl.
 /// Settings (host, port, credentials, recipients) are read from the DB at send time,
 /// so runtime changes take effect on the next alert without a restart.
-///
-/// NOTE: System.Net.Mail.SmtpClient is used for simplicity but is obsolete.
-/// It supports STARTTLS (port 587) via EnableSsl but does NOT support implicit
-/// SSL/TLS (port 465).  Use port 587 with STARTTLS for encrypted SMTP.
-/// A future version should migrate to MailKit for full port 465 support.
 /// </summary>
 public class EmailNotificationService
 {
     private readonly DbService _db;
     private readonly ILogger<EmailNotificationService> _log;
+
+    // ── Integration health tracking ──────────────────────────────────────
+    private long _successCount;
+    private long _failureCount;
+    private DateTimeOffset? _lastSentAt;
+    private string? _lastError;
+
+    public long SuccessCount => Interlocked.Read(ref _successCount);
+    public long FailureCount => Interlocked.Read(ref _failureCount);
+    public DateTimeOffset? LastSentAt => _lastSentAt;
+    public string? LastError => _lastError;
 
     public EmailNotificationService(DbService db, ILogger<EmailNotificationService> log)
     {
@@ -43,30 +52,22 @@ public class EmailNotificationService
 
         try
         {
-            using var client = new SmtpClient(s.SmtpHost, s.SmtpPort)
-            {
-                Credentials    = new System.Net.NetworkCredential(s.SmtpUsername, password),
-                EnableSsl      = s.UseTls || s.UseSsl,
-                DeliveryMethod = SmtpDeliveryMethod.Network,
-                Timeout        = 15_000,
-            };
-
             var subject = $"DriveChill Alert: {evt.SensorName} {evt.Condition} {evt.Threshold}";
             var body    = FormatBody(evt);
 
-            using var msg = new MailMessage();
-            msg.From    = new MailAddress(s.SenderAddress);
-            msg.Subject = subject;
-            msg.Body    = body;
-            foreach (var r in recipients)
-                msg.To.Add(r);
-
-            await client.SendMailAsync(msg, ct);
+            var message = BuildMessage(s.SenderAddress, recipients, subject, body, isHtml: false);
+            await SendViaMailKitAsync(s, password, message, ct);
+            _lastSentAt = DateTimeOffset.UtcNow;
+            Interlocked.Increment(ref _successCount);
+            _lastError = null;
             _log.LogInformation("Alert email sent for rule {RuleId}", evt.RuleId);
         }
         catch (Exception ex)
         {
-            _log.LogWarning(ex, "Alert email delivery failed for rule {RuleId}", evt.RuleId);
+            Interlocked.Increment(ref _failureCount);
+            _lastError = ex.Message;
+            _log.LogWarning(ex, "Email delivery failed: {Service} rule={RuleId} smtp_host={SmtpHost}",
+                "email", evt.RuleId, s.SmtpHost);
         }
     }
 
@@ -88,26 +89,20 @@ public class EmailNotificationService
 
         try
         {
-            using var client = new SmtpClient(s.SmtpHost, s.SmtpPort)
-            {
-                Credentials    = new System.Net.NetworkCredential(s.SmtpUsername, password),
-                EnableSsl      = s.UseTls || s.UseSsl,
-                DeliveryMethod = SmtpDeliveryMethod.Network,
-                Timeout        = 10_000,
-            };
-
-            using var msg = new MailMessage();
-            msg.From    = new MailAddress(s.SenderAddress);
-            msg.Subject = "DriveChill Test Notification";
-            msg.Body    = "This is a test email from DriveChill to confirm that email notifications are working.";
-            foreach (var r in recipients)
-                msg.To.Add(r);
-
-            await client.SendMailAsync(msg, ct);
+            var message = BuildMessage(s.SenderAddress, recipients,
+                "DriveChill Test Notification",
+                "This is a test email from DriveChill to confirm that email notifications are working.",
+                isHtml: false);
+            await SendViaMailKitAsync(s, password, message, ct);
+            _lastSentAt = DateTimeOffset.UtcNow;
+            Interlocked.Increment(ref _successCount);
+            _lastError = null;
             return null;   // success
         }
         catch (Exception ex)
         {
+            Interlocked.Increment(ref _failureCount);
+            _lastError = ex.Message;
             return ex.Message;
         }
     }
@@ -130,33 +125,67 @@ public class EmailNotificationService
 
         try
         {
-            using var client = new SmtpClient(s.SmtpHost, s.SmtpPort)
-            {
-                Credentials = new System.Net.NetworkCredential(s.SmtpUsername, password),
-                EnableSsl = s.UseTls || s.UseSsl,
-                DeliveryMethod = SmtpDeliveryMethod.Network,
-                Timeout = 15_000,
-            };
-
-            using var msg = new MailMessage();
-            msg.From = new MailAddress(s.SenderAddress);
-            msg.Subject = subject;
-            msg.Body = htmlBody;
-            msg.IsBodyHtml = true;
-            foreach (var r in recipients)
-                msg.To.Add(r);
-
-            await client.SendMailAsync(msg, ct);
+            var message = BuildMessage(s.SenderAddress, recipients, subject, htmlBody, isHtml: true);
+            await SendViaMailKitAsync(s, password, message, ct);
+            _lastSentAt = DateTimeOffset.UtcNow;
+            Interlocked.Increment(ref _successCount);
+            _lastError = null;
             return true;
         }
         catch (Exception ex)
         {
-            _log.LogWarning(ex, "Scheduled report email delivery failed");
+            Interlocked.Increment(ref _failureCount);
+            _lastError = ex.Message;
+            _log.LogWarning(ex, "Email delivery failed: {Service} subject={Subject} smtp_host={SmtpHost}",
+                "email", subject, s.SmtpHost);
             return false;
         }
     }
 
     // -----------------------------------------------------------------------
+
+    private static MimeMessage BuildMessage(string sender, string[] recipients, string subject, string body, bool isHtml)
+    {
+        var message = new MimeMessage();
+        message.From.Add(MailboxAddress.Parse(sender));
+        foreach (var r in recipients)
+            message.To.Add(MailboxAddress.Parse(r));
+        message.Subject = subject;
+
+        message.Body = isHtml
+            ? new TextPart("html")  { Text = body }
+            : new TextPart("plain") { Text = body };
+
+        return message;
+    }
+
+    /// <summary>
+    /// Connects to the SMTP server using MailKit with the correct security option:
+    ///   use_ssl  = true  → SecureSocketOptions.SslOnConnect  (implicit TLS, typically port 465)
+    ///   use_tls  = true  → SecureSocketOptions.StartTls      (STARTTLS, typically port 587)
+    ///   neither          → SecureSocketOptions.Auto           (let MailKit negotiate)
+    /// </summary>
+    private static async Task SendViaMailKitAsync(
+        EmailNotificationSettingsRecord s, string password, MimeMessage message, CancellationToken ct)
+    {
+        SecureSocketOptions secureOption;
+        if (s.UseSsl)
+            secureOption = SecureSocketOptions.SslOnConnect;
+        else if (s.UseTls)
+            secureOption = SecureSocketOptions.StartTls;
+        else
+            secureOption = SecureSocketOptions.Auto;
+
+        using var client = new SmtpClient();
+        client.Timeout = 15_000;
+        await client.ConnectAsync(s.SmtpHost, s.SmtpPort, secureOption, ct);
+
+        if (!string.IsNullOrEmpty(s.SmtpUsername))
+            await client.AuthenticateAsync(s.SmtpUsername, password, ct);
+
+        await client.SendAsync(message, ct);
+        await client.DisconnectAsync(quit: true, ct);
+    }
 
     private static string FormatBody(AlertEvent evt)
     {

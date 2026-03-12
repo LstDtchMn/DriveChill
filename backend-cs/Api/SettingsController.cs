@@ -95,8 +95,8 @@ public sealed class SettingsController : ControllerBase
     [HttpGet("export")]
     public async Task<IActionResult> ExportConfig(CancellationToken ct = default)
     {
-        // Profiles (from SettingsStore JSON)
-        var profiles = _store.LoadProfiles().Select(p => new
+        // Profiles (from DB)
+        var profiles = (await _db.ListProfilesAsync(ct)).Select(p => new
         {
             id        = p.Id,
             name      = p.Name,
@@ -105,8 +105,8 @@ public sealed class SettingsController : ControllerBase
             curves    = p.Curves,
         }).ToList();
 
-        // Alert rules (from SettingsStore JSON)
-        var alertRules = _store.LoadAlerts();
+        // Alert rules (from DB)
+        var alertRules = await _db.ListAlertRulesAsync(ct);
 
         // Temperature targets (from DB)
         var tempTargets = await _db.ListTemperatureTargetsAsync(ct);
@@ -176,7 +176,6 @@ public sealed class SettingsController : ControllerBase
         if (body.TryGetProperty("profiles", out var profilesNode) &&
             profilesNode.ValueKind == JsonValueKind.Array)
         {
-            var existing = _store.LoadProfiles().ToList();
             int count = 0;
             foreach (var pNode in profilesNode.EnumerateArray())
             {
@@ -196,29 +195,29 @@ public sealed class SettingsController : ControllerBase
                     }
                 }
 
-                var idx = existing.FindIndex(p => p.Id == id);
-                if (idx >= 0)
+                var existing = await _db.GetProfileAsync(id, ct);
+                if (existing != null)
                 {
-                    existing[idx].Name        = name;
-                    existing[idx].Description = desc;
-                    existing[idx].IsActive    = isAct;
-                    existing[idx].Curves      = curves;
-                    existing[idx].UpdatedAt   = DateTimeOffset.UtcNow;
+                    existing.Name        = name;
+                    existing.Description = desc;
+                    existing.IsActive    = isAct;
+                    existing.Curves      = curves;
+                    existing.UpdatedAt   = DateTimeOffset.UtcNow;
+                    await _db.UpdateProfileAsync(existing, ct);
                 }
                 else
                 {
-                    existing.Add(new Profile
+                    await _db.CreateProfileAsync(new Profile
                     {
                         Id          = id,
                         Name        = name,
                         Description = desc,
                         IsActive    = isAct,
                         Curves      = curves,
-                    });
+                    }, ct);
                 }
                 count++;
             }
-            _store.SaveProfiles(existing);
             imported["profiles"] = count;
         }
 
@@ -232,8 +231,8 @@ public sealed class SettingsController : ControllerBase
                 var rule = JsonSerializer.Deserialize<AlertRule>(rNode.GetRawText(), _importJsonOpts);
                 if (rule != null) rules.Add(rule);
             }
-            _store.SaveAlerts(rules);
-            _alerts.ReloadRules();
+            await _db.SaveAlertRulesAsync(rules, ct);
+            await _alerts.ReloadRulesAsync(ct);
             imported["alert_rules"] = rules.Count;
         }
 

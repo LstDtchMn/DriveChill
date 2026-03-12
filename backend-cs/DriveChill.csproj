@@ -8,8 +8,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>DriveChill</RootNamespace>
     <AssemblyName>DriveChill</AssemblyName>
-    <Version>3.0.0</Version>
-    <AssemblyVersion>3.0.0.0</AssemblyVersion>
+    <Version>3.1.0</Version>
+    <AssemblyVersion>3.1.0.0</AssemblyVersion>
 
     <!--
       UAC manifest — only embedded when explicitly requested (i.e. during dotnet publish).
@@ -45,6 +45,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="MailKit" Version="4.13.0" />
     <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.3" />
     <PackageReference Include="Lib.Net.Http.WebPush" Version="3.3.0" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.0" />

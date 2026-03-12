@@ -62,7 +62,8 @@ def _is_due(schedule: dict, now: datetime) -> bool:
         return True
 
     try:
-        last_sent_dt = datetime.fromisoformat(last_sent_at).replace(tzinfo=timezone.utc)
+        parsed = datetime.fromisoformat(last_sent_at)
+        last_sent_dt = parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
     except (ValueError, TypeError):
         return True
 
@@ -266,12 +267,16 @@ class ReportSchedulerService:
         self._db = db
         self._email_svc = email_svc
         self._task: asyncio.Task | None = None
+        self.running: bool = False
+        self.last_check_at: datetime | None = None
 
     async def start(self) -> None:
+        self.running = True
         self._task = asyncio.create_task(self._loop())
         logger.info("ReportSchedulerService started")
 
     async def stop(self) -> None:
+        self.running = False
         if self._task:
             self._task.cancel()
             try:
@@ -293,7 +298,8 @@ class ReportSchedulerService:
     async def _check_and_send(self) -> None:
         now = datetime.now(timezone.utc)
         cursor = await self._db.execute(
-            "SELECT id, frequency, time_utc, timezone, enabled, last_sent_at, created_at "
+            "SELECT id, frequency, time_utc, timezone, enabled, last_sent_at, created_at, "
+            "last_error, last_attempted_at, consecutive_failures "
             "FROM report_schedules WHERE enabled=1"
         )
         rows = await cursor.fetchall()
@@ -306,6 +312,9 @@ class ReportSchedulerService:
                 "enabled": bool(r[4]),
                 "last_sent_at": r[5],
                 "created_at": r[6],
+                "last_error": r[7],
+                "last_attempted_at": r[8],
+                "consecutive_failures": r[9] or 0,
             }
             for r in rows
         ]
@@ -319,12 +328,22 @@ class ReportSchedulerService:
                 schedule["frequency"],
                 schedule["time_utc"],
             )
+            attempted_at = now.isoformat()
             try:
-                await self._send_report(schedule, now)
-            except Exception:
+                await self._send_report(schedule, now, attempted_at)
+            except Exception as exc:
+                failures = schedule["consecutive_failures"] + 1
+                await self._db.execute(
+                    "UPDATE report_schedules SET last_attempted_at=?, last_error=?, "
+                    "consecutive_failures=? WHERE id=?",
+                    (attempted_at, str(exc), failures, schedule["id"]),
+                )
+                await self._db.commit()
                 logger.exception("Failed to send scheduled report %s", schedule["id"])
 
-    async def _send_report(self, schedule: dict, now: datetime) -> None:
+        self.last_check_at = now
+
+    async def _send_report(self, schedule: dict, now: datetime, attempted_at: str) -> None:
         window_hours = 24.0 if schedule["frequency"] == "daily" else 168.0
         start_dt = now - timedelta(hours=window_hours)
 
@@ -339,10 +358,18 @@ class ReportSchedulerService:
         sent = await self._email_svc.send_html_report(subject, html_body)
         if sent:
             await self._db.execute(
-                "UPDATE report_schedules SET last_sent_at=? WHERE id=?",
-                (now.isoformat(), schedule["id"]),
+                "UPDATE report_schedules SET last_sent_at=?, last_attempted_at=?, "
+                "last_error=NULL, consecutive_failures=0 WHERE id=?",
+                (now.isoformat(), attempted_at, schedule["id"]),
             )
             await self._db.commit()
             logger.info("Scheduled report %s sent successfully", schedule["id"])
         else:
+            failures = schedule["consecutive_failures"] + 1
+            await self._db.execute(
+                "UPDATE report_schedules SET last_attempted_at=?, last_error=?, "
+                "consecutive_failures=? WHERE id=?",
+                (attempted_at, "Email delivery returned false", failures, schedule["id"]),
+            )
+            await self._db.commit()
             logger.warning("Scheduled report %s: email send returned 0 (check email config)", schedule["id"])

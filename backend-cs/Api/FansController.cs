@@ -168,11 +168,13 @@ public sealed class FansController : ControllerBase
 
     /// <summary>POST /api/fans/resume — resume software fan control.</summary>
     [HttpPost("resume")]
-    public IActionResult ResumeFanControl()
+    public async Task<IActionResult> ResumeFanControl(CancellationToken ct = default)
     {
-        if (!_fans.Resume(out var profile))
+        var profiles = await _db.ListProfilesAsync(ct);
+        var activeProfile = profiles.FirstOrDefault(p => p.IsActive);
+        if (!_fans.Resume(activeProfile))
             return Conflict(new { detail = "No active profile to resume. Activate a profile first." });
-        return Ok(new { success = true, active_profile = profile });
+        return Ok(new { success = true, active_profile = activeProfile });
     }
 
     /// <summary>GET /api/fans/status — safe mode status and applied speeds.</summary>

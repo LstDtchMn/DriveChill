@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading.Tasks;
 using DriveChill.Models;
 using DriveChill.Services;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace DriveChill.Tests;
@@ -10,7 +12,7 @@ namespace DriveChill.Tests;
 public sealed class AlertServiceTests : IDisposable
 {
     private readonly string _tempDir;
-    private readonly SettingsStore _store;
+    private readonly DbService _db;
     private readonly AlertService _svc;
 
     public AlertServiceTests()
@@ -20,40 +22,42 @@ public sealed class AlertServiceTests : IDisposable
         Environment.SetEnvironmentVariable("DRIVECHILL_DATA_DIR", _tempDir);
 
         var settings = new AppSettings();
-        _store = new SettingsStore(settings);
-        _svc   = new AlertService(_store);
+        _db  = new DbService(settings, NullLogger<DbService>.Instance);
+        _svc = new AlertService(_db);
+        _svc.InitializeAsync().GetAwaiter().GetResult();
     }
 
     public void Dispose()
     {
+        _db.Dispose();
         Environment.SetEnvironmentVariable("DRIVECHILL_DATA_DIR", null);
         try { Directory.Delete(_tempDir, recursive: true); } catch { /* best-effort */ }
     }
 
     private AlertRule AddAboveRule(double threshold, string sensorId = "cpu")
     {
-        return _svc.AddRule(new CreateAlertRuleRequest
+        return _svc.AddRuleAsync(new CreateAlertRuleRequest
         {
             SensorId   = sensorId,
             SensorName = "CPU Temp",
             Threshold  = threshold,
             Condition  = "above",
-        });
+        }).GetAwaiter().GetResult();
     }
 
     private AlertRule AddBelowRule(double threshold, string sensorId = "drive")
     {
-        return _svc.AddRule(new CreateAlertRuleRequest
+        return _svc.AddRuleAsync(new CreateAlertRuleRequest
         {
             SensorId   = sensorId,
             SensorName = "Drive Temp",
             Threshold  = threshold,
             Condition  = "below",
-        });
+        }).GetAwaiter().GetResult();
     }
 
     private static SensorReading Reading(string id, double value) =>
-        new() { Id = id, SensorType = SensorTypeValues.CpuTemp, Value = value, Unit = "°C" };
+        new() { Id = id, SensorType = SensorTypeValues.CpuTemp, Value = value, Unit = "C" };
 
     // -----------------------------------------------------------------------
 
@@ -98,7 +102,7 @@ public sealed class AlertServiceTests : IDisposable
         _svc.Evaluate([Reading("cpu", 75)]); // fire
         _svc.Evaluate([Reading("cpu", 65)]); // clear
 
-        // Re-trigger — should fire again (was cleared)
+        // Re-trigger -- should fire again (was cleared)
         var refired = _svc.Evaluate([Reading("cpu", 80)]);
         Assert.Single(refired);
     }
@@ -123,7 +127,7 @@ public sealed class AlertServiceTests : IDisposable
 
         var fired = _svc.Evaluate([new SensorReading
         {
-            Id = "drive", SensorType = SensorTypeValues.CpuTemp, Value = 15, Unit = "°C",
+            Id = "drive", SensorType = SensorTypeValues.CpuTemp, Value = 15, Unit = "C",
         }]);
 
         Assert.Single(fired);
@@ -134,7 +138,6 @@ public sealed class AlertServiceTests : IDisposable
     [Fact]
     public void Evaluate_DoesNotFire_AtExactThreshold_AboveCondition()
     {
-        // Condition is "strictly greater than" in C# AlertService: value > threshold
         AddAboveRule(70);
 
         var fired = _svc.Evaluate([Reading("cpu", 70)]);
@@ -143,30 +146,27 @@ public sealed class AlertServiceTests : IDisposable
     }
 
     [Fact]
-    public void Evaluate_DoesNotFire_WhenRuleDisabled()
+    public async Task Evaluate_DoesNotFire_WhenRuleDisabled()
     {
         var rule = AddAboveRule(70);
-        _svc.DeleteRule(rule.RuleId);
-        _svc.AddRule(new CreateAlertRuleRequest
+        await _svc.DeleteRuleAsync(rule.RuleId);
+        await _svc.AddRuleAsync(new CreateAlertRuleRequest
         {
             SensorId  = "cpu",
             Threshold = 70,
             Condition = "above",
         });
-        // Add a disabled rule by direct model manipulation (mark via delete + check empty rules list)
-        // Simpler: just test that deleted rule doesn't fire
         var fired = _svc.Evaluate([Reading("cpu", 80)]);
-        // Only the re-added rule should fire (1 rule, 1 fire)
         Assert.Single(fired);
     }
 
     [Fact]
-    public void DeleteRule_ClearsActiveAlertState()
+    public async Task DeleteRule_ClearsActiveAlertState()
     {
         var rule = AddAboveRule(70);
 
-        _svc.Evaluate([Reading("cpu", 75)]); // fire → active
-        _svc.DeleteRule(rule.RuleId);
+        _svc.Evaluate([Reading("cpu", 75)]); // fire -> active
+        await _svc.DeleteRuleAsync(rule.RuleId);
 
         // After delete, active events should be gone
         var active = _svc.GetActiveEvents();
@@ -181,13 +181,13 @@ public sealed class AlertServiceTests : IDisposable
 
         _svc.Evaluate([
             Reading("cpu", 75),
-            new SensorReading { Id = "gpu", SensorType = SensorTypeValues.GpuTemp, Value = 65, Unit = "°C" },
+            new SensorReading { Id = "gpu", SensorType = SensorTypeValues.GpuTemp, Value = 65, Unit = "C" },
         ]);
 
         // Clear cpu alert
         _svc.Evaluate([
             Reading("cpu", 50),
-            new SensorReading { Id = "gpu", SensorType = SensorTypeValues.GpuTemp, Value = 65, Unit = "°C" },
+            new SensorReading { Id = "gpu", SensorType = SensorTypeValues.GpuTemp, Value = 65, Unit = "C" },
         ]);
 
         var active = _svc.GetActiveEvents();
@@ -208,13 +208,13 @@ public sealed class AlertServiceTests : IDisposable
     }
 
     // -----------------------------------------------------------------------
-    // Profile switching — revert_after_clear semantics
+    // Profile switching -- revert_after_clear semantics
     // -----------------------------------------------------------------------
 
     private AlertRule AddActionRule(double threshold, string profileId,
         bool revertAfterClear = true, string sensorId = "cpu")
     {
-        return _svc.AddRule(new CreateAlertRuleRequest
+        return _svc.AddRuleAsync(new CreateAlertRuleRequest
         {
             SensorId   = sensorId,
             SensorName = "CPU Temp",
@@ -226,7 +226,7 @@ public sealed class AlertServiceTests : IDisposable
                 ProfileId        = profileId,
                 RevertAfterClear = revertAfterClear,
             },
-        });
+        }).GetAwaiter().GetResult();
     }
 
     [Fact]
@@ -239,7 +239,6 @@ public sealed class AlertServiceTests : IDisposable
         AddActionRule(70, "perf");
 
         _svc.Evaluate([Reading("cpu", 75)]);
-        // Task.Run is fire-and-forget; give it a moment
         System.Threading.Thread.Sleep(50);
 
         Assert.Contains("perf", activated);
@@ -288,7 +287,6 @@ public sealed class AlertServiceTests : IDisposable
     {
         var activated = new List<string>();
         _svc.SetActivateProfileFn(id => { activated.Add(id); return Task.CompletedTask; });
-        // Deliberately do NOT call SetPreAlertProfile
 
         AddActionRule(70, "perf", revertAfterClear: true);
 
@@ -299,14 +297,12 @@ public sealed class AlertServiceTests : IDisposable
         _svc.Evaluate([Reading("cpu", 60)]); // clear
         System.Threading.Thread.Sleep(50);
 
-        // No pre-alert profile was set, so nothing to revert to
         Assert.Empty(activated);
     }
 
     [Fact]
     public void ProfileSwitch_MixedRevertAfterClear_NoRevertWins()
     {
-        // If any fired rule had RevertAfterClear=false, the revert is suppressed
         var activated = new List<string>();
         _svc.SetActivateProfileFn(id => { activated.Add(id); return Task.CompletedTask; });
         _svc.SetPreAlertProfile("default");
@@ -314,16 +310,13 @@ public sealed class AlertServiceTests : IDisposable
         AddActionRule(70,  "profile_A", revertAfterClear: true,  sensorId: "cpu");
         AddActionRule(80,  "profile_B", revertAfterClear: false, sensorId: "cpu");
 
-        // Fire both (cpu > 80 satisfies both thresholds)
         _svc.Evaluate([Reading("cpu", 85)]);
         System.Threading.Thread.Sleep(50);
         activated.Clear();
 
-        // Clear both
         _svc.Evaluate([Reading("cpu", 60)]);
         System.Threading.Thread.Sleep(50);
 
-        // profile_B had revert_after_clear=false → no revert
         Assert.DoesNotContain("default", activated);
     }
 }

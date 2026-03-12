@@ -26,6 +26,18 @@ public sealed class PushNotificationService
     // Null when VAPID keys are not configured.
     private readonly PushServiceClient? _pushClient;
 
+    // ── Integration health tracking ──────────────────────────────────────
+    private long _successCount;
+    private long _failureCount;
+    private DateTimeOffset? _lastSentAt;
+    private string? _lastError;
+
+    public long SuccessCount => Interlocked.Read(ref _successCount);
+    public long FailureCount => Interlocked.Read(ref _failureCount);
+    public DateTimeOffset? LastSentAt => _lastSentAt;
+    public string? LastError => _lastError;
+    public bool IsConfigured => _pushClient is not null;
+
     public PushNotificationService(DbService db, AppSettings settings,
         ILogger<PushNotificationService> log)
     {
@@ -161,18 +173,26 @@ public sealed class PushNotificationService
         try
         {
             await DeliverCoreAsync(sub, payload, ct);
+            _lastSentAt = DateTimeOffset.UtcNow;
+            Interlocked.Increment(ref _successCount);
+            _lastError = null;
             _log.LogDebug("Push notification delivered to subscription {Id}", sub.Id);
         }
         catch (PushServiceClientException ex) when (
             ex.StatusCode is HttpStatusCode.Gone or HttpStatusCode.NotFound)
         {
+            Interlocked.Increment(ref _failureCount);
+            _lastError = $"HTTP {(int)ex.StatusCode}: {ex.Message}";
             _log.LogInformation("Removing expired push subscription {Id} (HTTP {Status})",
                 sub.Id, ex.StatusCode);
             await _db.DeletePushSubscriptionAsync(sub.Id, ct);
         }
         catch (Exception ex)
         {
-            _log.LogWarning(ex, "Push delivery failed for subscription {Id}", sub.Id);
+            Interlocked.Increment(ref _failureCount);
+            _lastError = ex.Message;
+            _log.LogWarning(ex, "Push delivery failed: {Service} subscription={Id}",
+                "push", sub.Id);
         }
     }
 }

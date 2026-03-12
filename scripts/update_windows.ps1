@@ -66,6 +66,12 @@ if (-not $Version) {
     }
 }
 
+# Validate version string to prevent path traversal
+if ($Version -notmatch '^\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9._-]+)?$') {
+    Write-Error "Invalid version string: '$Version'"
+    exit 1
+}
+
 $zipName    = "DriveChill-$Artifact-$Version.zip"
 $zipUrl     = "https://github.com/$GITHUB_REPO/releases/download/v$Version/$zipName"
 $tempZip    = Join-Path $env:TEMP $zipName

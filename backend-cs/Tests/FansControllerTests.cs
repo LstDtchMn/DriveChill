@@ -228,10 +228,10 @@ public sealed class FansControllerTests : IDisposable
     }
 
     [Fact]
-    public void ResumeFanControl_ReturnsConflict_WithoutActiveProfile()
+    public async Task ResumeFanControl_ReturnsConflict_WithoutActiveProfile()
     {
         _fans.ReleaseFanControl();
-        var result = _ctrl.ResumeFanControl();
+        var result = await _ctrl.ResumeFanControl();
         Assert.IsType<ConflictObjectResult>(result);
     }
 

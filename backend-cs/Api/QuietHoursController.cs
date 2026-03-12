@@ -9,12 +9,10 @@ namespace DriveChill.Api;
 public sealed partial class QuietHoursController : ControllerBase
 {
     private readonly DbService      _db;
-    private readonly SettingsStore   _store;
 
-    public QuietHoursController(DbService db, SettingsStore store)
+    public QuietHoursController(DbService db)
     {
         _db    = db;
-        _store = store;
     }
 
     /// <summary>GET /api/quiet-hours — list all rules.</summary>
@@ -33,7 +31,7 @@ public sealed partial class QuietHoursController : ControllerBase
         if (error != null) return UnprocessableEntity(new { detail = error });
 
         // Verify profile exists
-        var profiles = _store.LoadProfiles();
+        var profiles = await _db.ListProfilesAsync(ct);
         if (!profiles.Any(p => p.Id == rule.ProfileId))
             return NotFound(new { detail = $"Profile '{rule.ProfileId}' not found" });
 
@@ -49,7 +47,7 @@ public sealed partial class QuietHoursController : ControllerBase
         var error = ValidateRule(rule);
         if (error != null) return UnprocessableEntity(new { detail = error });
 
-        var profiles = _store.LoadProfiles();
+        var profiles = await _db.ListProfilesAsync(ct);
         if (!profiles.Any(p => p.Id == rule.ProfileId))
             return NotFound(new { detail = $"Profile '{rule.ProfileId}' not found" });
 

@@ -14,7 +14,6 @@ public sealed class QuietHoursControllerTests : IDisposable
 {
     private readonly string _tempDir;
     private readonly DbService _db;
-    private readonly SettingsStore _store;
     private readonly QuietHoursController _ctrl;
 
     public QuietHoursControllerTests()
@@ -25,8 +24,7 @@ public sealed class QuietHoursControllerTests : IDisposable
 
         var settings = new AppSettings();
         _db    = new DbService(settings, NullLogger<DbService>.Instance);
-        _store = new SettingsStore(settings);
-        _ctrl  = new QuietHoursController(_db, _store);
+        _ctrl  = new QuietHoursController(_db);
     }
 
     public void Dispose()
@@ -36,12 +34,10 @@ public sealed class QuietHoursControllerTests : IDisposable
         try { Directory.Delete(_tempDir, recursive: true); } catch { }
     }
 
-    private string CreateTestProfile(string name = "TestProfile")
+    private async Task<string> CreateTestProfileAsync(string name = "TestProfile")
     {
         var profile = new Profile { Name = name, Description = "test" };
-        var profiles = _store.LoadProfiles().ToList();
-        profiles.Add(profile);
-        _store.SaveProfiles(profiles);
+        await _db.CreateProfileAsync(profile);
         return profile.Id;
     }
 
@@ -59,7 +55,7 @@ public sealed class QuietHoursControllerTests : IDisposable
     [Fact]
     public async Task CreateRule_ReturnsOk_WithValidRule()
     {
-        var profileId = CreateTestProfile();
+        var profileId = await CreateTestProfileAsync();
         var rule = new QuietHoursRule
         {
             DayOfWeek = 1,
@@ -75,10 +71,10 @@ public sealed class QuietHoursControllerTests : IDisposable
     [Fact]
     public async Task CreateRule_ReturnsUnprocessable_WithInvalidDayOfWeek()
     {
-        var profileId = CreateTestProfile();
+        var profileId = await CreateTestProfileAsync();
         var rule = new QuietHoursRule
         {
-            DayOfWeek = 7, // Invalid — must be 0-6
+            DayOfWeek = 7, // Invalid -- must be 0-6
             StartTime = "22:00",
             EndTime   = "06:00",
             ProfileId = profileId,
@@ -90,7 +86,7 @@ public sealed class QuietHoursControllerTests : IDisposable
     [Fact]
     public async Task CreateRule_ReturnsUnprocessable_WithInvalidTimeFormat()
     {
-        var profileId = CreateTestProfile();
+        var profileId = await CreateTestProfileAsync();
         var rule = new QuietHoursRule
         {
             DayOfWeek = 1,
@@ -140,7 +136,7 @@ public sealed class QuietHoursControllerTests : IDisposable
     [Fact]
     public async Task DeleteRule_RemovesCreatedRule()
     {
-        var profileId = CreateTestProfile();
+        var profileId = await CreateTestProfileAsync();
         var rule = new QuietHoursRule
         {
             DayOfWeek = 3,
@@ -164,7 +160,7 @@ public sealed class QuietHoursControllerTests : IDisposable
     [Fact]
     public async Task UpdateRule_ReturnsNotFound_ForMissingId()
     {
-        var profileId = CreateTestProfile();
+        var profileId = await CreateTestProfileAsync();
         var rule = new QuietHoursRule
         {
             DayOfWeek = 1,
@@ -183,7 +179,7 @@ public sealed class QuietHoursControllerTests : IDisposable
     [Fact]
     public async Task CreateRule_ReturnsUnprocessable_WithBadTimeFormat()
     {
-        var profileId = CreateTestProfile();
+        var profileId = await CreateTestProfileAsync();
         var rule = new QuietHoursRule
         {
             DayOfWeek = 0,

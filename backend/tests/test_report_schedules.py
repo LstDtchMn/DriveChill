@@ -285,6 +285,80 @@ class TestIsDue:
 
 
 # ---------------------------------------------------------------------------
+# DST regression tests for _is_due
+# ---------------------------------------------------------------------------
+
+
+class TestDstReportSchedule:
+    """Verify _is_due handles DST transitions correctly.
+
+    US Spring-forward 2026: March 8 at 02:00 AM → 03:00 AM (EST→EDT)
+    US Fall-back 2026:      November 1 at 02:00 AM → 01:00 AM (EDT→EST)
+    """
+
+    def _sched(self, frequency="daily", time_utc="08:00", last_sent_at=None, tz="America/New_York"):
+        return {
+            "frequency": frequency,
+            "time_utc": time_utc,
+            "timezone": tz,
+            "enabled": True,
+            "last_sent_at": last_sent_at,
+        }
+
+    def test_daily_spring_forward_fires_once(self):
+        """Daily 08:00 America/New_York on spring-forward day (2026-03-08).
+
+        At 12:00 UTC it is 08:00 EDT (after spring-forward at 07:00 UTC).
+        Last sent yesterday at 13:00 UTC (08:00 EST before spring-forward).
+        Should fire because it's a new day.
+        """
+        now = datetime(2026, 3, 8, 12, 0, 0, tzinfo=timezone.utc)
+        sched = self._sched(
+            time_utc="08:00",
+            last_sent_at="2026-03-07T13:00:00+00:00",
+        )
+        assert _is_due(sched, now) is True
+
+    def test_daily_fall_back_does_not_fire_twice(self):
+        """Daily 08:00 America/New_York on fall-back day (2026-11-01).
+
+        At 13:00 UTC it is 08:00 EST (after fall-back).
+        Already sent earlier today at 12:00 UTC — should NOT fire again.
+        """
+        now = datetime(2026, 11, 1, 13, 0, 0, tzinfo=timezone.utc)
+        sched = self._sched(
+            time_utc="08:00",
+            last_sent_at="2026-11-01T12:00:00+00:00",
+        )
+        assert _is_due(sched, now) is False
+
+    def test_weekly_boundary_across_dst(self):
+        """Weekly 08:00 America/New_York across spring-forward.
+
+        Monday 2026-03-09 at 12:00 UTC = 08:00 EDT (after spring-forward).
+        Last sent previous Monday 2026-03-02 at 13:00 UTC (08:00 EST).
+        Different ISO weeks in local time, should fire.
+        """
+        now = datetime(2026, 3, 9, 12, 0, 0, tzinfo=timezone.utc)
+        sched = self._sched(
+            frequency="weekly",
+            time_utc="08:00",
+            last_sent_at="2026-03-02T13:00:00+00:00",
+        )
+        assert _is_due(sched, now) is True
+
+    def test_daily_with_utc_timezone_no_dst_issues(self):
+        """Daily 08:00 UTC on a US DST transition day — UTC has no DST."""
+        now = datetime(2026, 3, 8, 8, 0, 0, tzinfo=timezone.utc)
+        sched = self._sched(
+            time_utc="08:00",
+            last_sent_at="2026-03-07T08:00:00+00:00",
+            tz="UTC",
+        )
+        assert _is_due(sched, now) is True
+
+
+# ---------------------------------------------------------------------------
 # Weekly _is_due boundary (replaces former _week_start_utc unit tests)
 # ---------------------------------------------------------------------------
 

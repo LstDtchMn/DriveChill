@@ -25,6 +25,17 @@ class PushNotificationService:
         self._repo = repo
         self._private_key = vapid_private_key
         self._claims = vapid_claims
+        # Integration health tracking
+        self.success_count: int = 0
+        self.failure_count: int = 0
+        self.last_sent_at: datetime | None = None
+        self.last_error: str | None = None
+        self.is_configured: bool = bool(vapid_private_key)
+
+    async def get_subscription_count(self) -> int:
+        """Return the number of active push subscriptions."""
+        subs = await self._repo.list_all()
+        return len(subs)
 
     async def send_alert(
         self,
@@ -78,9 +89,14 @@ class PushNotificationService:
                 )
                 await self._repo.update_last_used(sub["id"])
                 successes += 1
+                self.last_sent_at = datetime.now(timezone.utc)
+                self.success_count += 1
+                self.last_error = None
             except WebPushException as exc:
+                self.failure_count += 1
                 status = getattr(exc, "response", None)
                 status_code = status.status_code if status is not None else None
+                self.last_error = f"HTTP {status_code}: {exc}"
                 if status_code == 410:
                     logger.info(
                         "Push subscription %s has expired (410 Gone); removing", sub["id"]
@@ -88,12 +104,14 @@ class PushNotificationService:
                     await self._repo.delete(sub["id"])
                 else:
                     logger.warning(
-                        "Web Push delivery failed for subscription %s (status=%s): %s",
+                        "Push delivery failed: service=push subscription=%s status=%s: %s",
                         sub["id"], status_code, exc,
                     )
-            except Exception:
+            except Exception as exc:
+                self.failure_count += 1
+                self.last_error = str(exc)
                 logger.exception(
-                    "Unexpected error delivering push notification to subscription %s", sub["id"]
+                    "Push delivery failed: service=push subscription=%s", sub["id"]
                 )
 
         return successes
@@ -141,10 +159,15 @@ class PushNotificationService:
                 ),
             )
             await self._repo.update_last_used(sub["id"])
+            self.last_sent_at = datetime.now(timezone.utc)
+            self.success_count += 1
+            self.last_error = None
             return True
         except WebPushException as exc:
+            self.failure_count += 1
             status = getattr(exc, "response", None)
             status_code = status.status_code if status is not None else None
+            self.last_error = f"HTTP {status_code}: {exc}"
             if status_code == 410:
                 logger.info(
                     "Push subscription %s has expired (410 Gone); removing", sub["id"]
@@ -152,12 +175,14 @@ class PushNotificationService:
                 await self._repo.delete(sub["id"])
             else:
                 logger.warning(
-                    "Web Push test delivery failed for subscription %s (status=%s): %s",
+                    "Push delivery failed: service=push subscription=%s status=%s: %s",
                     sub["id"], status_code, exc,
                 )
             return False
-        except Exception:
+        except Exception as exc:
+            self.failure_count += 1
+            self.last_error = str(exc)
             logger.exception(
-                "Unexpected error delivering test push to subscription %s", sub["id"]
+                "Push delivery failed: service=push subscription=%s", sub["id"]
             )
             return False

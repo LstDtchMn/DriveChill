@@ -8,32 +8,33 @@ namespace DriveChill.Api;
 [Route("api/profiles")]
 public sealed class ProfilesController : ControllerBase
 {
-    private readonly SettingsStore _store;
+    private readonly DbService     _db;
     private readonly FanService    _fans;
     private readonly AlertService  _alerts;
 
-    public ProfilesController(SettingsStore store, FanService fans, AlertService alerts)
+    public ProfilesController(DbService db, FanService fans, AlertService alerts)
     {
-        _store  = store;
+        _db     = db;
         _fans   = fans;
         _alerts = alerts;
     }
 
     /// <summary>GET /api/profiles</summary>
     [HttpGet]
-    public IActionResult GetProfiles() => Ok(_store.LoadProfiles());
+    public async Task<IActionResult> GetProfiles(CancellationToken ct = default)
+        => Ok(await _db.ListProfilesAsync(ct));
 
     /// <summary>GET /api/profiles/{id}</summary>
     [HttpGet("{id}")]
-    public IActionResult GetProfile(string id)
+    public async Task<IActionResult> GetProfile(string id, CancellationToken ct = default)
     {
-        var profile = _store.LoadProfiles().FirstOrDefault(p => p.Id == id);
+        var profile = await _db.GetProfileAsync(id, ct);
         return profile is not null ? Ok(profile) : NotFound(new { detail = "Profile not found" });
     }
 
     /// <summary>POST /api/profiles</summary>
     [HttpPost]
-    public IActionResult CreateProfile([FromBody] CreateProfileRequest req)
+    public async Task<IActionResult> CreateProfile([FromBody] CreateProfileRequest req, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(req.Name))
             return BadRequest(new { detail = "name is required" });
@@ -45,52 +46,43 @@ public sealed class ProfilesController : ControllerBase
             Curves      = req.Curves,
         };
 
-        var profiles = _store.LoadProfiles().ToList();
-        profiles.Add(profile);
-        _store.SaveProfiles(profiles);
-        return CreatedAtAction(nameof(GetProfiles), new { id = profile.Id }, profile);
+        await _db.CreateProfileAsync(profile, ct);
+        return CreatedAtAction(nameof(GetProfile), new { id = profile.Id }, profile);
     }
 
     /// <summary>PUT /api/profiles/{id}</summary>
     [HttpPut("{id}")]
-    public IActionResult UpdateProfile(string id, [FromBody] Profile updated)
+    public async Task<IActionResult> UpdateProfile(string id, [FromBody] Profile updated, CancellationToken ct = default)
     {
-        var profiles = _store.LoadProfiles().ToList();
-        var idx = profiles.FindIndex(p => p.Id == id);
-        if (idx < 0) return NotFound(new { detail = "Profile not found" });
+        var existing = await _db.GetProfileAsync(id, ct);
+        if (existing == null) return NotFound(new { detail = "Profile not found" });
 
         updated.Id        = id;
-        updated.CreatedAt = profiles[idx].CreatedAt;
+        updated.CreatedAt = existing.CreatedAt;
         updated.UpdatedAt = DateTimeOffset.UtcNow;
-        profiles[idx]     = updated;
-        _store.SaveProfiles(profiles);
+        await _db.UpdateProfileAsync(updated, ct);
         return Ok(updated);
     }
 
     /// <summary>DELETE /api/profiles/{id}</summary>
     [HttpDelete("{id}")]
-    public IActionResult DeleteProfile(string id)
+    public async Task<IActionResult> DeleteProfile(string id, CancellationToken ct = default)
     {
-        var profiles = _store.LoadProfiles().ToList();
-        var profile  = profiles.FirstOrDefault(p => p.Id == id);
-        if (profile == null) return NotFound(new { detail = "Profile not found" });
-
-        profiles.Remove(profile);
-        _store.SaveProfiles(profiles);
-        return Ok(new { ok = true });
+        return await _db.DeleteProfileAsync(id, ct)
+            ? Ok(new { ok = true })
+            : NotFound(new { detail = "Profile not found" });
     }
 
-    /// <summary>PUT /api/profiles/{id}/activate — load curves into FanService.</summary>
+    /// <summary>PUT /api/profiles/{id}/activate -- load curves into FanService.</summary>
     [HttpPut("{id}/activate")]
-    public IActionResult ActivateProfile(string id)
+    public async Task<IActionResult> ActivateProfile(string id, CancellationToken ct = default)
     {
-        var profiles = _store.LoadProfiles().ToList();
-        var profile  = profiles.FirstOrDefault(p => p.Id == id);
+        var profile = await _db.GetProfileAsync(id, ct);
         if (profile == null) return NotFound(new { detail = "Profile not found" });
 
-        // Mark active flag
-        foreach (var p in profiles) p.IsActive = p.Id == id;
-        _store.SaveProfiles(profiles);
+        // Mark active flag in DB
+        await _db.ActivateProfileAsync(id, ct);
+        profile.IsActive = true;
 
         // Replace all active curves atomically so orphaned curves from the
         // previous profile don't linger.
@@ -103,11 +95,11 @@ public sealed class ProfilesController : ControllerBase
         return Ok(profile);
     }
 
-    /// <summary>GET /api/profiles/{id}/export — portable JSON snapshot, export_version: 1.</summary>
+    /// <summary>GET /api/profiles/{id}/export -- portable JSON snapshot, export_version: 1.</summary>
     [HttpGet("{id}/export")]
-    public IActionResult ExportProfile(string id)
+    public async Task<IActionResult> ExportProfile(string id, CancellationToken ct = default)
     {
-        var profile = _store.LoadProfiles().FirstOrDefault(p => p.Id == id);
+        var profile = await _db.GetProfileAsync(id, ct);
         if (profile is null) return NotFound(new { detail = "Profile not found" });
 
         return Ok(new
@@ -122,9 +114,9 @@ public sealed class ProfilesController : ControllerBase
         });
     }
 
-    /// <summary>POST /api/profiles/import — create a new profile from a portable snapshot.</summary>
+    /// <summary>POST /api/profiles/import -- create a new profile from a portable snapshot.</summary>
     [HttpPost("import")]
-    public IActionResult ImportProfile([FromBody] ImportProfileRequest req)
+    public async Task<IActionResult> ImportProfile([FromBody] ImportProfileRequest req, CancellationToken ct = default)
     {
         var profileName = string.IsNullOrWhiteSpace(req.Name)
             ? $"Imported {RandomHex(3)}"
@@ -137,13 +129,11 @@ public sealed class ProfilesController : ControllerBase
             Curves      = req.Curves,
         };
 
-        var profiles = _store.LoadProfiles().ToList();
-        profiles.Add(profile);
-        _store.SaveProfiles(profiles);
+        await _db.CreateProfileAsync(profile, ct);
         return StatusCode(201, new { success = true, profile });
     }
 
-    /// <summary>GET /api/profiles/preset-curves — built-in curve templates.</summary>
+    /// <summary>GET /api/profiles/preset-curves -- built-in curve templates.</summary>
     [HttpGet("preset-curves")]
     public IActionResult GetPresets() => Ok(PresetCurves.All);
 

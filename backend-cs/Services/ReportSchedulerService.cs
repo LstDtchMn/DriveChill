@@ -16,6 +16,12 @@ public sealed class ReportSchedulerService : BackgroundService
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly TimeSpan _pollInterval;
 
+    /// <summary>When the last schedule check completed (for status API).</summary>
+    public DateTimeOffset? LastCheckAt { get; private set; }
+
+    /// <summary>Whether the background loop is running.</summary>
+    public bool Running { get; private set; }
+
     public ReportSchedulerService(
         DbService db,
         EmailNotificationService email,
@@ -40,24 +46,32 @@ public sealed class ReportSchedulerService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        Running = true;
         await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken);
 
-        while (!stoppingToken.IsCancellationRequested)
+        try
         {
-            try
+            while (!stoppingToken.IsCancellationRequested)
             {
-                await CheckAndSendAsync(stoppingToken);
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _log.LogWarning(ex, "Report schedule check failed");
-            }
+                try
+                {
+                    await CheckAndSendAsync(stoppingToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    _log.LogWarning(ex, "Report schedule check failed");
+                }
 
-            await Task.Delay(_pollInterval, stoppingToken);
+                await Task.Delay(_pollInterval, stoppingToken);
+            }
+        }
+        finally
+        {
+            Running = false;
         }
     }
 
@@ -71,23 +85,34 @@ public sealed class ReportSchedulerService : BackgroundService
             if (!IsDue(schedule, now))
                 continue;
 
+            var attemptedAt = now.ToString("o");
+
             try
             {
                 if (await SendReportAsync(schedule, now, ct))
                 {
-                    await _db.UpdateReportScheduleLastSentAsync(schedule.Id, now.ToString("o"), ct);
+                    await _db.UpdateReportScheduleStatusAsync(
+                        schedule.Id, now.ToString("o"), attemptedAt, null, 0, ct);
                     _log.LogInformation("Scheduled report {ScheduleId} sent", schedule.Id);
                 }
                 else
                 {
+                    var failures = schedule.ConsecutiveFailures + 1;
+                    await _db.UpdateReportScheduleStatusAsync(
+                        schedule.Id, null, attemptedAt, "Email delivery returned false", failures, ct);
                     _log.LogWarning("Scheduled report {ScheduleId} was due but email delivery failed", schedule.Id);
                 }
             }
             catch (Exception ex)
             {
+                var failures = schedule.ConsecutiveFailures + 1;
+                await _db.UpdateReportScheduleStatusAsync(
+                    schedule.Id, null, attemptedAt, ex.Message, failures, ct);
                 _log.LogWarning(ex, "Failed to send scheduled report {ScheduleId}", schedule.Id);
             }
         }
+
+        LastCheckAt = now;
     }
 
     internal async Task<bool> SendReportAsync(ReportScheduleRecord schedule, DateTimeOffset now, CancellationToken ct = default)
@@ -140,6 +165,46 @@ public sealed class ReportSchedulerService : BackgroundService
             "weekly" => lastSent < WeekStartUtc(now),
             _ => false,
         };
+    }
+
+    /// <summary>
+    /// Compute the next UTC time this schedule will fire, starting from <paramref name="now"/>.
+    /// Returns null if the schedule has an invalid time_utc.
+    /// </summary>
+    internal static DateTimeOffset? NextDueAt(ReportScheduleRecord schedule, DateTimeOffset now)
+    {
+        var parts = schedule.TimeUtc.Split(':');
+        if (parts.Length != 2
+            || !int.TryParse(parts[0], out var hour)
+            || !int.TryParse(parts[1], out var minute))
+        {
+            return null;
+        }
+
+        // Resolve timezone
+        TimeZoneInfo tz;
+        try
+        {
+            tz = TimeZoneInfo.FindSystemTimeZoneById(schedule.Timezone ?? "UTC");
+        }
+        catch (TimeZoneNotFoundException)
+        {
+            tz = TimeZoneInfo.Utc;
+        }
+
+        var localNow = TimeZoneInfo.ConvertTime(now, tz);
+
+        // Build candidate: today at the scheduled time in the schedule's timezone
+        var candidateLocal = new DateTimeOffset(
+            localNow.Year, localNow.Month, localNow.Day, hour, minute, 0, localNow.Offset);
+
+        // If that time is in the past (or right now), advance by 1 day (daily) or 7 days (weekly)
+        if (candidateLocal <= localNow)
+        {
+            candidateLocal = candidateLocal.AddDays(schedule.Frequency == "weekly" ? 7 : 1);
+        }
+
+        return candidateLocal.ToUniversalTime();
     }
 
     internal static string BuildReportHtml(

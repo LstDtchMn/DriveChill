@@ -426,16 +426,21 @@ class FanService:
         if self._temp_panic:
             # Currently in panic — exit only when ALL panic-triggering sensors
             # are below threshold minus hysteresis.
+            # If sensors are absent (transient re-enumeration), stay in panic.
             cpu_clear = True
             gpu_clear = True
+            has_cpu = False
+            has_gpu = False
             for r in readings:
                 if r.sensor_type == SensorType.CPU_TEMP:
+                    has_cpu = True
                     if r.value >= self._panic_cpu_temp - self._panic_hysteresis:
                         cpu_clear = False
                 elif r.sensor_type == SensorType.GPU_TEMP:
+                    has_gpu = True
                     if r.value >= self._panic_gpu_temp - self._panic_hysteresis:
                         gpu_clear = False
-            if cpu_clear and gpu_clear:
+            if (has_cpu or has_gpu) and cpu_clear and gpu_clear:
                 self._temp_panic = False
                 logger.info(
                     "Temperature panic cleared — resuming normal fan control"

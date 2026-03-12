@@ -18,7 +18,7 @@ public sealed class MqttCommandHandler : BackgroundService
 {
     private readonly NotificationChannelService _channelSvc;
     private readonly FanService _fans;
-    private readonly SettingsStore _store;
+    private readonly DbService _db;
     private readonly IHardwareBackend _hw;
     private readonly ILogger<MqttCommandHandler> _log;
 
@@ -28,13 +28,13 @@ public sealed class MqttCommandHandler : BackgroundService
     public MqttCommandHandler(
         NotificationChannelService channelSvc,
         FanService fans,
-        SettingsStore store,
+        DbService db,
         IHardwareBackend hw,
         ILogger<MqttCommandHandler> log)
     {
         _channelSvc = channelSvc;
         _fans       = fans;
-        _store      = store;
+        _db         = db;
         _hw         = hw;
         _log        = log;
     }
@@ -163,14 +163,12 @@ public sealed class MqttCommandHandler : BackgroundService
 
             try
             {
-                DispatchCommand(topic, payload, topicPrefix);
+                await DispatchCommandAsync(topic, payload, topicPrefix);
             }
             catch (Exception ex)
             {
                 _log.LogDebug(ex, "MQTT command dispatch error");
             }
-
-            await Task.CompletedTask;
         };
 
         try
@@ -211,7 +209,7 @@ public sealed class MqttCommandHandler : BackgroundService
     /// <summary>
     /// Parse and dispatch a single MQTT command. Called from the message handler.
     /// </summary>
-    internal void DispatchCommand(string topic, string? payload, string prefix)
+    internal async Task DispatchCommandAsync(string topic, string? payload, string prefix)
     {
         var expectedStart = $"{prefix}/";
         if (!topic.StartsWith(expectedStart)) return;
@@ -277,13 +275,11 @@ public sealed class MqttCommandHandler : BackgroundService
                 && pidEl.ValueKind == JsonValueKind.String)
             {
                 var profileId = pidEl.GetString()!;
-                var profiles = _store.LoadProfiles().ToList();
-                var profile = profiles.FirstOrDefault(p => p.Id == profileId);
+                var profile = await _db.GetProfileAsync(profileId);
                 if (profile != null)
                 {
                     // Mark active and save
-                    foreach (var p in profiles) p.IsActive = p.Id == profileId;
-                    _store.SaveProfiles(profiles);
+                    await _db.ActivateProfileAsync(profileId);
                     _fans.SetCurves(profile.Curves);
                     _log.LogInformation("MQTT: activated profile {ProfileId}", profileId);
                 }

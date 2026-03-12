@@ -39,6 +39,11 @@ export function useWebSocket(enabled = true) {
   const enabledRef = useRef(enabled);
   enabledRef.current = enabled;
 
+  // TODO(v3.2): This destructured call subscribes to the entire store, causing
+  // re-renders on every state change. Replace with individual useAppStore selectors
+  // (e.g. useAppStore(s => s.setReadings)) to avoid unnecessary re-renders.
+  // Deferred because the hook is only mounted once at the app root and the
+  // performance impact is negligible in practice.
   const {
     setReadings,
     addHistoryPoint,

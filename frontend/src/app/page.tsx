@@ -34,10 +34,14 @@ function SafeModeBanner() {
 
   if (!safeMode.active && !safeMode.released) return null;
 
-  const msg = safeMode.reason ? SAFE_MODE_MESSAGES[safeMode.reason] : null;
+  const isReleased = safeMode.released && !safeMode.active;
+  const msg = safeMode.reason
+    ? SAFE_MODE_MESSAGES[safeMode.reason]
+    : isReleased
+      ? SAFE_MODE_MESSAGES['released']
+      : null;
   if (!msg) return null;
 
-  const isReleased = safeMode.released && !safeMode.active;
   const bg = isReleased ? 'var(--accent-muted)' : '#7f1d1d';
   const border = isReleased ? 'var(--accent)' : '#ef4444';
   const color = isReleased ? 'var(--accent)' : '#fca5a5';

@@ -10,7 +10,7 @@ namespace DriveChill.Services;
 /// </summary>
 public sealed class AlertService
 {
-    private readonly SettingsStore _store;
+    private readonly DbService _db;
     private readonly ILogger<AlertService> _logger;
     private readonly object _lock = new();
 
@@ -18,7 +18,7 @@ public sealed class AlertService
     private readonly List<AlertEvent> _events = [];
     // Events injected from outside Evaluate() (e.g. SmartTrendService) pending fan-out dispatch
     private readonly List<AlertEvent> _pendingInjected = [];
-    // ruleId → currently active (fired but not cleared)
+    // ruleId -> currently active (fired but not cleared)
     private readonly HashSet<string> _active = [];
 
     // Profile switching state
@@ -27,11 +27,22 @@ public sealed class AlertService
     private readonly List<string> _actionFiredOrder = []; // rule IDs in firing order
     private bool _suppressRevert; // true if any fired rule had RevertAfterClear=false
 
-    public AlertService(SettingsStore store, ILogger<AlertService>? logger = null)
+    public AlertService(DbService db, ILogger<AlertService>? logger = null)
     {
-        _store = store;
+        _db = db;
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<AlertService>.Instance;
-        _rules.AddRange(store.LoadAlerts());
+        // Rules are loaded asynchronously via InitializeAsync()
+    }
+
+    /// <summary>Load rules from DB. Must be called after construction.</summary>
+    public async Task InitializeAsync(CancellationToken ct = default)
+    {
+        var rules = await _db.ListAlertRulesAsync(ct);
+        lock (_lock)
+        {
+            _rules.Clear();
+            _rules.AddRange(rules);
+        }
     }
 
     /// <summary>Set the callback used to activate a profile by ID.</summary>
@@ -47,13 +58,14 @@ public sealed class AlertService
     // Rules CRUD
     // -----------------------------------------------------------------------
 
-    /// <summary>Reload rules from the store (e.g. after config import).</summary>
-    public void ReloadRules()
+    /// <summary>Reload rules from the DB (e.g. after config import).</summary>
+    public async Task ReloadRulesAsync(CancellationToken ct = default)
     {
+        var rules = await _db.ListAlertRulesAsync(ct);
         lock (_lock)
         {
             _rules.Clear();
-            _rules.AddRange(_store.LoadAlerts());
+            _rules.AddRange(rules);
         }
     }
 
@@ -62,7 +74,7 @@ public sealed class AlertService
         lock (_lock) return [.. _rules];
     }
 
-    public AlertRule AddRule(CreateAlertRuleRequest req)
+    public async Task<AlertRule> AddRuleAsync(CreateAlertRuleRequest req, CancellationToken ct = default)
     {
         var rule = new AlertRule
         {
@@ -73,11 +85,12 @@ public sealed class AlertService
             Message    = req.Message,
             Action     = req.Action,
         };
-        lock (_lock) { _rules.Add(rule); _store.SaveAlerts(_rules); }
+        await _db.CreateAlertRuleAsync(rule, ct);
+        lock (_lock) { _rules.Add(rule); }
         return rule;
     }
 
-    public bool DeleteRule(string ruleId)
+    public async Task<bool> DeleteRuleAsync(string ruleId, CancellationToken ct = default)
     {
         bool wasInOrder;
         bool deletedRuleWasNoRevert;
@@ -91,16 +104,15 @@ public sealed class AlertService
             wasInOrder = _actionFiredOrder.Remove(ruleId);
             if (wasInOrder)
             {
-                // Recompute suppress from remaining active rules + preference of deleted rule.
                 bool remainingSuppress = _actionFiredOrder.Any(rid =>
                 {
                     var r = _rules.FirstOrDefault(x => x.RuleId == rid);
                     return r?.Action?.RevertAfterClear == false;
                 });
-                _suppressRevert = remainingSuppress || deletedRuleWasNoRevert;
+                _suppressRevert = remainingSuppress;
             }
-            _store.SaveAlerts(_rules);
         }
+        await _db.DeleteAlertRuleAsync(ruleId, ct);
         if (wasInOrder) HandleActionReeval();
         return true;
     }
@@ -153,7 +165,7 @@ public sealed class AlertService
 
     /// <summary>
     /// Returns and clears all events that were injected via <see cref="InjectEvent"/> since the
-    /// last drain. SensorWorker calls this after Evaluate() to include injected SMART-trend events
+    /// last drain. SensorWorker calls this after Evaluate to include injected SMART-trend events
     /// in the same delivery fan-out as threshold-crossing events.
     /// </summary>
     public List<AlertEvent> DrainInjectedEvents()
@@ -179,7 +191,6 @@ public sealed class AlertService
         {
             _actionFiredOrder.Remove(rule.RuleId);
             _actionFiredOrder.Add(rule.RuleId);
-            // Recompute from the full active set rather than accumulating monotonically.
             _suppressRevert = _actionFiredOrder.Any(rid =>
             {
                 var r = _rules.FirstOrDefault(x => x.RuleId == rid);
@@ -198,7 +209,6 @@ public sealed class AlertService
     /// <summary>
     /// Processes a batch of simultaneously-clearing action rules.
     /// Computes suppress from the batch AND the remaining active rules, then re-evaluates once.
-    /// Prevents a historical no-revert rule from silently suppressing a later revert-wanting rule.
     /// </summary>
     private void HandleBatchActionClear(List<AlertRule> clearedRules)
     {
@@ -207,7 +217,6 @@ public sealed class AlertService
         {
             foreach (var rule in clearedRules)
                 _actionFiredOrder.Remove(rule.RuleId);
-            // Recompute suppress from remaining active rules + what just cleared.
             bool remainingSuppress = _actionFiredOrder.Any(rid =>
             {
                 var r = _rules.FirstOrDefault(x => x.RuleId == rid);
@@ -220,7 +229,6 @@ public sealed class AlertService
 
     private void HandleActionReeval()
     {
-        // Find the most recently fired action rule that's still active
         lock (_lock)
         {
             for (int i = _actionFiredOrder.Count - 1; i >= 0; i--)
@@ -242,7 +250,6 @@ public sealed class AlertService
             }
         }
 
-        // No action rules active — revert unless suppressed by revert_after_clear=false
         if (_preAlertProfileId != null)
         {
             if (_suppressRevert)
@@ -263,14 +270,14 @@ public sealed class AlertService
     }
 
     // -----------------------------------------------------------------------
-    // Evaluation — called by SensorWorker on every tick
+    // Evaluation -- called by SensorWorker on every tick
     // -----------------------------------------------------------------------
 
     public IReadOnlyList<AlertEvent> Evaluate(IReadOnlyList<SensorReading> readings)
     {
         var fired = new List<AlertEvent>();
         var firedRules = new List<AlertRule>();
-        var clearedActionRules = new List<AlertRule>(); // full rule objects for batch suppress
+        var clearedActionRules = new List<AlertRule>();
 
         lock (_lock)
         {
@@ -288,7 +295,6 @@ public sealed class AlertService
 
                 if (conditionMet && !isActive)
                 {
-                    // Fire
                     var ev = new AlertEvent
                     {
                         RuleId      = rule.RuleId,
@@ -304,12 +310,10 @@ public sealed class AlertService
                     firedRules.Add(rule);
                     _active.Add(rule.RuleId);
 
-                    // Trim history to 500 events
                     while (_events.Count > 500) _events.RemoveAt(0);
                 }
                 else if (!conditionMet && isActive)
                 {
-                    // Clear — mark the last event for this rule as cleared
                     var last = _events.LastOrDefault(e => e.RuleId == rule.RuleId);
                     if (last != null) last.Cleared = true;
                     _active.Remove(rule.RuleId);
@@ -320,13 +324,10 @@ public sealed class AlertService
             }
         }
 
-        // Handle profile switching outside the lock
         foreach (var rule in firedRules)
         {
             HandleActionFire(rule);
         }
-        // Process all simultaneously-clearing action rules as a single batch so that
-        // _suppressRevert is computed from the whole clearing set, not rule-by-rule.
         if (clearedActionRules.Count > 0)
             HandleBatchActionClear(clearedActionRules);
 

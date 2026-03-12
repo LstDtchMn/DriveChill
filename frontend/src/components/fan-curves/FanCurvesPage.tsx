@@ -189,8 +189,11 @@ export function FanCurvesPage() {
 
     const updated = { ...curve, points: editingPoints };
     try {
-      await api.updateCurve(updated);
-      setCurves(curves.map((c) => (c.id === selectedCurve ? updated : c)));
+      const saved = await api.updateCurve(updated);
+      const serverId = saved?.id ?? updated.id;
+      const serverCurve = { ...updated, id: serverId };
+      setCurves(curves.map((c) => (c.id === selectedCurve ? serverCurve : c)));
+      if (serverId !== selectedCurve) setSelectedCurve(serverId);
     } catch (err) {
       if (err instanceof APIError && err.status === 409) {
         const warnings = formatDangerWarnings(err.detail);
@@ -202,8 +205,11 @@ export function FanCurvesPage() {
         if (!confirmOverride) return;
 
         try {
-          await api.updateCurve(updated, true);
-          setCurves(curves.map((c) => (c.id === selectedCurve ? updated : c)));
+          const saved = await api.updateCurve(updated, true);
+          const serverId = saved?.id ?? updated.id;
+          const serverCurve = { ...updated, id: serverId };
+          setCurves(curves.map((c) => (c.id === selectedCurve ? serverCurve : c)));
+          if (serverId !== selectedCurve) setSelectedCurve(serverId);
         } catch {
           toast('Failed to save curve.', 'error');
         }

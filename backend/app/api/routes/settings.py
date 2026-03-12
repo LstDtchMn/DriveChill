@@ -192,6 +192,7 @@ async def import_config(request: Request):
 
     db = request.app.state.db
     imported: dict[str, int] = {}
+    skipped: list[str] = []
 
     # --- Profiles ---
     if "profiles" in body:
@@ -200,8 +201,16 @@ async def import_config(request: Request):
         for p in body["profiles"]:
             from app.models.profiles import ProfilePreset
             from app.models.fan_curves import FanCurve
-            existing = await profile_repo.get(p.get("id", ""))
-            curves = [FanCurve(**c) for c in p.get("curves", [])]
+            pid = p.get("id")
+            if not pid:
+                skipped.append(f"profile missing 'id': {p.get('name', '?')}")
+                continue
+            try:
+                curves = [FanCurve(**c) for c in p.get("curves", [])]
+            except Exception as exc:
+                skipped.append(f"profile '{pid}' invalid curve: {exc}")
+                continue
+            existing = await profile_repo.get(pid)
             if existing:
                 # Update: replace curves
                 await profile_repo.set_curves(existing.id, curves)
@@ -216,7 +225,7 @@ async def import_config(request: Request):
                 await db.execute(
                     "INSERT OR REPLACE INTO profiles (id, name, preset, is_active, created_at, updated_at) "
                     "VALUES (?, ?, ?, ?, ?, ?)",
-                    (p["id"], p.get("name", "Imported"), preset.value,
+                    (pid, p.get("name", "Imported"), preset.value,
                      int(p.get("is_active", False)), now, now),
                 )
                 for curve in curves:
@@ -226,7 +235,7 @@ async def import_config(request: Request):
                         "INSERT OR REPLACE INTO fan_curves "
                         "(id, profile_id, name, sensor_id, fan_id, enabled, points_json, sensor_ids_json) "
                         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                        (curve.id, p["id"], curve.name, curve.sensor_id,
+                        (curve.id, pid, curve.name, curve.sensor_id,
                          curve.fan_id, int(curve.enabled), points_json, sensor_ids_json),
                     )
                 await db.commit()
@@ -325,5 +334,8 @@ async def import_config(request: Request):
             await settings_repo.set_many(updates)
         imported["settings"] = len(updates)
 
-    logger.info("Config import completed: %s", imported)
-    return {"success": True, "imported": imported}
+    logger.info("Config import completed: %s (skipped: %s)", imported, skipped)
+    result: dict = {"success": True, "imported": imported}
+    if skipped:
+        result["skipped"] = skipped
+    return result

@@ -10,7 +10,7 @@ public sealed class AppSettings
     ];
 
     public string AppName    { get; set; } = "DriveChill";
-    public string AppVersion { get; set; } = "3.0.0";
+    public string AppVersion { get; set; } = "3.1.0";
 
     public double SensorPollInterval    { get; set; } = 1.0;
     /// <summary>Poll interval in milliseconds (derived from SensorPollInterval).</summary>
@@ -66,6 +66,13 @@ public sealed class AppSettings
     public bool AllowPrivateOutboundTargets =>
         string.Equals(
             Environment.GetEnvironmentVariable("DRIVECHILL_ALLOW_PRIVATE_OUTBOUND_TARGETS"),
+            "true",
+            StringComparison.OrdinalIgnoreCase
+        );
+
+    public bool AllowPrivateBrokerTargets =>
+        string.Equals(
+            Environment.GetEnvironmentVariable("DRIVECHILL_ALLOW_PRIVATE_BROKER_TARGETS"),
             "true",
             StringComparison.OrdinalIgnoreCase
         );

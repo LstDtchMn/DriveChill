@@ -95,7 +95,8 @@ async def _fetch_latest() -> dict:
         )
 
     latest_tag = data.get("tag_name", "").lstrip("v")
-    release_url = data.get("html_url", "")
+    raw_url = data.get("html_url", "")
+    release_url = raw_url if raw_url.startswith("https://github.com/") else ""
 
     def _ver_tuple(v: str):
         try:

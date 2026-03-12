@@ -61,19 +61,21 @@ public sealed class SensorWorker : BackgroundService
         // Load virtual sensor definitions from DB
         var vsDefs = await _db.GetVirtualSensorsAsync(stoppingToken);
         _virtualSensors.Load(vsDefs);
+
+        // Initialize alert rules from DB
+        await _alerts.InitializeAsync(stoppingToken);
+
         // Wire alert-triggered profile switching
-        _alerts.SetActivateProfileFn(profileId =>
+        _alerts.SetActivateProfileFn(async profileId =>
         {
-            var profiles = _store.LoadProfiles().ToList();
-            var profile = profiles.FirstOrDefault(p => p.Id == profileId);
-            if (profile == null) return Task.CompletedTask;
-            foreach (var p in profiles) p.IsActive = p.Id == profileId;
-            _store.SaveProfiles(profiles);
+            var profile = await _db.GetProfileAsync(profileId);
+            if (profile == null) return;
+            await _db.ActivateProfileAsync(profileId);
             _fans.SetCurves(profile.Curves);
-            return Task.CompletedTask;
         });
         // Record current active profile for revert-after-clear
-        var activeProfile = _store.LoadProfiles().FirstOrDefault(p => p.IsActive);
+        var allProfiles = await _db.ListProfilesAsync(stoppingToken);
+        var activeProfile = allProfiles.FirstOrDefault(p => p.IsActive);
         if (activeProfile != null)
             _alerts.SetPreAlertProfile(activeProfile.Id);
 

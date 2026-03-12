@@ -17,7 +17,6 @@ namespace DriveChill.Services;
 public sealed class ProfileSchedulerService : BackgroundService
 {
     private readonly DbService     _db;
-    private readonly SettingsStore  _store;
     private readonly FanService    _fans;
     private readonly AlertService  _alerts;
     private readonly ILogger<ProfileSchedulerService> _log;
@@ -25,15 +24,22 @@ public sealed class ProfileSchedulerService : BackgroundService
     /// <summary>Track which schedule is currently applied to avoid re-activating every 60s.</summary>
     private string? _activeScheduleId;
 
+    /// <summary>The currently active profile schedule ID (if any).</summary>
+    public string? ActiveScheduleId => _activeScheduleId;
+
+    /// <summary>When the last schedule check completed.</summary>
+    public DateTimeOffset? LastCheckAt { get; private set; }
+
+    /// <summary>Whether the background loop is running.</summary>
+    public bool Running { get; private set; }
+
     public ProfileSchedulerService(
         DbService db,
-        SettingsStore store,
         FanService fans,
         AlertService alerts,
         ILogger<ProfileSchedulerService> log)
     {
         _db     = db;
-        _store  = store;
         _fans   = fans;
         _alerts = alerts;
         _log    = log;
@@ -41,22 +47,31 @@ public sealed class ProfileSchedulerService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        Running = true;
         // Small delay so other services can initialise first
         await Task.Delay(2000, stoppingToken);
 
-        while (!stoppingToken.IsCancellationRequested)
+        try
         {
-            try
+            while (!stoppingToken.IsCancellationRequested)
             {
-                await CheckScheduleAsync(stoppingToken);
-            }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception ex)
-            {
-                _log.LogWarning(ex, "Profile schedule check failed");
-            }
+                try
+                {
+                    await CheckScheduleAsync(stoppingToken);
+                    LastCheckAt = DateTimeOffset.UtcNow;
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    _log.LogWarning(ex, "Profile schedule check failed");
+                }
 
-            await Task.Delay(60_000, stoppingToken);
+                await Task.Delay(60_000, stoppingToken);
+            }
+        }
+        finally
+        {
+            Running = false;
         }
     }
 
@@ -86,8 +101,7 @@ public sealed class ProfileSchedulerService : BackgroundService
             return;
 
         // Activate the profile
-        var profiles = _store.LoadProfiles().ToList();
-        var profile = profiles.FirstOrDefault(p => p.Id == matched.ProfileId);
+        var profile = await _db.GetProfileAsync(matched.ProfileId, ct);
         if (profile == null)
         {
             _log.LogWarning("Profile schedule {ScheduleId}: profile {ProfileId} not found",
@@ -97,8 +111,7 @@ public sealed class ProfileSchedulerService : BackgroundService
 
         _activeScheduleId = matched.Id;
 
-        foreach (var p in profiles) p.IsActive = p.Id == matched.ProfileId;
-        _store.SaveProfiles(profiles);
+        await _db.ActivateProfileAsync(matched.ProfileId, ct);
         _fans.SetCurves(profile.Curves);
         _log.LogInformation("Profile schedule: activated profile {ProfileId} (schedule {ScheduleId})",
             matched.ProfileId, matched.Id);
@@ -139,9 +152,9 @@ public sealed class ProfileSchedulerService : BackgroundService
     /// Find the best matching schedule for the current UTC time.
     /// Most specific (fewest days) wins; ties broken by most recently created.
     /// </summary>
-    internal static ProfileScheduleRecord? FindActiveSchedule(List<ProfileScheduleRecord> schedules)
+    internal static ProfileScheduleRecord? FindActiveSchedule(List<ProfileScheduleRecord> schedules, DateTimeOffset? utcNowOverride = null)
     {
-        var utcNow = DateTimeOffset.UtcNow;
+        var utcNow = utcNowOverride ?? DateTimeOffset.UtcNow;
 
         var matching = new List<ProfileScheduleRecord>();
 

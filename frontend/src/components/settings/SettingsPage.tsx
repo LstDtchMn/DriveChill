@@ -88,6 +88,8 @@ export function SettingsPage() {
   const [emailPasswordInput, setEmailPasswordInput] = useState('');
   const [emailSaving, setEmailSaving] = useState(false);
   const [emailTestResult, setEmailTestResult] = useState<string | null>(null);
+  const emailTestTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  useEffect(() => () => { if (emailTestTimerRef.current) clearTimeout(emailTestTimerRef.current); }, []);
   const [driveSettings, setDriveSettings] = useState<DriveSettings | null>(null);
   const [driveSaving, setDriveSaving] = useState(false);
   const [updateApplying, setUpdateApplying] = useState(false);
@@ -95,6 +97,9 @@ export function SettingsPage() {
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<Record<string, number> | null>(null);
+
+  type SettingsTab = 'general' | 'notifications' | 'automation' | 'security' | 'infrastructure';
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('general');
 
   const [myCurrentPw, setMyCurrentPw] = useState('');
   const [myNewPw, setMyNewPw] = useState('');
@@ -520,8 +525,13 @@ export function SettingsPage() {
     try {
       const r = await api.notifications.testEmail();
       setEmailTestResult(r.success ? 'Test email sent!' : (r.error || 'Send failed.'));
-      setTimeout(() => setEmailTestResult(null), 5000);
-    } catch { setEmailTestResult('Failed to send test email.'); setTimeout(() => setEmailTestResult(null), 5000); }
+      if (emailTestTimerRef.current) clearTimeout(emailTestTimerRef.current);
+      emailTestTimerRef.current = setTimeout(() => setEmailTestResult(null), 5000);
+    } catch {
+      setEmailTestResult('Failed to send test email.');
+      if (emailTestTimerRef.current) clearTimeout(emailTestTimerRef.current);
+      emailTestTimerRef.current = setTimeout(() => setEmailTestResult(null), 5000);
+    }
   };
 
   const handleCopyIssuedKey = async () => {
@@ -566,8 +576,33 @@ export function SettingsPage() {
   return (
     <div className="space-y-6 animate-fade-in max-w-none md:max-w-2xl">
       <ViewerBanner />
+
+      {/* Settings tab bar */}
+      <div className="flex gap-1 overflow-x-auto pb-1 -mb-2" style={{ scrollbarWidth: 'thin' }}>
+        {([
+          ['general', 'General'],
+          ['notifications', 'Notifications'],
+          ['automation', 'Automation'],
+          ['security', 'Security'],
+          ['infrastructure', 'Infrastructure'],
+        ] as const).map(([key, label]) => (
+          <button
+            key={key}
+            onClick={() => setSettingsTab(key)}
+            className="px-4 py-2 text-sm font-medium rounded-lg whitespace-nowrap transition-colors"
+            style={{
+              background: settingsTab === key ? 'var(--accent)' : 'var(--card-bg)',
+              color: settingsTab === key ? '#fff' : 'var(--text-secondary)',
+              border: settingsTab === key ? 'none' : '1px solid var(--border)',
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
       {/* General settings */}
-      <div className="card p-6 animate-card-enter">
+      {settingsTab === 'general' && <div className="card p-6 animate-card-enter">
         <h3 className="text-base font-semibold mb-4" style={{ color: 'var(--text)' }}>General</h3>
 
         <div className="space-y-4">
@@ -672,10 +707,10 @@ export function SettingsPage() {
             {saving ? 'Saving...' : saved ? 'Saved!' : 'Save Settings'}
           </button>
         </div>
-      </div>
+      </div>}
 
       {/* Browser Notifications */}
-      <div className="card p-6 animate-card-enter">
+      {settingsTab === 'notifications' && <div className="card p-6 animate-card-enter">
         <h3 className="text-base font-semibold mb-2" style={{ color: 'var(--text)' }}>Browser Notifications</h3>
         <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
           Get desktop notifications when temperature alerts trigger or safe-mode activates.
@@ -704,10 +739,10 @@ export function SettingsPage() {
             </span>
           )}
         </div>
-      </div>
+      </div>}
 
       {/* Web Push Notifications */}
-      <div className="card p-6 animate-card-enter">
+      {settingsTab === 'notifications' && <div className="card p-6 animate-card-enter">
         <h3 className="text-base font-semibold mb-2" style={{ color: 'var(--text)' }}>Web Push Notifications</h3>
         <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
           Receive push notifications in this browser when alerts trigger. Requires a service worker and VAPID keys configured on the server.
@@ -765,10 +800,10 @@ export function SettingsPage() {
             ))}
           </div>
         )}
-      </div>
+      </div>}
 
       {/* Email Notifications */}
-      <div className="card p-6 animate-card-enter">
+      {settingsTab === 'notifications' && <div className="card p-6 animate-card-enter">
         <h3 className="text-base font-semibold mb-2" style={{ color: 'var(--text)' }}>Email Notifications</h3>
         <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
           Send alert emails via SMTP when temperature thresholds are exceeded.
@@ -871,7 +906,7 @@ export function SettingsPage() {
                   checked={emailSettings.use_ssl}
                   onChange={(e) => setEmailSettings({ ...emailSettings, use_ssl: e.target.checked })}
                 />
-                SSL/TLS (port 465)
+                Implicit TLS (port 465)
               </label>
             </div>
             <div className="flex items-center gap-3 pt-1">
@@ -905,10 +940,10 @@ export function SettingsPage() {
             Email settings unavailable — check server connectivity.
           </p>
         )}
-      </div>
+      </div>}
 
       {/* Sensor Labels */}
-      {uniqueSensors.size > 0 && (
+      {settingsTab === 'general' && uniqueSensors.size > 0 && (
         <div className="card p-6 animate-card-enter">
           <h3 className="text-base font-semibold mb-2" style={{ color: 'var(--text)' }}>Sensor Labels</h3>
           <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
@@ -978,7 +1013,7 @@ export function SettingsPage() {
       )}
 
       {/* Multi-machine hub registry */}
-      <div className="card p-6 animate-card-enter">
+      {settingsTab === 'infrastructure' && <div className="card p-6 animate-card-enter">
         <h3 className="text-base font-semibold mb-2" style={{ color: 'var(--text)' }}>Remote Machines</h3>
         <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
           Configure remote DriveChill agents for hub monitoring.
@@ -1062,10 +1097,10 @@ export function SettingsPage() {
             ))}
           </div>
         )}
-      </div>
+      </div>}
 
       {/* API keys — admin only */}
-      {isAdmin && <div className="card p-6 animate-card-enter">
+      {settingsTab === 'security' && isAdmin && <div className="card p-6 animate-card-enter">
         <h3 className="text-base font-semibold mb-2" style={{ color: 'var(--text)' }}>API Keys</h3>
         <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
           Generate keys for machine-to-machine access. Select scopes below — leave all unchecked for a read-only <code>read:sensors</code> key.
@@ -1174,7 +1209,7 @@ export function SettingsPage() {
       </div>}
 
       {/* Change My Password */}
-      <div className="card p-6 animate-card-enter">
+      {settingsTab === 'security' && <div className="card p-6 animate-card-enter">
         <h3 className="text-base font-semibold mb-4" style={{ color: 'var(--text)' }}>
           Change My Password
         </h3>
@@ -1240,10 +1275,10 @@ export function SettingsPage() {
             {myPwBusy ? 'Changing...' : 'Change Password'}
           </button>
         </div>
-      </div>
+      </div>}
 
       {/* User Management (admin only) */}
-      {isAdmin && (
+      {settingsTab === 'security' && isAdmin && (
         <div className="card p-6 animate-card-enter">
           <h3 className="text-base font-semibold mb-1" style={{ color: 'var(--text)' }}>User Management</h3>
           <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
@@ -1311,7 +1346,7 @@ export function SettingsPage() {
       )}
 
       {/* Webhooks — admin only */}
-      {isAdmin && <div className="card p-6 animate-card-enter">
+      {settingsTab === 'notifications' && isAdmin && <div className="card p-6 animate-card-enter">
         <h3 className="text-base font-semibold mb-2" style={{ color: 'var(--text)' }}>Webhooks</h3>
         <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
           Send alert events to external systems (Slack/Discord/Home Assistant relay).
@@ -1415,7 +1450,7 @@ export function SettingsPage() {
       </div>}
 
       {/* Data export */}
-      <div className="card p-6 animate-card-enter">
+      {settingsTab === 'infrastructure' && <div className="card p-6 animate-card-enter">
         <h3 className="text-base font-semibold mb-4" style={{ color: 'var(--text)' }}>Data Export</h3>
         <p className="text-sm mb-4" style={{ color: 'var(--text-secondary)' }}>
           Export historical sensor data as CSV for analysis in spreadsheet tools.
@@ -1424,10 +1459,10 @@ export function SettingsPage() {
           <Download size={14} />
           Export Last 24 Hours
         </button>
-      </div>
+      </div>}
 
       {/* System info */}
-      <div className="card p-6 animate-card-enter">
+      {settingsTab === 'general' && <div className="card p-6 animate-card-enter">
         <h3 className="text-base font-semibold mb-4" style={{ color: 'var(--text)' }}>System Info</h3>
         <div className="space-y-2 text-sm">
           <div className="flex justify-between">
@@ -1443,10 +1478,10 @@ export function SettingsPage() {
             <span className="font-mono text-xs" style={{ color: 'var(--text)' }}>{appVersion}</span>
           </div>
         </div>
-      </div>
+      </div>}
 
       {/* Storage Monitoring */}
-      <div className="card p-6 animate-card-enter">
+      {settingsTab === 'infrastructure' && <div className="card p-6 animate-card-enter">
         <div className="flex items-center gap-2 mb-1">
           <HardDrive size={16} style={{ color: 'var(--accent)' }} />
           <h3 className="text-base font-semibold" style={{ color: 'var(--text)' }}>Storage Monitoring</h3>
@@ -1516,10 +1551,10 @@ export function SettingsPage() {
         ) : (
           <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>Loading…</p>
         )}
-      </div>
+      </div>}
 
       {/* Updates */}
-      <div className="card p-5 animate-card-enter">
+      {settingsTab === 'general' && <div className="card p-5 animate-card-enter">
         <h3 className="section-title mb-4 flex items-center gap-2">
           <ArrowUpCircle size={16} />
           Updates
@@ -1638,13 +1673,13 @@ export function SettingsPage() {
             </button>
           </div>
         )}
-      </div>
+      </div>}
 
       {/* Notification Channels */}
-      <NotificationChannelForm isAdmin={isAdmin} toast={toast} confirm={confirm} />
+      {settingsTab === 'notifications' && <NotificationChannelForm isAdmin={isAdmin} toast={toast} confirm={confirm} />}
 
       {/* Virtual Sensors */}
-      <div className="card p-6 animate-card-enter">
+      {settingsTab === 'automation' && <div className="card p-6 animate-card-enter">
         <h3 className="text-base font-semibold mb-4" style={{ color: 'var(--text)' }}>Virtual Sensors</h3>
         <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
           Create computed sensors from real sensor readings. Virtual sensor IDs can be used
@@ -1834,10 +1869,10 @@ export function SettingsPage() {
             </div>
           </div>
         )}
-      </div>
+      </div>}
 
       {/* Import / Export — admin only */}
-      {isAdmin && (
+      {settingsTab === 'infrastructure' && isAdmin && (
         <div className="card p-6 animate-card-enter">
           <h3 className="text-base font-semibold mb-4" style={{ color: 'var(--text)' }}>Import / Export</h3>
           <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
@@ -1934,13 +1969,13 @@ export function SettingsPage() {
       )}
 
       {/* Profile Schedules */}
-      <ProfileScheduleEditor isAdmin={isAdmin} toast={toast} confirm={confirm} />
+      {settingsTab === 'automation' && <ProfileScheduleEditor isAdmin={isAdmin} toast={toast} confirm={confirm} />}
 
       {/* Scheduled Reports */}
-      <ReportScheduleForm isAdmin={isAdmin} toast={toast} confirm={confirm} />
+      {settingsTab === 'automation' && <ReportScheduleForm isAdmin={isAdmin} toast={toast} confirm={confirm} />}
 
       {/* Noise Profiler */}
-      <NoiseProfiler />
+      {settingsTab === 'automation' && <NoiseProfiler />}
 
       {/* Help */}
       <div className="card p-4 flex items-start gap-3 animate-card-enter" style={{ background: 'var(--accent-muted)' }}>

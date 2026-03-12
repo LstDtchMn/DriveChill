@@ -1,5 +1,59 @@
 # Changelog
 
+## [3.1.0] - 2026-03-12
+
+### Features — Settings Page Redesign
+- **5-tab horizontal layout**: Settings page reorganised into General, Notifications, Automation, Security, and Infrastructure tabs for faster navigation and reduced scrolling
+
+### Features — Email & MQTT Hardening (A1, A2)
+- **MailKit SMTP migration (C#)**: replaced obsolete `System.Net.Mail.SmtpClient` with MailKit 4.13.0; `use_ssl=true` now uses `SecureSocketOptions.SslOnConnect` (implicit TLS, port 465) and `use_tls=true` uses `SecureSocketOptions.StartTls` (port 587)
+- **MQTT broker SSRF validation (both backends)**: `broker_url` on notification channels is now validated against private/loopback IPs at save and connect time; `DRIVECHILL_ALLOW_PRIVATE_BROKER_TARGETS=true` overrides for LAN deployments
+
+### Features — Data Layer Migration (B3)
+- **Profiles + alerts migrated to SQLite (C#)**: profiles (with nested fan curves) and alert rules moved from `settings.json` to SQLite tables (`profiles`, `profile_curves`, `alert_rules`); existing data auto-migrated on first startup; all controllers and services now use async DB operations
+- **SettingsStore simplified**: `StoredData` no longer contains profiles or alerts; `settings.json` retains only runtime settings (poll interval, temp unit, ramp rate, deadband, active curves, webhooks, API keys)
+
+### Features — Scheduler Observability (C2)
+- **`GET /api/scheduler/status` (both backends)**: new endpoint returning profile scheduler and report scheduler health — `running`, `last_check_at`, `active_schedule_id` for profiles; per-schedule `last_sent_at`, `last_attempted_at`, `last_error`, `consecutive_failures`, `next_due_at` for reports
+- **Report schedule failure tracking**: `report_schedules` table gains `last_error`, `last_attempted_at`, `consecutive_failures` columns (migration `021_scheduler_observability.sql` / C# `002_scheduler_observability.sql`); status updated after each send attempt
+
+### Features — Integration Health Panel (E1, E2)
+- **`GET /api/integrations/health` (both backends)**: aggregated health endpoint for MQTT, webhooks, email, and push integrations — connection state, `last_sent_at`, `last_error`, `success_count`, `failure_count` per integration
+- **Thread-safe metrics**: `EmailNotificationService`, `PushNotificationService`, `WebhookService`, `NotificationChannelService` now track success/failure counters (`Interlocked.Increment` in C#) and last error messages
+- **Structured integration logging**: all integration services emit structured log messages with service name and target identifiers on failure
+
+### Tests — DST/Timezone Regression (C3)
+- **8 Python DST tests**: spring-forward/fall-back for daily and weekly report schedules; spring-forward/fall-back/overnight for profile schedules (all using `America/New_York` timezone)
+- **8 C# DST tests**: matching coverage — `IsDue` daily/weekly across DST transitions; `FindActiveSchedule` spring-forward/fall-back/overnight; `WeekStartUtc` DST-transition Sunday
+
+### Critical Bug Fixes
+- **Temperature panic safety**: panic mode no longer clears when CPU/GPU sensors are absent from the snapshot — fans stay at 100% until a real reading confirms temperatures have dropped
+- **Settings import crash**: importing a config with a malformed or missing profile ID no longer crashes the endpoint; invalid entries are skipped and reported in the response
+- **Settings import validation**: fan curves with out-of-range values are caught and skipped instead of producing an unhandled server error
+- **User creation error handling**: creating a duplicate user now returns 409 (Conflict) instead of mapping unrelated errors to the same status code
+- **C# profile schedule FK integrity**: the `profile_schedules` table now enforces a foreign key to `profiles` with CASCADE delete — orphaned schedules are no longer possible
+- **C# user deletion atomicity**: `DeleteUserAsync` is now wrapped in a transaction so sessions, API keys, and the user row are deleted together or not at all
+- **C# alert revert logic**: `_suppressRevert` flag was incorrectly OR'd with a deleted rule's `noRevert` setting, preventing profile revert even when it should have fired
+- **Curve save ID mismatch**: saving a new fan curve now updates the in-memory ID to the server-assigned value, fixing a bug where subsequent edits silently created duplicates
+- **Safe mode banner**: the "Safety profile released" banner now displays correctly instead of being hidden when no specific reason is set
+
+### Important Bug Fixes
+- **API key scope gap**: `/api/update` endpoints were missing from the API key scope rules in both Python and C# backends — API keys with `settings` scope can now call update endpoints
+- **C# email settings TOCTOU race**: `UpdateEmailSettingsAsync` eliminated a read-then-write race condition by using conditional SQL that preserves the SMTP password in a single query
+- **Toast timer leak** (frontend): the header toast and email-test timers now use refs with cleanup to prevent memory leaks on component unmount
+- **Drive self-test status colours**: added explicit badge colours for `queued` and `aborted` SMART self-test statuses instead of falling through to the default
+- **Update script path traversal**: `update_windows.ps1` now validates the version string against a semver regex before constructing file paths
+- **Release URL validation**: the Python update route now sanitises the GitHub `html_url` field, rejecting URLs that don't start with `https://github.com/`
+
+### Tests
+- Python: 687 passing, 13 skipped
+- C#: 397 passing
+
+### Migrations
+- `021_scheduler_observability.sql` (Python): adds `last_error`, `last_attempted_at`, `consecutive_failures` to `report_schedules`
+- `002_scheduler_observability.sql` (C#): same columns via ALTER TABLE
+- C# `DbService`: new `profiles`, `profile_curves`, `alert_rules` tables in schema init
+
 ## [3.0.0] - Unreleased
 
 ### Features - C# v3.0 parity completion

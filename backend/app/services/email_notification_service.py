@@ -19,6 +19,12 @@ logger = logging.getLogger(__name__)
 class EmailNotificationService:
     def __init__(self, repo: EmailNotificationRepo) -> None:
         self._repo = repo
+        # Integration health tracking
+        self.success_count: int = 0
+        self.failure_count: int = 0
+        self.last_sent_at: datetime | None = None
+        self.last_error: str | None = None
+        self.is_configured: bool = False
 
     async def send_alert(
         self,
@@ -109,18 +115,32 @@ class EmailNotificationService:
                 msg.add_alternative(html_body, subtype="html")
                 await smtp.send_message(msg)
 
+            self.last_sent_at = datetime.now(timezone.utc)
+            self.success_count += 1
+            self.last_error = None
             logger.info(
                 "HTML email sent: subject=%r recipients=%d", subject, len(recipients)
             )
             return 1
 
         except Exception:
+            self.failure_count += 1
+            self.last_error = f"Failed to send HTML email: smtp_host={cfg['smtp_host']!r}"
             logger.exception(
-                "Failed to send HTML email: subject=%r smtp_host=%r",
+                "Email delivery failed: service=email subject=%r smtp_host=%r",
                 subject,
                 cfg["smtp_host"],
             )
             return 0
+
+    async def check_configured(self) -> bool:
+        """Update and return whether email is currently configured."""
+        try:
+            cfg = await self._repo.get()
+            self.is_configured = bool(cfg["enabled"] and cfg["smtp_host"])
+        except Exception:
+            self.is_configured = False
+        return self.is_configured
 
     async def _send(self, subject: str, body: str) -> int:
         """Internal: build and send a single SMTP message to all recipients.
@@ -168,14 +188,19 @@ class EmailNotificationService:
                 msg.set_content(body)
                 await smtp.send_message(msg)
 
+            self.last_sent_at = datetime.now(timezone.utc)
+            self.success_count += 1
+            self.last_error = None
             logger.info(
                 "Email sent: subject=%r recipients=%d", subject, len(recipients)
             )
             return 1
 
         except Exception:
+            self.failure_count += 1
+            self.last_error = f"Failed to send email: smtp_host={cfg['smtp_host']!r}"
             logger.exception(
-                "Failed to send email: subject=%r smtp_host=%r",
+                "Email delivery failed: service=email subject=%r smtp_host=%r",
                 subject,
                 cfg["smtp_host"],
             )

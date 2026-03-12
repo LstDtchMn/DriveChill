@@ -9,6 +9,10 @@ services:
     volumes:
       - drivechill_data:${DRIVECHILL_DATA_DIR:-/app/data}
     environment:
+      # TODO(v3.2): Default 0.0.0.0 exposes the service on all interfaces.
+      # Consider requiring DRIVECHILL_PASSWORD or DRIVECHILL_FORCE_AUTH when
+      # binding to 0.0.0.0 to prevent unauthenticated access. Deferred because
+      # Docker networking typically provides its own isolation layer.
       DRIVECHILL_HOST: ${DRIVECHILL_HOST:-0.0.0.0}
       DRIVECHILL_PORT: ${DRIVECHILL_PORT:-8085}
       DRIVECHILL_DATA_DIR: ${DRIVECHILL_DATA_DIR:-/app/data}

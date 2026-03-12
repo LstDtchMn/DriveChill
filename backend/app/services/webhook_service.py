@@ -46,6 +46,10 @@ class WebhookService:
     def __init__(self, db: aiosqlite.Connection) -> None:
         self._db = db
         self._client: httpx.AsyncClient | None = None
+        # Integration health tracking
+        self.success_count: int = 0
+        self.failure_count: int = 0
+        self.last_error: str | None = None
 
     async def start(self) -> None:
         self._client = httpx.AsyncClient(follow_redirects=False)
@@ -245,7 +249,12 @@ class WebhookService:
             await self._db.commit()
 
             if success:
+                self.success_count += 1
+                self.last_error = None
                 return
+            else:
+                self.failure_count += 1
+                self.last_error = error
             if attempt < max_retries + 1:
                 await asyncio.sleep(min(backoff * (2 ** (attempt - 1)), 60.0))
         logger.warning("Webhook delivery failed after retries: %s", target_url)

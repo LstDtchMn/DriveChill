@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 import aiosqlite
 
+from app.config import settings
 from app.utils.url_security import validate_outbound_url_at_request_time
 
 logger = logging.getLogger(__name__)
@@ -48,6 +50,11 @@ class NotificationChannelService:
         self._http_session: Any = None  # lazily created aiohttp.ClientSession
         self._mqtt_clients: dict[str, Any] = {}  # channel_id -> aiomqtt.Client
         self._ha_advertised: dict[str, set[str]] = {}  # channel_id -> set of advertised sensor/fan IDs
+        # Integration health tracking
+        self.success_count: int = 0
+        self.failure_count: int = 0
+        self.last_sent_at: datetime | None = None
+        self.last_error: str | None = None
 
     async def _ensure_session(self) -> Any:
         if self._http_session is None:
@@ -142,8 +149,18 @@ class NotificationChannelService:
                 ok = await self._send(ch, sensor_name, value, threshold)
                 if ok:
                     successes += 1
-            except Exception:
-                logger.exception("Failed to send alert via channel %s (%s)", ch.name, ch.type)
+                    self.last_sent_at = datetime.now(timezone.utc)
+                    self.success_count += 1
+                    self.last_error = None
+                else:
+                    self.failure_count += 1
+            except Exception as exc:
+                self.failure_count += 1
+                self.last_error = str(exc)
+                logger.exception(
+                    "Channel delivery failed: service=notification_channel channel=%s type=%s",
+                    ch.name, ch.type,
+                )
         return successes
 
     async def send_test(self, channel_id: str) -> tuple[bool, str | None]:
@@ -312,7 +329,9 @@ class NotificationChannelService:
         # can resolve the hostname and block private/loopback IPs.
         import re
         check_url = re.sub(r"^(mqtts?|ssl)://", "http://", broker_url, count=1)
-        ok, reason = await validate_outbound_url_at_request_time(check_url)
+        ok, reason = await validate_outbound_url_at_request_time(
+            check_url, allow_private=settings.allow_private_broker_targets
+        )
         if not ok:
             logger.warning("MQTT connection blocked (SSRF): %s", reason)
             return None
@@ -497,6 +516,32 @@ class NotificationChannelService:
                     pass
 
         return successes
+
+    async def get_mqtt_status(self) -> list[dict]:
+        """Return status info for all MQTT channels (for integration health endpoint)."""
+        channels = await self.list_channels()
+        result = []
+        for ch in channels:
+            if ch.type != "mqtt":
+                continue
+            broker_url = ch.config.get("broker_url", "")
+            connected = ch.id in self._mqtt_clients
+            # Try to check actual connection status if the client supports it
+            if connected:
+                client = self._mqtt_clients.get(ch.id)
+                if client is not None:
+                    try:
+                        connected = client._client.is_connected if hasattr(client, "_client") else True
+                    except Exception:
+                        connected = True
+            result.append({
+                "channel_id": ch.id,
+                "name": ch.name,
+                "broker_url": broker_url,
+                "connected": connected,
+                "enabled": ch.enabled,
+            })
+        return result
 
     async def _close_mqtt_clients(self) -> None:
         """Disconnect all cached MQTT clients."""

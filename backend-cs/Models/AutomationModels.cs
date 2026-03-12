@@ -25,6 +25,9 @@ public sealed class ReportScheduleRecord
     public bool Enabled      { get; set; } = true;
     public string? LastSentAt { get; set; }
     public string CreatedAt  { get; set; } = "";
+    public string? LastError  { get; set; }
+    public string? LastAttemptedAt { get; set; }
+    public int ConsecutiveFailures { get; set; }
 }
 
 public sealed class ProfileScheduleRecord

@@ -183,8 +183,8 @@ public sealed class SmartTrendServiceTests
     [Fact]
     public void InjectEvent_AddsToAlertService()
     {
-        var store  = MakeStore();
-        var alerts = new AlertService(store);
+        var db     = MakeDb();
+        var alerts = new AlertService(db);
 
         alerts.InjectEvent(
             ruleId:      "smart_d1_wear_critical",
@@ -205,8 +205,8 @@ public sealed class SmartTrendServiceTests
     [Fact]
     public void InjectEvent_Trims_WhenOver500()
     {
-        var store  = MakeStore();
-        var alerts = new AlertService(store);
+        var db     = MakeDb();
+        var alerts = new AlertService(db);
 
         for (int i = 0; i < 510; i++)
             alerts.InjectEvent($"r{i}", "s", "S", i, 0, "above", "");
@@ -215,9 +215,9 @@ public sealed class SmartTrendServiceTests
         Assert.Equal(500, alerts.GetEvents(1000).Count);
     }
 
-    private static SettingsStore MakeStore()
+    private static DbService MakeDb()
     {
         var settings = new AppSettings();
-        return new SettingsStore(settings);
+        return new DbService(settings, Microsoft.Extensions.Logging.Abstractions.NullLogger<DbService>.Instance);
     }
 }

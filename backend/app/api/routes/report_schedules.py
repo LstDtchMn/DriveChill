@@ -39,7 +39,7 @@ class UpdateReportScheduleBody(BaseModel):
 
 
 def _row_to_dict(row) -> dict:
-    return {
+    d = {
         "id": row[0],
         "frequency": row[1],
         "time_utc": row[2],
@@ -48,6 +48,12 @@ def _row_to_dict(row) -> dict:
         "last_sent_at": row[5],
         "created_at": row[6],
     }
+    # Observability columns (present after migration 021)
+    if len(row) > 7:
+        d["last_error"] = row[7]
+        d["last_attempted_at"] = row[8]
+        d["consecutive_failures"] = row[9] or 0
+    return d
 
 
 # ---------------------------------------------------------------------------
@@ -60,7 +66,7 @@ async def list_report_schedules(request: Request):
     """List all report schedules."""
     db = request.app.state.db
     cursor = await db.execute(
-        "SELECT id, frequency, time_utc, timezone, enabled, last_sent_at, created_at "
+        "SELECT id, frequency, time_utc, timezone, enabled, last_sent_at, created_at, last_error, last_attempted_at, consecutive_failures "
         "FROM report_schedules ORDER BY created_at ASC"
     )
     rows = await cursor.fetchall()
@@ -80,7 +86,7 @@ async def create_report_schedule(body: ReportScheduleBody, request: Request):
     )
     await db.commit()
     cursor = await db.execute(
-        "SELECT id, frequency, time_utc, timezone, enabled, last_sent_at, created_at "
+        "SELECT id, frequency, time_utc, timezone, enabled, last_sent_at, created_at, last_error, last_attempted_at, consecutive_failures "
         "FROM report_schedules WHERE id=?",
         (schedule_id,),
     )
@@ -129,7 +135,7 @@ async def update_report_schedule(
     await db.commit()
 
     cursor = await db.execute(
-        "SELECT id, frequency, time_utc, timezone, enabled, last_sent_at, created_at "
+        "SELECT id, frequency, time_utc, timezone, enabled, last_sent_at, created_at, last_error, last_attempted_at, consecutive_failures "
         "FROM report_schedules WHERE id=?",
         (schedule_id,),
     )

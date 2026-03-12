@@ -16,6 +16,17 @@ public sealed class WebhookService
     private readonly AppSettings _appSettings;
     private readonly object _lock = new();
 
+    // ── Integration health tracking ──────────────────────────────────────
+    private long _successCount;
+    private long _failureCount;
+    private DateTimeOffset? _lastDeliveryAt;
+    private string? _lastError;
+
+    public long SuccessCount => Interlocked.Read(ref _successCount);
+    public long FailureCount => Interlocked.Read(ref _failureCount);
+    public DateTimeOffset? LastDeliveryAt => _lastDeliveryAt;
+    public string? LastError => _lastError;
+
     public WebhookService(SettingsStore store, IHttpClientFactory httpClientFactory, AppSettings appSettings)
     {
         _store = store;
@@ -165,7 +176,18 @@ public sealed class WebhookService
                 Error = error,
             });
 
-            if (success) return;
+            if (success)
+            {
+                _lastDeliveryAt = DateTimeOffset.UtcNow;
+                Interlocked.Increment(ref _successCount);
+                _lastError = null;
+                return;
+            }
+            else
+            {
+                Interlocked.Increment(ref _failureCount);
+                _lastError = error;
+            }
             if (attempt <= cfg.MaxRetries)
                 await Task.Delay(
                     TimeSpan.FromSeconds(Math.Min(cfg.RetryBackoffSeconds * Math.Pow(2, attempt - 1), 60.0)),

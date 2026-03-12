@@ -33,6 +33,7 @@ class ProfileSchedulerService:
         # Track which schedule is currently applied so we don't re-activate
         # every 60 seconds.
         self._active_schedule_id: str | None = None
+        self.last_check_at: datetime | None = None
         self._activate_profile_fn = None
         # Callbacks to check higher-priority overrides
         self._is_panic_fn = None
@@ -72,6 +73,7 @@ class ProfileSchedulerService:
         while self._running:
             try:
                 await self._check_schedule()
+                self.last_check_at = datetime.now(timezone.utc)
             except asyncio.CancelledError:
                 raise
             except Exception:

@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.api.dependencies.auth import require_auth, require_csrf
+from app.config import settings
 from app.services.notification_channel_service import VALID_CHANNEL_TYPES
 from app.utils.url_security import validate_outbound_url_async
 
@@ -36,7 +37,10 @@ async def _validate_config_urls(config: dict) -> None:
                 # can parse and resolve the hostname.
                 check_val = re.sub(r"^mqtts?://", "http://", val, count=1)
                 check_val = re.sub(r"^ssl://", "http://", check_val, count=1)
-            ok, reason = await validate_outbound_url_async(check_val)
+            allow_private = (
+                settings.allow_private_broker_targets if key == "broker_url" else False
+            )
+            ok, reason = await validate_outbound_url_async(check_val, allow_private=allow_private)
             if not ok:
                 raise HTTPException(
                     status_code=400,

@@ -172,10 +172,8 @@ public sealed class FanService
     }
 
     /// <summary>Resume software control after release.</summary>
-    public bool Resume(out Profile? activeProfile)
+    public bool Resume(Profile? activeProfile)
     {
-        var profiles = _store.LoadProfiles();
-        activeProfile = profiles.FirstOrDefault(p => p.IsActive);
         if (activeProfile == null) return false;
 
         _released = false;

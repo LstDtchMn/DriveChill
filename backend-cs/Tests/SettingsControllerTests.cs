@@ -31,8 +31,9 @@ public sealed class SettingsControllerTests : IDisposable
         _db            = new DbService(_appSettings, NullLogger<DbService>.Instance);
         _webhooks      = new WebhookService(_store, new NullHttpClientFactory(), _appSettings);
         _notifChannels = new NotificationChannelService(_db, new NullHttpClientFactory(),
-                             NullLogger<NotificationChannelService>.Instance);
-        var alerts      = new AlertService(_store);
+                             NullLogger<NotificationChannelService>.Instance, _appSettings);
+        var alerts      = new AlertService(_db);
+        alerts.InitializeAsync().GetAwaiter().GetResult();
         _ctrl          = new SettingsController(_store, _appSettings, _db, _webhooks, _notifChannels, alerts);
     }
 
@@ -194,7 +195,7 @@ public sealed class SettingsControllerTests : IDisposable
         }
         """);
         await _ctrl.ImportConfig(body);
-        var profiles = _store.LoadProfiles();
+        var profiles = await _db.ListProfilesAsync();
         Assert.Contains(profiles, p => p.Name == "Imported Silent");
     }
 
@@ -222,7 +223,7 @@ public sealed class SettingsControllerTests : IDisposable
     {
         // Create a notification channel in the DB before exporting
         var notifSvc = new NotificationChannelService(_db, new NullHttpClientFactory(),
-                            NullLogger<NotificationChannelService>.Instance);
+                            NullLogger<NotificationChannelService>.Instance, _appSettings);
         await notifSvc.CreateAsync("nc_export_test", "slack", "Export Slack", true,
             new System.Collections.Generic.Dictionary<string, System.Text.Json.JsonElement>(),
             System.Threading.CancellationToken.None);
@@ -262,7 +263,7 @@ public sealed class SettingsControllerTests : IDisposable
         Assert.IsType<OkObjectResult>(result);
 
         var notifSvc = new NotificationChannelService(_db, new NullHttpClientFactory(),
-                            NullLogger<NotificationChannelService>.Instance);
+                            NullLogger<NotificationChannelService>.Instance, _appSettings);
         var channels = await notifSvc.ListAsync();
         Assert.Contains(channels, c => c.Id == "nc_import_test" && c.Type == "discord");
     }

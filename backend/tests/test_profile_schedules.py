@@ -291,3 +291,88 @@ def test_find_active_schedule_tie_uses_created_at():
 def test_find_active_schedule_empty():
     result = _find_active_schedule([])
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# DST regression tests for _find_active_schedule
+# ---------------------------------------------------------------------------
+
+
+def _make_tz_schedule(
+    sid="dst1", profile_id="p1", start="07:00", end="09:00",
+    days="6", tz="America/New_York", enabled=True,
+    created_at="2026-01-01T00:00:00",
+):
+    return {
+        "id": sid,
+        "profile_id": profile_id,
+        "start_time": start,
+        "end_time": end,
+        "days_of_week": days,
+        "timezone": tz,
+        "enabled": enabled,
+        "created_at": created_at,
+    }
+
+
+class TestDstProfileSchedule:
+    """Verify _find_active_schedule handles DST transitions correctly.
+
+    US Spring-forward 2026: March 8 (Sunday) at 02:00 AM → 03:00 AM (EST→EDT)
+    US Fall-back 2026:      November 1 (Sunday) at 02:00 AM → 01:00 AM (EDT→EST)
+    """
+
+    def test_schedule_evaluates_in_local_time_during_spring_forward(self):
+        """Schedule 07:00-09:00 Sunday, tz=America/New_York.
+
+        2026-03-08 12:00 UTC = 08:00 EDT on spring-forward Sunday.
+        Should match because 08:00 is within [07:00, 09:00) local time.
+        """
+        now = datetime(2026, 3, 8, 12, 0, 0, tzinfo=timezone.utc)
+        schedules = [_make_tz_schedule(
+            start="07:00", end="09:00",
+            days="6",  # Sunday = 6 in Python weekday (0=Mon)
+        )]
+        result = _find_active_schedule(schedules, now=now)
+        assert result is not None
+        assert result["id"] == "dst1"
+
+    def test_schedule_overnight_across_dst_boundary(self):
+        """Overnight schedule 23:00-06:00 across spring-forward boundary.
+
+        2026-03-08 04:00 UTC = 23:00 Saturday EST (before spring-forward).
+        The schedule spans 23:00 Sat → 06:00 Sun; 23:00 is at the start.
+        Saturday = 5 in Python weekday (0=Mon).
+        """
+        now = datetime(2026, 3, 8, 4, 0, 0, tzinfo=timezone.utc)
+        schedules = [_make_tz_schedule(
+            start="23:00", end="06:00",
+            days="5",  # Saturday (local time is 23:00 Saturday)
+        )]
+        result = _find_active_schedule(schedules, now=now)
+        assert result is not None
+        assert result["id"] == "dst1"
+
+    def test_fall_back_duplicate_hour_matches(self):
+        """Schedule 01:00-03:00 on fall-back day (2026-11-01, Sunday).
+
+        2026-11-01 06:30 UTC = 01:30 EST (after fall-back).
+        Should match because 01:30 is within [01:00, 03:00).
+        """
+        now = datetime(2026, 11, 1, 6, 30, 0, tzinfo=timezone.utc)
+        schedules = [_make_tz_schedule(
+            start="01:00", end="03:00",
+            days="6",  # Sunday
+        )]
+        result = _find_active_schedule(schedules, now=now)
+        assert result is not None
+
+    def test_spring_forward_no_match_outside_window(self):
+        """Schedule 07:00-09:00 Sunday; 10:00 EDT should NOT match."""
+        now = datetime(2026, 3, 8, 14, 0, 0, tzinfo=timezone.utc)  # 10:00 EDT
+        schedules = [_make_tz_schedule(
+            start="07:00", end="09:00",
+            days="6",
+        )]
+        result = _find_active_schedule(schedules, now=now)
+        assert result is None

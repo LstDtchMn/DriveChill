@@ -32,8 +32,8 @@ public sealed class NotificationChannelServiceTests : IDisposable
         _settings = new AppSettings();
         _db       = new DbService(_settings, NullLogger<DbService>.Instance);
         _svc      = new NotificationChannelService(_db, new NullHttpClientFactory(),
-                        NullLogger<NotificationChannelService>.Instance);
-        _ctrl     = new NotificationChannelsController(_svc);
+                        NullLogger<NotificationChannelService>.Instance, _settings);
+        _ctrl     = new NotificationChannelsController(_svc, _settings);
     }
 
     public void Dispose()

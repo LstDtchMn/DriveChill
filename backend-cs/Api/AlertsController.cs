@@ -34,20 +34,20 @@ public sealed class AlertsController : ControllerBase
 
     /// <summary>POST /api/alerts/rules</summary>
     [HttpPost("rules")]
-    public IActionResult CreateRule([FromBody] CreateAlertRuleRequest req)
+    public async Task<IActionResult> CreateRule([FromBody] CreateAlertRuleRequest req, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(req.SensorId))
             return BadRequest(new { detail = "sensor_id is required" });
 
-        var rule = _alerts.AddRule(req);
+        var rule = await _alerts.AddRuleAsync(req, ct);
         return CreatedAtAction(nameof(GetRules), new { id = rule.RuleId }, new { success = true, rule });
     }
 
     /// <summary>DELETE /api/alerts/rules/{ruleId}</summary>
     [HttpDelete("rules/{ruleId}")]
-    public IActionResult DeleteRule(string ruleId)
+    public async Task<IActionResult> DeleteRule(string ruleId, CancellationToken ct = default)
     {
-        return _alerts.DeleteRule(ruleId)
+        return await _alerts.DeleteRuleAsync(ruleId, ct)
             ? Ok(new { success = true })
             : NotFound(new { detail = $"Rule '{ruleId}' not found" });
     }

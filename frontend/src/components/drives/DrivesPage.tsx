@@ -202,6 +202,8 @@ function SelfTestRow({ run }: { run: DriveSelfTestRun }) {
   const statusColor = run.status === 'passed' ? 'var(--success)'
     : run.status === 'failed' ? 'var(--danger)'
     : run.status === 'running' ? 'var(--accent)'
+    : run.status === 'queued' ? 'var(--accent-muted)'
+    : run.status === 'aborted' ? 'var(--warning)'
     : 'var(--text-secondary)';
 
   return (

@@ -50,6 +50,8 @@ from app.api.routes import noise_profiles as noise_profiles_route
 from app.api.routes import report_schedules as report_schedules_route
 from app.api.routes import event_annotations as event_annotations_route
 from app.api.routes import profile_schedules as profile_schedules_route
+from app.api.routes import integrations as integrations_route
+from app.api.routes import scheduler_status as scheduler_status_route
 from app.api.websocket import router as ws_router
 from app.db.repositories.drive_repo import DriveRepo
 from app.db.repositories.temperature_target_repo import TemperatureTargetRepo
@@ -555,6 +557,8 @@ app.include_router(noise_profiles_route.router, dependencies=_auth_deps)
 app.include_router(report_schedules_route.router, dependencies=_auth_deps)
 app.include_router(event_annotations_route.router, dependencies=_auth_deps)
 app.include_router(profile_schedules_route.router, dependencies=_auth_deps)
+app.include_router(scheduler_status_route.router, dependencies=_auth_deps)
+app.include_router(integrations_route.router, dependencies=_auth_deps)
 # WebSocket auth is handled inside the endpoint (require_ws_auth) because
 # router-level Depends(require_auth) injects Request, which fails for WS.
 app.include_router(ws_router)

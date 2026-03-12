@@ -99,6 +99,10 @@ public sealed class AuthController : ControllerBase
         var session = await _sessions.ValidateSessionAsync(token, ct);
         await _sessions.LogoutAsync(token, ct);
         var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
+        // TODO(v3.2): Fire-and-forget LogAuthEventAsync calls throughout this controller
+        // silently swallow exceptions. Wrap in try/catch or use a background channel so
+        // failures are logged rather than lost. Deferred because the risk is low (SQLite
+        // writes rarely fail) and fixing requires an async error-reporting pattern.
         _ = _db.LogAuthEventAsync("logout", ip, session?.Username, "success", null);
         Response.Cookies.Delete(SessionCookieName);
         Response.Cookies.Delete(CsrfCookieName);

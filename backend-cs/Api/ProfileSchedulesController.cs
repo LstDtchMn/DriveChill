@@ -10,12 +10,10 @@ namespace DriveChill.Api;
 public sealed partial class ProfileSchedulesController : ControllerBase
 {
     private readonly DbService    _db;
-    private readonly SettingsStore _store;
 
-    public ProfileSchedulesController(DbService db, SettingsStore store)
+    public ProfileSchedulesController(DbService db)
     {
         _db    = db;
-        _store = store;
     }
 
     /// <summary>GET /api/profile-schedules — list all schedules.</summary>
@@ -34,7 +32,7 @@ public sealed partial class ProfileSchedulesController : ControllerBase
         if (error != null) return UnprocessableEntity(new { detail = error });
 
         // Verify profile exists
-        var profiles = _store.LoadProfiles();
+        var profiles = await _db.ListProfilesAsync(ct);
         if (!profiles.Any(p => p.Id == body.ProfileId))
             return NotFound(new { detail = $"Profile '{body.ProfileId}' not found" });
 
@@ -72,7 +70,7 @@ public sealed partial class ProfileSchedulesController : ControllerBase
         var error = ValidateSchedule(body);
         if (error != null) return UnprocessableEntity(new { detail = error });
 
-        var profiles = _store.LoadProfiles();
+        var profiles = await _db.ListProfilesAsync(ct);
         if (!profiles.Any(p => p.Id == body.ProfileId))
             return NotFound(new { detail = $"Profile '{body.ProfileId}' not found" });
 

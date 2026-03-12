@@ -18,7 +18,7 @@ _INTERNAL_TOKEN: str = secrets.token_hex(32)
 
 class Settings(BaseSettings):
     app_name: str = "DriveChill"
-    app_version: str = "3.0.0"
+    app_version: str = "3.1.0"
     host: str = "127.0.0.1"
     port: int = 8085
     cors_origins: list[str] = [
@@ -52,6 +52,7 @@ class Settings(BaseSettings):
     session_ttl: str = "8h"  # DRIVECHILL_SESSION_TTL - "15m", "8h", "7d", etc.
     force_auth: bool = False  # DRIVECHILL_FORCE_AUTH - force auth even on localhost
     allow_private_outbound_targets: bool = False  # DRIVECHILL_ALLOW_PRIVATE_OUTBOUND_TARGETS
+    allow_private_broker_targets: bool = False  # DRIVECHILL_ALLOW_PRIVATE_BROKER_TARGETS
 
     # VAPID keys for Web Push notifications
     vapid_private_key: str = ""  # DRIVECHILL_VAPID_PRIVATE_KEY
