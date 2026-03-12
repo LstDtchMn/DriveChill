@@ -27,23 +27,36 @@
 - **8 C# DST tests**: matching coverage — `IsDue` daily/weekly across DST transitions; `FindActiveSchedule` spring-forward/fall-back/overnight; `WeekStartUtc` DST-transition Sunday
 
 ### Critical Bug Fixes
+- **Config import data loss prevention**: importing settings no longer deletes existing alert rules and quiet hours before validating the new ones — if the import payload is malformed, your existing config stays intact
 - **Temperature panic safety**: panic mode no longer clears when CPU/GPU sensors are absent from the snapshot — fans stay at 100% until a real reading confirms temperatures have dropped
+- **C# report schedule timezone**: scheduled reports now fire at the correct local time instead of always using UTC — if you set a daily report for 08:00 America/New_York, it sends at 08:00 ET, not 08:00 UTC
+- **Timezone validation**: invalid timezone strings in profile and report schedules are now rejected at save time with a clear error instead of silently falling back to UTC
 - **Settings import crash**: importing a config with a malformed or missing profile ID no longer crashes the endpoint; invalid entries are skipped and reported in the response
 - **Settings import validation**: fan curves with out-of-range values are caught and skipped instead of producing an unhandled server error
 - **User creation error handling**: creating a duplicate user now returns 409 (Conflict) instead of mapping unrelated errors to the same status code
 - **C# profile schedule FK integrity**: the `profile_schedules` table now enforces a foreign key to `profiles` with CASCADE delete — orphaned schedules are no longer possible
 - **C# user deletion atomicity**: `DeleteUserAsync` is now wrapped in a transaction so sessions, API keys, and the user row are deleted together or not at all
-- **C# alert revert logic**: `_suppressRevert` flag was incorrectly OR'd with a deleted rule's `noRevert` setting, preventing profile revert even when it should have fired
+- **C# alert revert logic**: `_suppressRevert` flag was incorrectly OR'd with a deleted rule's `noRevert` setting, preventing profile revert even when it should have fired; also fixed cross-thread visibility with volatile
 - **Curve save ID mismatch**: saving a new fan curve now updates the in-memory ID to the server-assigned value, fixing a bug where subsequent edits silently created duplicates
 - **Safe mode banner**: the "Safety profile released" banner now displays correctly instead of being hidden when no specific reason is set
 
 ### Important Bug Fixes
+- **WebSocket reconnect loop after logout**: logging out no longer triggers an infinite WebSocket reconnect cycle — the connection closes cleanly and stays closed
+- **Noise profiler fan release**: exiting the noise profiler sweep now automatically releases fan control, so fans return to their normal curve instead of staying at the last test speed
+- **Analytics tooltip crash**: hovering over a chart with mismatched data points no longer crashes — a null guard prevents the tooltip from reading undefined data
+- **C# fan status API contract**: `GET /api/fans` now returns `{ fans: [...] }` matching the Python backend, fixing frontend parsing errors when using the C# backend
 - **API key scope gap**: `/api/update` endpoints were missing from the API key scope rules in both Python and C# backends — API keys with `settings` scope can now call update endpoints
 - **C# email settings TOCTOU race**: `UpdateEmailSettingsAsync` eliminated a read-then-write race condition by using conditional SQL that preserves the SMTP password in a single query
 - **Toast timer leak** (frontend): the header toast and email-test timers now use refs with cleanup to prevent memory leaks on component unmount
 - **Drive self-test status colours**: added explicit badge colours for `queued` and `aborted` SMART self-test statuses instead of falling through to the default
 - **Update script path traversal**: `update_windows.ps1` now validates the version string against a semver regex before constructing file paths
 - **Release URL validation**: the Python update route now sanitises the GitHub `html_url` field, rejecting URLs that don't start with `https://github.com/`
+
+### Infrastructure
+- **E2E readiness probe**: CI now uses unauthenticated `/api/health` instead of `/api/sensors`, fixing false test failures when auth is enabled
+- **E2E assertion accuracy**: test assertions changed from no-op type checks to actual value checks for reliable pass/fail
+- **CI memory guard**: `NODE_OPTIONS=--max-old-space-size=4096` added to security regression workflow to prevent OOM on frontend builds
+- **Docker .gitignore**: `docker/.env` is now properly ignored while keeping `docker/.env.example` tracked
 
 ### Tests
 - Python: 687 passing, 13 skipped

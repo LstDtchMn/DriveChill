@@ -48,7 +48,7 @@ test.describe('Temperature Targets', () => {
     const hasEmpty = await emptyState.isVisible().catch(() => false);
     const hasContent = hasAdd || hasEmpty;
     // In a fresh mock backend either an add button or empty state should appear
-    expect(typeof hasContent).toBe('boolean');
+    expect(hasContent).toBe(true);
   });
 
   test('create target form can be opened', async ({ page }) => {

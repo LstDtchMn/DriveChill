@@ -44,7 +44,7 @@ test.describe('Analytics', () => {
     const main = page.locator('main');
     await expect(main).toBeVisible();
     const hasAnomalySection = await page.getByText(/anomal/i).isVisible().catch(() => false);
-    // Whether anomalies are present or not, the page should render cleanly
-    expect(typeof hasAnomalySection).toBe('boolean');
+    // The anomaly section should render on the analytics page
+    expect(hasAnomalySection).toBe(true);
   });
 });

@@ -246,15 +246,16 @@ async def import_config(request: Request):
     if "alert_rules" in body:
         from app.services.alert_service import AlertRule
         alert_service = request.app.state.alert_service
-        # Clear existing rules
+        # Parse all new rules BEFORE deleting existing ones to prevent data loss
+        new_rules: list = []
+        for r in body["alert_rules"]:
+            new_rules.append(AlertRule(**r))
+        # Now safe to clear existing and insert parsed rules
         for rule in list(alert_service.rules):
             await alert_service.remove_rule(rule.id)
-        count = 0
-        for r in body["alert_rules"]:
-            rule = AlertRule(**r)
+        for rule in new_rules:
             await alert_service.add_rule(rule)
-            count += 1
-        imported["alert_rules"] = count
+        imported["alert_rules"] = len(new_rules)
 
     # --- Temperature targets ---
     if "temperature_targets" in body:
@@ -275,18 +276,22 @@ async def import_config(request: Request):
 
     # --- Quiet hours ---
     if "quiet_hours" in body:
-        await db.execute("DELETE FROM quiet_hours")
-        count = 0
+        # Validate all entries before deleting to prevent partial-commit data loss
+        validated_qh = []
         for qh in body["quiet_hours"]:
+            validated_qh.append((
+                qh["day_of_week"], qh["start_time"], qh["end_time"],
+                qh["profile_id"], int(qh.get("enabled", True)),
+            ))
+        await db.execute("DELETE FROM quiet_hours")
+        for row in validated_qh:
             await db.execute(
                 "INSERT INTO quiet_hours (day_of_week, start_time, end_time, profile_id, enabled) "
                 "VALUES (?, ?, ?, ?, ?)",
-                (qh["day_of_week"], qh["start_time"], qh["end_time"],
-                 qh["profile_id"], int(qh.get("enabled", True))),
+                row,
             )
-            count += 1
         await db.commit()
-        imported["quiet_hours"] = count
+        imported["quiet_hours"] = len(validated_qh)
 
     # --- Webhook config ---
     if "webhook_config" in body:

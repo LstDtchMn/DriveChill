@@ -6,8 +6,10 @@ import uuid
 from datetime import datetime, timezone
 from typing import Literal
 
+from zoneinfo import ZoneInfo
+
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.api.dependencies.auth import require_csrf
 
@@ -19,11 +21,24 @@ router = APIRouter(prefix="/api/report-schedules", tags=["report-schedules"])
 # ---------------------------------------------------------------------------
 
 
+def _validate_iana_tz(v: str) -> str:
+    try:
+        ZoneInfo(v)
+    except (KeyError, Exception):
+        raise ValueError(f"Invalid IANA timezone: {v}")
+    return v
+
+
 class ReportScheduleBody(BaseModel):
     frequency: Literal["daily", "weekly"]
     time_utc: str = Field(min_length=1, max_length=10)
     timezone: str = Field(default="UTC", max_length=100)
     enabled: bool = True
+
+    @field_validator("timezone")
+    @classmethod
+    def check_tz(cls, v: str) -> str:
+        return _validate_iana_tz(v)
 
 
 class UpdateReportScheduleBody(BaseModel):
@@ -31,6 +46,13 @@ class UpdateReportScheduleBody(BaseModel):
     time_utc: str | None = Field(default=None, max_length=10)
     timezone: str | None = Field(default=None, max_length=100)
     enabled: bool | None = None
+
+    @field_validator("timezone")
+    @classmethod
+    def check_tz(cls, v: str | None) -> str | None:
+        if v is not None:
+            return _validate_iana_tz(v)
+        return v
 
 
 # ---------------------------------------------------------------------------

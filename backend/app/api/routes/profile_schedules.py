@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
@@ -18,6 +19,15 @@ class ProfileScheduleBody(BaseModel):
     days_of_week: str = Field(min_length=1)
     timezone: str = Field(default="UTC", max_length=100)
     enabled: bool = True
+
+    @field_validator("timezone")
+    @classmethod
+    def check_tz(cls, v: str) -> str:
+        try:
+            ZoneInfo(v)
+        except (KeyError, Exception):
+            raise ValueError(f"Invalid IANA timezone: {v}")
+        return v
 
     @field_validator("start_time", "end_time")
     @classmethod

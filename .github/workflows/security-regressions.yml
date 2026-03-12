@@ -50,6 +50,8 @@ jobs:
       - name: Build frontend
         working-directory: frontend
         run: npm run build
+        env:
+          NODE_OPTIONS: '--max-old-space-size=4096'
 
   backend-cs-build:
     runs-on: windows-latest

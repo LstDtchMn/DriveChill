@@ -139,9 +139,11 @@ export function useWebSocket(enabled = true) {
         _globalWsRef = null;
         setConnected(false);
         setBackendName('Disconnected');
-        // Only reconnect if still enabled — prevents reconnect churn
-        // after intentional close (auth expired, component unmount).
-        scheduleReconnect();
+        // Only reconnect if still enabled — prevents reconnect loop
+        // after intentional close (logout, auth expired, component unmount).
+        if (enabledRef.current) {
+          scheduleReconnect();
+        }
       };
 
       ws.onerror = () => {

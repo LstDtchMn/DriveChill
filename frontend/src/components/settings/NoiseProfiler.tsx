@@ -93,6 +93,8 @@ export function NoiseProfiler() {
       stopLiveDB();
       abortRef.current = true;
       meterRef.current?.stop();
+      // Release fan control so the fan isn't left at an arbitrary speed
+      api.releaseFanControl().catch(() => {});
     };
   }, [stopLiveDB]);
 

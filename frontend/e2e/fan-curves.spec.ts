@@ -51,8 +51,8 @@ test.describe('Fan Curves', () => {
     const hasSection =
       await benchmarkBtn.isVisible({ timeout: 5_000 }).catch(() => false) ||
       await benchmarkText.isVisible({ timeout: 5_000 }).catch(() => false);
-    // Record whether benchmark is present — required feature per roadmap A2.2
-    expect(typeof hasSection).toBe('boolean');
+    // Benchmark section is a required feature per roadmap A2.2
+    expect(hasSection).toBe(true);
   });
 
   test('benchmark auto-apply does not crash the page', async ({ page }) => {

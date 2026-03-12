@@ -14,6 +14,8 @@ public sealed class AlertService
     private readonly ILogger<AlertService> _logger;
     private readonly object _lock = new();
 
+    // TODO(v3.2): _rules is a List guarded by _lock; consider ConcurrentBag or
+    //   reader-writer lock for better read concurrency on the hot Evaluate() path.
     private readonly List<AlertRule>  _rules  = [];
     private readonly List<AlertEvent> _events = [];
     // Events injected from outside Evaluate() (e.g. SmartTrendService) pending fan-out dispatch
@@ -25,7 +27,7 @@ public sealed class AlertService
     private Func<string, Task>? _activateProfileFn;
     private string? _preAlertProfileId;
     private readonly List<string> _actionFiredOrder = []; // rule IDs in firing order
-    private bool _suppressRevert; // true if any fired rule had RevertAfterClear=false
+    private volatile bool _suppressRevert; // true if any fired rule had RevertAfterClear=false
 
     public AlertService(DbService db, ILogger<AlertService>? logger = null)
     {

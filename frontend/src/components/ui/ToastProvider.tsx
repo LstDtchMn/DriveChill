@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useCallback, useContext, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 
 type ToastType = 'success' | 'error' | 'info';
 
@@ -26,13 +26,19 @@ const TOAST_COLORS: Record<ToastType, string> = {
 
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const timersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+
+  // Clean up all pending timers on unmount
+  useEffect(() => () => { timersRef.current.forEach(clearTimeout); }, []);
 
   const toast = useCallback((message: string, type: ToastType = 'info') => {
     const id = ++_id;
     setToasts((prev) => [...prev, { id, message, type }]);
-    setTimeout(() => {
+    const timer = setTimeout(() => {
+      timersRef.current.delete(timer);
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, 4000);
+    timersRef.current.add(timer);
   }, []);
 
   return (

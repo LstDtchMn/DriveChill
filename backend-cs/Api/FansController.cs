@@ -27,7 +27,7 @@ public sealed class FansController : ControllerBase
     public IActionResult GetFans()
     {
         var status = _fans.GetAll(_sensors.Latest);
-        return Ok(status);
+        return Ok(new { fans = status });
     }
 
     /// <summary>POST /api/fans/speed — set manual speed percent (fan_id in body).</summary>

@@ -187,6 +187,7 @@ export function TrendChart({ buckets, sensorId: _sensorId, unit, fmt, annotation
         const dist = Math.abs(toSvgX(pts[i].x) - svgX);
         if (dist < bestDist) { bestDist = dist; best = i; }
       }
+      if (!dsRaw[best]) return null;
       return { bucket: dsRaw[best], pt: pts[best], idx: best };
     },
     [pts, dsRaw, toSvgX]

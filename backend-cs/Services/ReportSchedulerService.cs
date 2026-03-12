@@ -147,7 +147,13 @@ public sealed class ReportSchedulerService : BackgroundService
             return false;
         }
 
-        if (now.Hour != hour || now.Minute != minute)
+        // Convert to the schedule's timezone before comparing hour/minute
+        TimeZoneInfo tz;
+        try { tz = TimeZoneInfo.FindSystemTimeZoneById(schedule.Timezone ?? "UTC"); }
+        catch (TimeZoneNotFoundException) { tz = TimeZoneInfo.Utc; }
+        var localNow = TimeZoneInfo.ConvertTime(now, tz);
+
+        if (localNow.Hour != hour || localNow.Minute != minute)
             return false;
 
         if (string.IsNullOrWhiteSpace(schedule.LastSentAt))

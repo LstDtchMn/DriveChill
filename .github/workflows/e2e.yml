@@ -31,7 +31,7 @@ jobs:
           cd backend
           DRIVECHILL_HARDWARE_BACKEND=mock python drivechill.py --headless &
           # Wait up to 30 s for the backend to accept connections
-          timeout 30 bash -c 'until curl -sf http://localhost:8085/api/sensors 2>/dev/null; do sleep 1; done' \
+          timeout 30 bash -c 'until curl -sf http://localhost:8085/api/health 2>/dev/null; do sleep 1; done' \
             || (echo "Backend did not start in time" && exit 1)
         env:
           DRIVECHILL_DATA_DIR: /tmp/drivechill-e2e
