@@ -59,8 +59,8 @@
 - **Docker .gitignore**: `docker/.env` is now properly ignored while keeping `docker/.env.example` tracked
 
 ### Tests
-- Python: 687 passing, 13 skipped
-- C#: 397 passing
+- Python: 697 passing, 13 skipped
+- C#: 400 passing
 
 ### Migrations
 - `021_scheduler_observability.sql` (Python): adds `last_error`, `last_attempted_at`, `consecutive_failures` to `report_schedules`

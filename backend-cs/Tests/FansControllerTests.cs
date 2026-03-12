@@ -254,4 +254,20 @@ public sealed class FansControllerTests : IDisposable
         var result = await _ctrl.UpdateFanSettings("fan1", req);
         Assert.IsType<BadRequestObjectResult>(result);
     }
+
+    // -----------------------------------------------------------------------
+    // v3.1.0 regression: GET /api/fans returns {fans:[...]} not bare array
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void GetFans_ReturnsWrappedObject_NotBareArray()
+    {
+        var result = _ctrl.GetFans();
+        var ok = Assert.IsType<OkObjectResult>(result);
+        var json = System.Text.Json.JsonSerializer.Serialize(ok.Value);
+        using var doc = System.Text.Json.JsonDocument.Parse(json);
+        Assert.True(doc.RootElement.TryGetProperty("fans", out var fansElem),
+            "GET /api/fans must return {fans:[...]} not a bare array");
+        Assert.Equal(System.Text.Json.JsonValueKind.Array, fansElem.ValueKind);
+    }
 }

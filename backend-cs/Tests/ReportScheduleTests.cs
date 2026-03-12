@@ -248,6 +248,40 @@ public sealed class ReportScheduleTests : IDisposable
         }, now));
     }
 
+    // -----------------------------------------------------------------------
+    // v3.1.0 regression: IsDue converts to schedule's local timezone
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void IsDue_NonUtcTimezone_ConvertsBeforeComparing()
+    {
+        // Schedule is set for 08:00 America/New_York (EST = UTC-5).
+        // At 13:00 UTC, local time is 08:00 ET — should fire.
+        var utcNow = new DateTimeOffset(2026, 1, 15, 13, 0, 0, TimeSpan.Zero);
+        Assert.True(ReportSchedulerService.IsDue(new ReportScheduleRecord
+        {
+            Frequency = "daily",
+            TimeUtc = "08:00",
+            Timezone = "America/New_York",
+            Enabled = true,
+        }, utcNow), "IsDue must convert to local timezone before comparing hour/minute");
+    }
+
+    [Fact]
+    public void IsDue_NonUtcTimezone_DoesNotFireAtUtcTime()
+    {
+        // Schedule is 08:00 America/New_York (UTC-5).
+        // At 08:00 UTC, local time is 03:00 ET — should NOT fire.
+        var utcNow = new DateTimeOffset(2026, 1, 15, 8, 0, 0, TimeSpan.Zero);
+        Assert.False(ReportSchedulerService.IsDue(new ReportScheduleRecord
+        {
+            Frequency = "daily",
+            TimeUtc = "08:00",
+            Timezone = "America/New_York",
+            Enabled = true,
+        }, utcNow), "IsDue must not fire at UTC time when schedule is in a different timezone");
+    }
+
     private sealed class FakeEmailNotificationService : EmailNotificationService
     {
         public bool NextResult { get; set; } = true;
