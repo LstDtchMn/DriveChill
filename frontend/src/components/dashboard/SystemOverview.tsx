@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { Cpu, Monitor, HardDrive, Thermometer, AlertTriangle, Settings2, ChevronUp, ChevronDown, RotateCcw } from 'lucide-react';
+import { Cpu, Monitor, HardDrive, Thermometer, AlertTriangle, Settings2, RotateCcw } from 'lucide-react';
+import { useDragReorder } from '@/hooks/useDragReorder';
 import { TempGauge } from './TempGauge';
 import { FanSpeedCard } from './FanSpeedCard';
 import { TempChart } from './TempChart';
@@ -36,20 +37,12 @@ function CustomizePanel({ widgets, onChange, onClose }: CustomizePanelProps) {
     onChange(widgets.map((w) => (w.type === type ? { ...w, visible: !w.visible } : w)));
   };
 
-  const move = (type: WidgetType, direction: -1 | 1) => {
-    const ordered = [...sorted];
-    const idx = ordered.findIndex((w) => w.type === type);
-    const swapIdx = idx + direction;
-    if (swapIdx < 0 || swapIdx >= ordered.length) return;
-
-    // Swap order values
-    const newWidgets = widgets.map((w) => {
-      if (w.type === ordered[idx].type) return { ...w, order: ordered[swapIdx].order };
-      if (w.type === ordered[swapIdx].type) return { ...w, order: ordered[idx].order };
-      return w;
-    });
-    onChange(newWidgets);
+  const handleReorder = (newItems: WidgetConfig[]) => {
+    const renumbered = newItems.map((w, i) => ({ ...w, order: i }));
+    onChange(renumbered);
   };
+
+  const { dragHandleProps, itemProps, dragIndex } = useDragReorder(sorted, handleReorder);
 
   const reset = () => onChange([...DEFAULT_WIDGETS]);
 
@@ -82,10 +75,16 @@ function CustomizePanel({ widgets, onChange, onClose }: CustomizePanelProps) {
         </div>
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-        {sorted.map((widget, idx) => (
+      {/* Screen-reader live region announces drag state */}
+      <div aria-live="polite" aria-atomic="true" className="sr-only">
+        {dragIndex !== null ? `Dragging widget ${dragIndex + 1} of ${sorted.length}. Use arrow keys to move, Enter to drop, Escape to cancel.` : ''}
+      </div>
+
+      <div data-drag-container aria-dropeffect="move" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {sorted.map((widget, i) => (
           <div
             key={widget.type}
+            {...itemProps(i)}
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -93,8 +92,24 @@ function CustomizePanel({ widgets, onChange, onClose }: CustomizePanelProps) {
               padding: '6px 8px',
               borderRadius: 6,
               background: 'var(--surface-200)',
+              ...itemProps(i).style,
             }}
           >
+            {/* Drag handle */}
+            <span
+              {...dragHandleProps(i)}
+              title="Drag to reorder"
+              style={{
+                fontSize: 16,
+                lineHeight: 1,
+                color: 'var(--text-secondary)',
+                flexShrink: 0,
+                userSelect: 'none',
+                ...dragHandleProps(i).style,
+              }}
+            >
+              ⠿
+            </span>
             <input
               type="checkbox"
               id={`widget-toggle-${widget.type}`}
@@ -113,26 +128,6 @@ function CustomizePanel({ widgets, onChange, onClose }: CustomizePanelProps) {
             >
               {getWidgetLabel(widget.type)}
             </label>
-            <div style={{ display: 'flex', gap: 2 }}>
-              <button
-                className="btn-secondary"
-                style={{ padding: '2px 4px', opacity: idx === 0 ? 0.3 : 1 }}
-                onClick={() => move(widget.type, -1)}
-                disabled={idx === 0}
-                title="Move up"
-              >
-                <ChevronUp size={14} />
-              </button>
-              <button
-                className="btn-secondary"
-                style={{ padding: '2px 4px', opacity: idx === sorted.length - 1 ? 0.3 : 1 }}
-                onClick={() => move(widget.type, 1)}
-                disabled={idx === sorted.length - 1}
-                title="Move down"
-              >
-                <ChevronDown size={14} />
-              </button>
-            </div>
           </div>
         ))}
       </div>
