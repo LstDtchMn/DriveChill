@@ -125,7 +125,7 @@ async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
 
   if (!res.ok) {
     // Dispatch auth/forbidden events only on actual errors
-    if (res.status === 401 && typeof window !== 'undefined') {
+    if (res.status === 401 && typeof window !== 'undefined' && !path.startsWith('/api/auth/logout')) {
       window.dispatchEvent(new Event('drivechill:auth-expired'));
     }
     if (res.status === 403 && typeof window !== 'undefined') {

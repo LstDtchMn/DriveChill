@@ -600,7 +600,8 @@ public sealed class FanService
                 toApply.Add((fanId, finalSpeed));
         }
 
-        // Apply speeds and record under write lock to avoid concurrent dictionary mutation
+        // Apply speeds and update _lastApplied atomically under _hwMutex to
+        // prevent a concurrent SetSpeed from reading stale pre-apply values.
         if (toApply.Count > 0)
         {
             _hwMutex.Wait();
@@ -608,16 +609,16 @@ public sealed class FanService
             {
                 foreach (var (fanId, speed) in toApply)
                     _hw.SetFanSpeed(fanId, speed);
+
+                _rwl.EnterWriteLock();
+                try
+                {
+                    foreach (var (fanId, speed) in toApply)
+                        _lastApplied[fanId] = speed;
+                }
+                finally { _rwl.ExitWriteLock(); }
             }
             finally { _hwMutex.Release(); }
-
-            _rwl.EnterWriteLock();
-            try
-            {
-                foreach (var (fanId, speed) in toApply)
-                    _lastApplied[fanId] = speed;
-            }
-            finally { _rwl.ExitWriteLock(); }
         }
 
         // Persist control sources

@@ -100,9 +100,10 @@ function HomeInner() {
         const session = await authApi.checkSession();
         setAuth(session.auth_required, session.authenticated, session.username, session.role);
       } catch {
-        // Backend unreachable — assume no auth required so the dashboard
-        // still renders and shows "Disconnected" rather than a login wall.
-        setAuth(false, true);
+        // Backend unreachable — show dashboard in read-only mode (no auth
+        // required, not authenticated) so it renders "Disconnected" rather
+        // than a login wall, but write controls remain gated.
+        setAuth(false, false);
       }
     };
     checkAuth();

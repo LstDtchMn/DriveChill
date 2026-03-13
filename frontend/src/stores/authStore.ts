@@ -27,5 +27,5 @@ export const useAuthStore = create<AuthState>((set) => ({
   setAuth: (authRequired, authenticated, username = null, role = 'admin') =>
     set({ authRequired, authenticated, username, role: role === 'viewer' ? 'viewer' : 'admin', checking: false }),
   setChecking: (v) => set({ checking: v }),
-  logout: () => set({ authenticated: false, username: null, role: 'admin' }),
+  logout: () => set({ authenticated: false, username: null, role: 'viewer' }),
 }));

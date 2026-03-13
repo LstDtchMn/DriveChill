@@ -79,6 +79,7 @@ class AlertService:
         self._last_triggered: dict[str, datetime] = {}  # per-rule cooldown tracking
         self._max_events = 500
         self._pending_tasks: set[asyncio.Task] = set()  # keeps fire-and-forget tasks alive
+        self._lock = asyncio.Lock()  # guards _rules, _active_alerts, _last_triggered mutations
 
         # Profile switching state
         self._activate_profile_fn: Callable[[str], Awaitable[None]] | None = None
@@ -150,13 +151,15 @@ class AlertService:
         """Persist and activate an alert rule, replacing any existing rule with the same ID."""
         await self._persist_rule(rule)
         # Only mutate in-memory state after the DB write succeeds.
-        self._rules = [r for r in self._rules if r.id != rule.id]
-        # Clear stale tracking so a replaced rule can fire immediately.
-        self._active_alerts.discard(rule.id)
-        self._last_triggered.pop(rule.id, None)
-        if rule.id in self._action_fired_order:
-            self._action_fired_order.remove(rule.id)
-        self._rules.append(rule)
+        # Lock prevents interleaving with check() across await boundaries.
+        async with self._lock:
+            self._rules = [r for r in self._rules if r.id != rule.id]
+            # Clear stale tracking so a replaced rule can fire immediately.
+            self._active_alerts.discard(rule.id)
+            self._last_triggered.pop(rule.id, None)
+            if rule.id in self._action_fired_order:
+                self._action_fired_order.remove(rule.id)
+            self._rules.append(rule)
 
     async def remove_rule(self, rule_id: str) -> bool:
         """Remove a rule by ID. Returns True if the rule existed, False otherwise."""
@@ -166,13 +169,14 @@ class AlertService:
         # Write to DB first so that if it fails, in-memory state stays consistent.
         await self._delete_rule(rule_id)
         if found and deleted_rule is not None:
-            self._rules = [r for r in self._rules if r.id != rule_id]
-            self._active_alerts.discard(rule_id)
-            self._last_triggered.pop(rule_id, None)
-            if rule_id in self._action_fired_order:
-                # Treat the deletion as a single-rule batch clear so _suppress_revert
-                # is recomputed correctly from remaining active rules.
-                self._handle_batch_action_clear([deleted_rule])
+            async with self._lock:
+                self._rules = [r for r in self._rules if r.id != rule_id]
+                self._active_alerts.discard(rule_id)
+                self._last_triggered.pop(rule_id, None)
+                if rule_id in self._action_fired_order:
+                    # Treat the deletion as a single-rule batch clear so _suppress_revert
+                    # is recomputed correctly from remaining active rules.
+                    self._handle_batch_action_clear([deleted_rule])
         return found
 
     def set_rules(self, rules: list[AlertRule]) -> None:

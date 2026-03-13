@@ -346,9 +346,14 @@ public sealed class MachinesController : ControllerBase
             IPAddress lockedIp;
             if (_settings.AllowPrivateOutboundTargets)
             {
-                var addrs = await Dns.GetHostAddressesAsync(originalHost, ct);
+                IPAddress[] addrs;
+                try { addrs = await Dns.GetHostAddressesAsync(originalHost, ct); }
+                catch (SocketException)
+                {
+                    throw new InvalidOperationException($"Cannot resolve host for machine.");
+                }
                 lockedIp = addrs.FirstOrDefault()
-                           ?? throw new InvalidOperationException($"Cannot resolve host '{originalHost}'.");
+                           ?? throw new InvalidOperationException($"Cannot resolve host for machine.");
             }
             else
             {
