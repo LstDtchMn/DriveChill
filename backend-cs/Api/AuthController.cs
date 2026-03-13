@@ -167,13 +167,20 @@ public sealed class AuthController : ControllerBase
         if (req.Role != "admin" && req.Role != "viewer")
             return BadRequest(new { detail = "role must be 'admin' or 'viewer'" });
 
-        // Prevent demoting the last admin to viewer — same lockout risk as deletion.
+        // Atomic last-admin demotion guard to prevent TOCTOU race.
         if (req.Role == "viewer")
         {
-            var user = await _db.GetUserByIdAsync(userId, ct);
-            if (user is null) return NotFound(new { detail = "User not found" });
-            if (user.Role == "admin" && await _db.CountAdminUsersAsync(ct) <= 1)
+            var demoted = await _db.DemoteUserIfNotLastAdminAsync(userId, ct);
+            if (!demoted)
+            {
+                // Check if user exists to distinguish "not found" from "last admin"
+                var user = await _db.GetUserByIdAsync(userId, ct);
+                if (user is null) return NotFound(new { detail = "User not found" });
                 return Conflict(new { detail = "Cannot demote the last admin user" });
+            }
+            var ip2 = HttpContext.Connection.RemoteIpAddress?.ToString();
+            LogAuthEvent("user_role_changed", ip2, null, "success", $"user_id={userId} role=viewer");
+            return Ok(new { success = true });
         }
 
         var updated = await _db.SetUserRoleAsync(userId, req.Role, ct);
@@ -209,9 +216,13 @@ public sealed class AuthController : ControllerBase
         if (!await IsAdminSessionAsync(ct)) return Forbid403("Admin role required");
         var user = await _db.GetUserByIdAsync(userId, ct);
         if (user is null) return NotFound(new { detail = "User not found" });
-        if (user.Role == "admin" && await _db.CountAdminUsersAsync(ct) <= 1)
+        // Atomic last-admin guard: delete only if not the sole admin.
+        // Prevents TOCTOU race between CountAdminUsersAsync and DeleteUserAsync.
+        var deleted = user.Role == "admin"
+            ? await _db.DeleteUserIfNotLastAdminAsync(userId, ct)
+            : await _db.DeleteUserAsync(userId, ct);
+        if (!deleted)
             return Conflict(new { detail = "Cannot delete the last admin user" });
-        await _db.DeleteUserAsync(userId, ct);
         var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
         LogAuthEvent("user_deleted", ip, user.Username, "success", $"user_id={userId}");
         return Ok(new { success = true });

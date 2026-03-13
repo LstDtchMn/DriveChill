@@ -180,19 +180,27 @@ class AuthService:
     async def set_user_role(self, user_id: int, role: str) -> bool:
         if role not in ("admin", "viewer"):
             raise ValueError(f"Invalid role: {role}")
-        # Prevent demoting the last admin to viewer — same lockout risk as deletion.
+        # Atomic demotion guard: only demote if more than one admin remains.
+        # Uses a conditional UPDATE to avoid TOCTOU race between count and update.
         if role == "viewer":
-            cur = await self._db.execute(
-                "SELECT COALESCE(role, 'admin') FROM users WHERE id = ?", (user_id,)
+            cursor = await self._db.execute(
+                "UPDATE users SET role = ?, updated_at = datetime('now') "
+                "WHERE id = ? AND ("
+                "  COALESCE((SELECT role FROM users WHERE id = ?), 'admin') != 'admin' "
+                "  OR (SELECT COUNT(*) FROM users WHERE COALESCE(role, 'admin') = 'admin') > 1"
+                ")",
+                (role, user_id, user_id),
             )
-            target = await cur.fetchone()
-            if target and target[0] == "admin":
-                count_cur = await self._db.execute(
-                    "SELECT COUNT(*) FROM users WHERE COALESCE(role, 'admin') = 'admin'"
+            await self._db.commit()
+            if cursor.rowcount == 0:
+                # Check if user exists — if yes, they were the last admin
+                exists = await self._db.execute(
+                    "SELECT 1 FROM users WHERE id = ?", (user_id,)
                 )
-                count_row = await count_cur.fetchone()
-                if count_row[0] <= 1:
+                if await exists.fetchone():
                     raise ValueError("Cannot demote the last admin user")
+                return False
+            return True
         cursor = await self._db.execute(
             "UPDATE users SET role = ?, updated_at = datetime('now') WHERE id = ?",
             (role, user_id),
@@ -201,24 +209,26 @@ class AuthService:
         return cursor.rowcount > 0
 
     async def delete_user(self, user_id: int) -> bool:
-        # Prevent deleting the last admin
-        cursor = await self._db.execute(
-            "SELECT COUNT(*) FROM users WHERE COALESCE(role, 'admin') = 'admin'"
-        )
-        row = await cursor.fetchone()
-        admin_count = row[0]
-
-        # Check if target is an admin and resolve username for session invalidation
+        # Check if target exists
         cursor2 = await self._db.execute(
-            "SELECT COALESCE(role, 'admin'), username FROM users WHERE id = ?", (user_id,)
+            "SELECT COALESCE(role, 'admin') FROM users WHERE id = ?", (user_id,)
         )
         target = await cursor2.fetchone()
         if not target:
             return False
-        if target[0] == "admin" and admin_count <= 1:
-            raise ValueError("Cannot delete the last admin user")
 
-        cursor3 = await self._db.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        # Atomic delete: refuse to delete the last admin in a single statement
+        # to avoid TOCTOU race between the count check and the delete.
+        if target[0] == "admin":
+            cursor3 = await self._db.execute(
+                "DELETE FROM users WHERE id = ? AND "
+                "(SELECT COUNT(*) FROM users WHERE COALESCE(role, 'admin') = 'admin') > 1",
+                (user_id,),
+            )
+        else:
+            cursor3 = await self._db.execute(
+                "DELETE FROM users WHERE id = ?", (user_id,),
+            )
         await self._db.commit()
         if cursor3.rowcount > 0:
             # Invalidate all active sessions belonging to the deleted user
@@ -226,6 +236,9 @@ class AuthService:
             await self._db.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
             await self._db.commit()
             return True
+        # If we tried to delete an admin and rowcount is 0, they were the last admin
+        if target[0] == "admin":
+            raise ValueError("Cannot delete the last admin user")
         return False
 
     # --- API keys ---

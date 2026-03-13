@@ -307,8 +307,8 @@ public sealed class SettingsController : ControllerBase
                 MaxRetries          = whNode.TryGetProperty("max_retries", out var whMr) && whMr.TryGetInt32(out var mrv) ? mrv : 2,
                 RetryBackoffSeconds = whNode.TryGetProperty("retry_backoff_seconds", out var whRb) && whRb.TryGetDouble(out var rbv) ? rbv : 1.0,
             };
-            try { await _webhooks.UpdateConfigAsync(cfg); } catch { /* skip invalid config */ }
-            imported["webhook_config"] = 1;
+            try { await _webhooks.UpdateConfigAsync(cfg); imported["webhook_config"] = 1; }
+            catch { imported["webhook_config"] = 0; }
         }
 
         // --- Notification channels ---

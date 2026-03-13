@@ -290,11 +290,24 @@ async def import_config(request: Request):
     # --- Quiet hours ---
     if "quiet_hours" in body:
         # Validate all entries before deleting to prevent partial-commit data loss
+        import re
+        _TIME_RE = re.compile(r"^\d{2}:\d{2}$")
         validated_qh = []
         for qh in body["quiet_hours"]:
+            dow = qh.get("day_of_week")
+            start = qh.get("start_time")
+            end = qh.get("end_time")
+            pid = qh.get("profile_id")
+            if not isinstance(dow, int) or dow < 0 or dow > 6:
+                raise HTTPException(422, detail="quiet_hours: day_of_week must be int 0-6")
+            if not isinstance(start, str) or not _TIME_RE.match(start):
+                raise HTTPException(422, detail="quiet_hours: start_time must be HH:MM")
+            if not isinstance(end, str) or not _TIME_RE.match(end):
+                raise HTTPException(422, detail="quiet_hours: end_time must be HH:MM")
+            if not isinstance(pid, str) or len(pid) > 200:
+                raise HTTPException(422, detail="quiet_hours: profile_id must be a string (max 200)")
             validated_qh.append((
-                qh["day_of_week"], qh["start_time"], qh["end_time"],
-                qh["profile_id"], int(qh.get("enabled", True)),
+                dow, start, end, pid, int(qh.get("enabled", True)),
             ))
         await db.execute("DELETE FROM quiet_hours")
         for row in validated_qh:

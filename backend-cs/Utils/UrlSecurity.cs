@@ -189,6 +189,11 @@ public static class UrlSecurity
 
     private static bool IsPrivate(IPAddress ip)
     {
+        // Unwrap IPv4-mapped IPv6 addresses (e.g., ::ffff:192.168.1.1) so the
+        // IPv4 private-range checks below are not bypassed via the IPv6 path.
+        if (ip.IsIPv4MappedToIPv6)
+            ip = ip.MapToIPv4();
+
         if (ip.AddressFamily == AddressFamily.InterNetworkV6)
         {
             if (ip.IsIPv6LinkLocal || ip.IsIPv6SiteLocal) return true;

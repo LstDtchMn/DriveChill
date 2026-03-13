@@ -3,10 +3,17 @@
 import { useState, useEffect } from 'react';
 import { X, Sparkles } from 'lucide-react';
 
-const APP_VERSION = '2.1.0';
+const APP_VERSION = '3.6.0';
 const STORAGE_KEY = 'drivechill_changelog_dismissed';
 
 const CHANGELOG: Record<string, string[]> = {
+  '3.6.0': [
+    'MQTT notification channels: structured config form (broker URL, QoS, retain, telemetry)',
+    'Machine health check: "Check Now" button with latency display',
+    'Analytics: period comparison cards (24h vs previous 24h) and interactive trend charts',
+    'Hardware mutex: serialised fan-speed writes prevent concurrent I/O races',
+    'Audit test coverage: 29 new tests for internal auth, profile seeding, session TTL',
+  ],
   '2.1.0': [
     'Temperature Targets: set a target temp for any drive and auto-control linked fans',
     'Relationship Map: visual SVG diagram of drive-to-fan connections with thermal-state colours',

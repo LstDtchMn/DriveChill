@@ -268,35 +268,46 @@ async def get_stats(
     """
 
     db = request.app.state.db
-    # Accumulate per-sensor: values are already sorted by ORDER BY
+    # Two-pass approach: first get counts per sensor, then stream values to
+    # compute p95 at the correct index.  This avoids materialising all values
+    # in memory (which could be 200+ MB for 30-day windows).
+    count_sql = f"""
+        SELECT sensor_id, sensor_name, sensor_type, unit,
+               MIN(CAST(value AS REAL)), MAX(CAST(value AS REAL)),
+               AVG(CAST(value AS REAL)), COUNT(*)
+        FROM sensor_log
+        WHERE timestamp >= ? AND timestamp <= ?
+          {sensor_clause}
+        GROUP BY sensor_id
+    """
     accum: dict[str, dict] = {}
+    async with db.execute(count_sql, base_params) as cursor:
+        async for row in cursor:
+            sid = row[0]
+            cnt = row[7]
+            accum[sid] = {
+                "sensor_name": row[1], "sensor_type": row[2], "unit": row[3],
+                "min_value": row[4], "max_value": row[5],
+                "avg_value": row[6], "count": cnt,
+                "p95_idx": min(int(cnt * 0.95), cnt - 1) if cnt > 0 else 0,
+                "p95_value": None, "_seen": 0,
+            }
+
+    # Stream sorted values to find p95 at the pre-computed index.
+    # O(1) memory per sensor — only store the p95 value when the cursor
+    # reaches the target index.
     async with db.execute(single_sql, base_params) as cursor:
         async for row in cursor:
             sid = row[0]
-            val = row[4]
-            if sid not in accum:
-                accum[sid] = {
-                    "sensor_name": row[1], "sensor_type": row[2], "unit": row[3],
-                    "min_value": val, "max_value": val, "sum": 0.0,
-                    "count": 0, "values": [],
-                }
-            acc = accum[sid]
-            if val < acc["min_value"]:
-                acc["min_value"] = val
-            if val > acc["max_value"]:
-                acc["max_value"] = val
-            acc["sum"] += val
-            acc["count"] += 1
-            acc["values"].append(val)
+            acc = accum.get(sid)
+            if acc is None:
+                continue
+            if acc["_seen"] == acc["p95_idx"]:
+                acc["p95_value"] = row[4]
+            acc["_seen"] += 1
 
     stats = []
     for sid, acc in accum.items():
-        vals = acc["values"]
-        p95_value: float | None = None
-        if vals:
-            idx = min(int(len(vals) * 0.95), len(vals) - 1)
-            p95_value = vals[idx]
-        count = acc["count"]
         stats.append({
             "sensor_id": sid,
             "sensor_name": acc["sensor_name"],
@@ -304,12 +315,13 @@ async def get_stats(
             "unit": acc["unit"],
             "min_value": acc["min_value"],
             "max_value": acc["max_value"],
-            "avg_value": acc["sum"] / max(1, count),
-            "p95_value": p95_value,
-            "sample_count": count,
+            "avg_value": acc["avg_value"],
+            "p95_value": acc["p95_value"],
+            "sample_count": acc["count"],
         })
 
-    # Returned range: actual data extent
+    # Returned range: actual data extent (from the aggregate query above,
+    # we can derive from the stats, but we need the timestamp extent).
     first_row_ts_sql = f"""
         SELECT MIN(timestamp), MAX(timestamp)
         FROM sensor_log

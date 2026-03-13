@@ -69,8 +69,10 @@ public sealed class NotificationsController : ControllerBase
             SmtpHost      = body.TryGetProperty("smtp_host",      out var sh)   ? (sh.GetString() ?? current.SmtpHost)      : current.SmtpHost,
             SmtpPort      = smtpPort,
             SmtpUsername  = body.TryGetProperty("smtp_username",  out var su)   ? (su.GetString() ?? current.SmtpUsername)  : current.SmtpUsername,
-            // Only update password when the field is explicitly present in the payload.
-            SmtpPassword  = body.TryGetProperty("smtp_password",  out var spw)  ? (spw.GetString() ?? "")                  : current.SmtpPassword,
+            // Only update password when the field is explicitly present and non-null.
+            SmtpPassword  = body.TryGetProperty("smtp_password",  out var spw) && spw.ValueKind != System.Text.Json.JsonValueKind.Null
+                ? (spw.GetString() ?? current.SmtpPassword)
+                : current.SmtpPassword,
             SenderAddress = body.TryGetProperty("sender_address", out var sa)   ? (sa.GetString() ?? current.SenderAddress) : current.SenderAddress,
             RecipientList = body.TryGetProperty("recipient_list", out var rl)   ? JsonSerializer.Serialize(rl) : current.RecipientList,
             UseTls        = body.TryGetProperty("use_tls",        out var tls)  ? tls.GetBoolean()  : current.UseTls,

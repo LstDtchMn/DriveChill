@@ -434,12 +434,18 @@ export function SettingsPage() {
     }
   };
 
-  const handleSetUserRole = async (userId: number, role: string) => {
+  const handleSetUserRole = async (userId: number, role: string, username: string) => {
+    const action = role === 'viewer' ? 'Demote' : 'Promote';
+    if (!(await confirm({ message: `${action} user "${username}" to ${role}?` }))) {
+      await fetchUsers(); // revert the select to its original value
+      return;
+    }
     try {
       await authApi.setUserRole(userId, role);
       await fetchUsers();
     } catch {
       toast('Failed to update role.', 'error');
+      await fetchUsers(); // revert on failure
     }
   };
 
@@ -1299,7 +1305,7 @@ export function SettingsPage() {
                 <div className="flex items-center gap-2">
                   <select
                     value={u.role}
-                    onChange={(e) => handleSetUserRole(u.id, e.target.value)}
+                    onChange={(e) => handleSetUserRole(u.id, e.target.value, u.username)}
                     className="text-xs rounded border px-1 py-1 outline-none"
                     style={{ background: 'var(--bg)', borderColor: 'var(--border)', color: 'var(--text)' }}
                   >

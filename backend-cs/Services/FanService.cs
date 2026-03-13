@@ -240,25 +240,26 @@ public sealed class FanService
             if (!_sensorPanic)
             {
                 _sensorPanic = true;
+                // Lock order: _rwl → _hwMutex (consistent with SetSpeed/ApplyCurvesAsync)
+                var fanIds = _hw.GetFanIds();
+                _rwl.EnterWriteLock();
+                try
+                {
+                    foreach (var fanId in fanIds)
+                        _lastApplied[fanId] = 100;
+                }
+                finally { _rwl.ExitWriteLock(); }
                 _hwMutex.Wait();
                 try
                 {
-                    _rwl.EnterWriteLock();
-                    try
-                    {
-                        foreach (var fanId in _hw.GetFanIds())
-                        {
-                            _hw.SetFanSpeed(fanId, 100);
-                            _lastApplied[fanId] = 100;
-                        }
-                    }
-                    finally { _rwl.ExitWriteLock(); }
+                    foreach (var fanId in fanIds)
+                        _hw.SetFanSpeed(fanId, 100);
                 }
                 finally { _hwMutex.Release(); }
                 lock (_controlSourcesLock)
                 {
                     _controlSources.Clear();
-                    foreach (var fanId in _hw.GetFanIds())
+                    foreach (var fanId in fanIds)
                         _controlSources[fanId] = "panic_sensor";
                 }
             }
@@ -284,25 +285,26 @@ public sealed class FanService
         if (shouldPanic && !_tempPanic)
         {
             _tempPanic = true;
+            // Lock order: _rwl → _hwMutex (consistent with SetSpeed/ApplyCurvesAsync)
+            var panicFanIds = _hw.GetFanIds();
+            _rwl.EnterWriteLock();
+            try
+            {
+                foreach (var fanId in panicFanIds)
+                    _lastApplied[fanId] = 100;
+            }
+            finally { _rwl.ExitWriteLock(); }
             _hwMutex.Wait();
             try
             {
-                _rwl.EnterWriteLock();
-                try
-                {
-                    foreach (var fanId in _hw.GetFanIds())
-                    {
-                        _hw.SetFanSpeed(fanId, 100);
-                        _lastApplied[fanId] = 100;
-                    }
-                }
-                finally { _rwl.ExitWriteLock(); }
+                foreach (var fanId in panicFanIds)
+                    _hw.SetFanSpeed(fanId, 100);
             }
             finally { _hwMutex.Release(); }
             lock (_controlSourcesLock)
             {
                 _controlSources.Clear();
-                foreach (var fanId in _hw.GetFanIds())
+                foreach (var fanId in panicFanIds)
                     _controlSources[fanId] = "panic_temp";
             }
         }

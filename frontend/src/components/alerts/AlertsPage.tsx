@@ -26,6 +26,7 @@ export function AlertsPage() {
   const [newActionRevert, setNewActionRevert] = useState(true);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
   const allTempSensors = [...cpuTemps, ...gpuTemps, ...hddTemps, ...caseTemps];
 
@@ -52,7 +53,8 @@ export function AlertsPage() {
   }, [addAlertEvents, setActiveAlerts]);
 
   const handleAddRule = async () => {
-    if (!newSensorId) return;
+    if (!newSensorId || saving) return;
+    setSaving(true);
     // Backend stores thresholds in Celsius — convert if user entered °F
     const thresholdC = tempUnit === 'F' ? Math.round(fToC(newThreshold)) : newThreshold;
     const action: AlertAction | null = newActionEnabled && newActionProfileId
@@ -82,6 +84,8 @@ export function AlertsPage() {
       setNewActionRevert(true);
     } catch (e: any) {
       setError(e?.message || 'Failed to add rule');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -185,7 +189,7 @@ export function AlertsPage() {
                 />
               </div>
               <div className="flex items-end gap-2">
-                <button onClick={handleAddRule} className="btn-primary min-h-11 text-sm flex-1">Add</button>
+                <button onClick={handleAddRule} disabled={saving} className="btn-primary min-h-11 text-sm flex-1">{saving ? 'Adding…' : 'Add'}</button>
                 <button onClick={() => setShowAddForm(false)} className="btn-secondary min-h-11 text-sm p-2">
                   <X size={16} />
                 </button>

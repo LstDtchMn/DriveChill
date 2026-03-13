@@ -21,7 +21,7 @@ export const useAuthStore = create<AuthState>((set) => ({
   authRequired: false,
   authenticated: false,
   username: null,
-  role: 'admin',
+  role: 'viewer',  // safe-fail: default to viewer until auth check completes
   checking: true,
 
   setAuth: (authRequired, authenticated, username = null, role = 'admin') =>

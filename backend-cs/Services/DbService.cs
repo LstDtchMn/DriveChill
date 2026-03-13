@@ -1917,6 +1917,24 @@ public sealed class DbService : IDisposable
         return await cmd.ExecuteNonQueryAsync(ct) > 0;
     }
 
+    /// <summary>
+    /// Atomically demote a user to viewer only if they are not the last admin.
+    /// Returns false if user not found or is the sole admin.
+    /// </summary>
+    public async Task<bool> DemoteUserIfNotLastAdminAsync(long userId, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText =
+            "UPDATE users SET role = 'viewer' WHERE id = $id " +
+            "AND (COALESCE(role,'admin') != 'admin' " +
+            "  OR (SELECT COUNT(*) FROM users WHERE COALESCE(role,'admin') = 'admin') > 1)";
+        cmd.Parameters.AddWithValue("$id", userId);
+        return await cmd.ExecuteNonQueryAsync(ct) > 0;
+    }
+
     public async Task<bool> SetUserPasswordAsync(long userId, string passwordHash, CancellationToken ct = default)
     {
         await EnsureInitialisedAsync(ct);
@@ -1986,6 +2004,44 @@ public sealed class DbService : IDisposable
         if (deleted)
         {
             // Invalidate all active sessions belonging to the deleted user.
+            await using var sessionCmd = conn.CreateCommand();
+            sessionCmd.CommandText = "DELETE FROM sessions WHERE username = $u";
+            sessionCmd.Parameters.AddWithValue("$u", username);
+            await sessionCmd.ExecuteNonQueryAsync(ct);
+        }
+
+        await txn.CommitAsync(ct);
+        return deleted;
+    }
+
+    /// <summary>
+    /// Atomically delete a user only if they are not the last admin.
+    /// Returns false (without deleting) if the user is the sole remaining admin.
+    /// </summary>
+    public async Task<bool> DeleteUserIfNotLastAdminAsync(long userId, CancellationToken ct = default)
+    {
+        await EnsureInitialisedAsync(ct);
+        await using var conn = new SqliteConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var txn = await conn.BeginTransactionAsync(ct);
+
+        // Resolve username for session invalidation.
+        await using var getUserCmd = conn.CreateCommand();
+        getUserCmd.CommandText = "SELECT username FROM users WHERE id = $id";
+        getUserCmd.Parameters.AddWithValue("$id", userId);
+        var username = await getUserCmd.ExecuteScalarAsync(ct) as string;
+        if (username is null) { await txn.CommitAsync(ct); return false; }
+
+        // Atomic: delete only if more than one admin exists.
+        await using var deleteCmd = conn.CreateCommand();
+        deleteCmd.CommandText =
+            "DELETE FROM users WHERE id = $id " +
+            "AND (SELECT COUNT(*) FROM users WHERE COALESCE(role,'admin') = 'admin') > 1";
+        deleteCmd.Parameters.AddWithValue("$id", userId);
+        var deleted = await deleteCmd.ExecuteNonQueryAsync(ct) > 0;
+
+        if (deleted)
+        {
             await using var sessionCmd = conn.CreateCommand();
             sessionCmd.CommandText = "DELETE FROM sessions WHERE username = $u";
             sessionCmd.Parameters.AddWithValue("$u", username);
