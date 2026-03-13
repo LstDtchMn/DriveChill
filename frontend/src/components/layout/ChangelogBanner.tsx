@@ -3,10 +3,15 @@
 import { useState, useEffect } from 'react';
 import { X, Sparkles } from 'lucide-react';
 
-const APP_VERSION = '3.7.0';
+const APP_VERSION = '3.8.0';
 const STORAGE_KEY = 'drivechill_changelog_dismissed';
 
 const CHANGELOG: Record<string, string[]> = {
+  '3.8.0': [
+    'Schedule calendar view on Fan Curves page',
+    'Dashboard drag-and-drop widget reordering',
+    'DNS rebinding SSRF protection (Python backend)',
+  ],
   '3.7.0': [
     'Concurrency fixes: TOCTOU-safe last-admin guard, ramp-state write lock, constant-time auth comparison',
     'SSRF hardening: IPv4-mapped IPv6 bypass blocked in URL security validator',
