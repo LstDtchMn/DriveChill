@@ -274,13 +274,16 @@ async def get_stats(
     count_sql = f"""
         SELECT sensor_id, sensor_name, sensor_type, unit,
                MIN(CAST(value AS REAL)), MAX(CAST(value AS REAL)),
-               AVG(CAST(value AS REAL)), COUNT(*)
+               AVG(CAST(value AS REAL)), COUNT(*),
+               MIN(timestamp), MAX(timestamp)
         FROM sensor_log
         WHERE timestamp >= ? AND timestamp <= ?
           {sensor_clause}
         GROUP BY sensor_id
     """
     accum: dict[str, dict] = {}
+    global_min_ts: str | None = None
+    global_max_ts: str | None = None
     async with db.execute(count_sql, base_params) as cursor:
         async for row in cursor:
             sid = row[0]
@@ -292,6 +295,11 @@ async def get_stats(
                 "p95_idx": min(int(cnt * 0.95), cnt - 1) if cnt > 0 else 0,
                 "p95_value": None, "_seen": 0,
             }
+            if row[8] is not None:
+                if global_min_ts is None or row[8] < global_min_ts:
+                    global_min_ts = row[8]
+                if global_max_ts is None or row[9] > global_max_ts:
+                    global_max_ts = row[9]
 
     # Stream sorted values to find p95 at the pre-computed index.
     # O(1) memory per sensor — only store the p95 value when the cursor
@@ -320,21 +328,13 @@ async def get_stats(
             "sample_count": acc["count"],
         })
 
-    # Returned range: actual data extent (from the aggregate query above,
-    # we can derive from the stats, but we need the timestamp extent).
-    first_row_ts_sql = f"""
-        SELECT MIN(timestamp), MAX(timestamp)
-        FROM sensor_log
-        WHERE timestamp >= ? AND timestamp <= ?
-          {sensor_clause}
-    """
-    extent_row = (await _fetchall_as_dicts(db, first_row_ts_sql, base_params))
+    # Returned range: derived from MIN/MAX(timestamp) in the aggregate query above.
     returned_start = start_dt
     returned_end = end_dt
-    if extent_row and extent_row[0]["MIN(timestamp)"]:
+    if global_min_ts is not None:
         try:
-            returned_start = datetime.fromisoformat(extent_row[0]["MIN(timestamp)"]).replace(tzinfo=timezone.utc)
-            returned_end = datetime.fromisoformat(extent_row[0]["MAX(timestamp)"]).replace(tzinfo=timezone.utc)
+            returned_start = datetime.fromisoformat(global_min_ts).replace(tzinfo=timezone.utc)
+            returned_end = datetime.fromisoformat(global_max_ts).replace(tzinfo=timezone.utc)  # type: ignore[arg-type]
         except (ValueError, KeyError):
             pass
 

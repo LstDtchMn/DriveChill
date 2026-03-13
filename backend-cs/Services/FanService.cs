@@ -36,7 +36,8 @@ public sealed class FanService
     // Hysteresis state keyed by (fanId, sensorId)
     private readonly Dictionary<(string fanId, string sensorId), HysteresisState> _hyst = new();
 
-    // Ramp-rate limiting state
+    // Ramp-rate limiting state — guarded by _rwl (write during ApplyCurvesAsync,
+    // which already holds _rwl at the relevant points).
     private readonly Dictionary<string, double> _rampState = new();
     private readonly Stopwatch _rampStopwatch = Stopwatch.StartNew();
     private long _lastTickMs;
@@ -561,25 +562,30 @@ public sealed class FanService
         var prevMs = Interlocked.Exchange(ref _lastTickMs, nowMs);
         var elapsedSec = (prevMs > 0) ? (nowMs - prevMs) / 1000.0 : 0.0;
 
-        if (rampRate > 0 && elapsedSec > 0)
+        _rwl.EnterWriteLock();
+        try
         {
-            var maxDelta = rampRate * elapsedSec;
-            foreach (var fanId in allSpeeds.Keys.ToList())
+            if (rampRate > 0 && elapsedSec > 0)
             {
-                if (_rampState.TryGetValue(fanId, out var prev))
+                var maxDelta = rampRate * elapsedSec;
+                foreach (var fanId in allSpeeds.Keys.ToList())
                 {
-                    var target = allSpeeds[fanId];
-                    if (target > prev)
-                        allSpeeds[fanId] = Math.Min(target, prev + maxDelta);
-                    else if (target < prev)
-                        allSpeeds[fanId] = Math.Max(target, prev - maxDelta);
+                    if (_rampState.TryGetValue(fanId, out var prev))
+                    {
+                        var target = allSpeeds[fanId];
+                        if (target > prev)
+                            allSpeeds[fanId] = Math.Min(target, prev + maxDelta);
+                        else if (target < prev)
+                            allSpeeds[fanId] = Math.Max(target, prev - maxDelta);
+                    }
                 }
             }
-        }
 
-        // Track ramp state for next tick
-        foreach (var (fanId, speed) in allSpeeds)
-            _rampState[fanId] = speed;
+            // Track ramp state for next tick
+            foreach (var (fanId, speed) in allSpeeds)
+                _rampState[fanId] = speed;
+        }
+        finally { _rwl.ExitWriteLock(); }
 
         // Determine which fans actually need a hardware update (delta check)
         List<(string fanId, double speed)> toApply = [];

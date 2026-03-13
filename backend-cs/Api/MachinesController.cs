@@ -31,6 +31,19 @@ public sealed class MachinesController : ControllerBase
     /// </summary>
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> _creationLocks = new();
 
+    /// <summary>
+    /// Drain and return all pooled HttpClient instances for disposal on shutdown.
+    /// </summary>
+    internal static IEnumerable<HttpClient> DrainClientPool()
+    {
+        var keys = _clientPool.Keys.ToList();
+        foreach (var key in keys)
+        {
+            if (_clientPool.TryRemove(key, out var client))
+                yield return client;
+        }
+    }
+
     public MachinesController(DbService db, AppSettings settings)
     {
         _db       = db;

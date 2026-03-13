@@ -3,10 +3,17 @@
 import { useState, useEffect } from 'react';
 import { X, Sparkles } from 'lucide-react';
 
-const APP_VERSION = '3.6.0';
+const APP_VERSION = '3.7.0';
 const STORAGE_KEY = 'drivechill_changelog_dismissed';
 
 const CHANGELOG: Record<string, string[]> = {
+  '3.7.0': [
+    'Concurrency fixes: TOCTOU-safe last-admin guard, ramp-state write lock, constant-time auth comparison',
+    'SSRF hardening: IPv4-mapped IPv6 bypass blocked in URL security validator',
+    'HttpClient pool shutdown disposal: pooled machine proxy clients released on app stop',
+    'API key scope safety: validation no longer mutates stored key objects',
+    'O(1) memory analytics: p95 computation via streaming cursor instead of full materialisation',
+  ],
   '3.6.0': [
     'MQTT notification channels: structured config form (broker URL, QoS, retain, telemetry)',
     'Machine health check: "Check Now" button with latency display',

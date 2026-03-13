@@ -111,19 +111,37 @@ public sealed class ApiKeyService
                 k => k.RevokedAt == null && FixedTimeEqualsUtf8(k.KeyHash, hash)
             );
             if (key == null) return null;
-            if (key.Scopes == null || key.Scopes.Count == 0)
-                key.Scopes = ["read:sensors"];
+
+            // Return a shallow copy with effective scopes so we never mutate
+            // the in-memory stored object (which is not persisted here).
+            var effectiveScopes = key.Scopes is { Count: > 0 }
+                ? key.Scopes
+                : new List<string> { "read:sensors" };
+
+            var result = new ApiKeyRecord
+            {
+                Id         = key.Id,
+                Name       = key.Name,
+                KeyPrefix  = key.KeyPrefix,
+                KeyHash    = key.KeyHash,
+                Scopes     = effectiveScopes,
+                Role       = key.Role,
+                CreatedBy  = key.CreatedBy,
+                CreatedAt  = key.CreatedAt,
+                RevokedAt  = key.RevokedAt,
+            };
 
             // Buffer the LastUsedAt update instead of flushing to disk on every call.
             var now = DateTimeOffset.UtcNow.ToString("o");
             key.LastUsedAt = now;
+            result.LastUsedAt = now;
             _pendingLastUsed[key.Id] = now;
 
             // Flush buffered updates periodically (every 60s).
             if (DateTimeOffset.UtcNow - _lastFlush > FlushInterval)
                 FlushPendingLastUsed(data);
 
-            return key;
+            return result;
         }
     }
 

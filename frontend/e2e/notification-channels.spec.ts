@@ -25,9 +25,9 @@ test.describe('Notification Channels (MQTT structured form)', () => {
 
   test('notification channels section is visible', async ({ page }) => {
     // Navigate to the infra tab if tabbed layout
-    const infraTab = page.getByRole('button', { name: /infra/i }).first();
-    if (await infraTab.isVisible({ timeout: 3_000 }).catch(() => false)) {
-      await infraTab.click();
+    const notificationsTab = page.getByRole('button', { name: /notifications/i }).first();
+    if (await notificationsTab.isVisible({ timeout: 3_000 }).catch(() => false)) {
+      await notificationsTab.click();
     }
 
     const heading = page.getByText(/notification channels/i).first();
@@ -36,9 +36,9 @@ test.describe('Notification Channels (MQTT structured form)', () => {
 
   test('MQTT type shows structured form fields instead of JSON textarea', async ({ page }) => {
     // Navigate to infra tab
-    const infraTab = page.getByRole('button', { name: /infra/i }).first();
-    if (await infraTab.isVisible({ timeout: 3_000 }).catch(() => false)) {
-      await infraTab.click();
+    const notificationsTab = page.getByRole('button', { name: /notifications/i }).first();
+    if (await notificationsTab.isVisible({ timeout: 3_000 }).catch(() => false)) {
+      await notificationsTab.click();
     }
 
     // Wait for notification channels section
@@ -69,9 +69,9 @@ test.describe('Notification Channels (MQTT structured form)', () => {
   });
 
   test('switching from MQTT to Discord shows JSON textarea', async ({ page }) => {
-    const infraTab = page.getByRole('button', { name: /infra/i }).first();
-    if (await infraTab.isVisible({ timeout: 3_000 }).catch(() => false)) {
-      await infraTab.click();
+    const notificationsTab = page.getByRole('button', { name: /notifications/i }).first();
+    if (await notificationsTab.isVisible({ timeout: 3_000 }).catch(() => false)) {
+      await notificationsTab.click();
     }
 
     await expect(page.getByText(/notification channels/i).first()).toBeVisible({ timeout: 10_000 });

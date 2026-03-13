@@ -62,6 +62,7 @@ export function FanCurvesPage() {
   const [editingPoints, setEditingPoints] = useState<FanCurvePoint[]>(DEFAULT_POINTS);
   const [editorSize, setEditorSize] = useState({ width: 500, height: 300 });
   const [curvesLoaded, setCurvesLoaded] = useState(false);
+  const [savingCurve, setSavingCurve] = useState(false);
 
   const allTempSensors = [...cpuTemps, ...gpuTemps, ...hddTemps, ...caseTemps];
   const allLoadSensors = [...cpuLoads, ...gpuLoads];
@@ -183,10 +184,11 @@ export function FanCurvesPage() {
   };
 
   const handleSaveCurve = async () => {
-    if (!selectedCurve) return;
+    if (!selectedCurve || savingCurve) return;
     const curve = curves.find((c) => c.id === selectedCurve);
     if (!curve) return;
 
+    setSavingCurve(true);
     const updated = { ...curve, points: editingPoints };
     try {
       const saved = await api.updateCurve(updated);
@@ -216,6 +218,8 @@ export function FanCurvesPage() {
         return;
       }
       toast('Failed to save curve. Check your connection.', 'error');
+    } finally {
+      setSavingCurve(false);
     }
   };
 
@@ -410,11 +414,11 @@ export function FanCurvesPage() {
                 </div>
                 <button
                   onClick={handleSaveCurve}
-                  disabled={!canWrite}
+                  disabled={!canWrite || savingCurve}
                   className="btn-primary min-h-11 flex items-center gap-2 text-sm disabled:opacity-50"
                 >
                   <Save size={14} />
-                  Save Curve
+                  {savingCurve ? 'Saving...' : 'Save Curve'}
                 </button>
               </div>
             </div>

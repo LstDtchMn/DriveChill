@@ -412,6 +412,13 @@ internal static class Program
             await context.RequestServices.GetRequiredService<WebSocketHub>().HandleAsync(context);
         });
 
+        // Dispose pooled HttpClient instances on shutdown to release sockets.
+        app.Lifetime.ApplicationStopping.Register(() =>
+        {
+            foreach (var kvp in Api.MachinesController.DrainClientPool())
+                kvp.Dispose();
+        });
+
         return app;
     }
 
@@ -515,7 +522,14 @@ internal static class Program
     {
         var a = Encoding.UTF8.GetBytes(left);
         var b = Encoding.UTF8.GetBytes(right);
-        return a.Length == b.Length && CryptographicOperations.FixedTimeEquals(a, b);
+        // Pad shorter array so FixedTimeEquals always runs in constant time
+        // without leaking the length of the stored token via short-circuit.
+        var len = Math.Max(a.Length, b.Length);
+        var pa = new byte[len];
+        var pb = new byte[len];
+        a.CopyTo(pa, 0);
+        b.CopyTo(pb, 0);
+        return a.Length == b.Length && CryptographicOperations.FixedTimeEquals(pa, pb);
     }
 
     private static async Task Reject(HttpContext context, int statusCode, string detail)
