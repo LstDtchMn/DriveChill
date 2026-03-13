@@ -65,7 +65,7 @@ export function FanCurvesPage() {
 
   const allTempSensors = [...cpuTemps, ...gpuTemps, ...hddTemps, ...caseTemps];
   const allLoadSensors = [...cpuLoads, ...gpuLoads];
-  const allCurveInputSensors = [...allTempSensors, ...allLoadSensors];
+  const _allCurveInputSensors = [...allTempSensors, ...allLoadSensors];
   const allFans = fanRpms.map((f) => f.id.replace('_rpm', ''));
 
   // Compute the current operating point for the selected curve

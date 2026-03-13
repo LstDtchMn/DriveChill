@@ -1,0 +1,10 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GET /api/auth/status",
+  "type": "object",
+  "required": ["auth_enabled"],
+  "properties": {
+    "auth_enabled": { "type": "boolean" }
+  },
+  "additionalProperties": true
+}

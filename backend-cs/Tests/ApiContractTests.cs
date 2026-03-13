@@ -551,6 +551,153 @@ public sealed class ApiContractTests : IDisposable
     }
 
     // -------------------------------------------------------------------
+    // Synthetic — new v3.4 contract schemas (15 schemas)
+    // -------------------------------------------------------------------
+
+    [Fact]
+    public void AuthStatusSchema_ValidatesSyntheticData()
+    {
+        var data = JsonDocument.Parse("""{"auth_enabled": true}""").RootElement;
+        ValidateAgainstSchema(data, LoadSchema("auth_status"));
+    }
+
+    [Fact]
+    public void AuthSessionSchema_ValidatesSyntheticData()
+    {
+        var data = JsonDocument.Parse("""
+        {"auth_required": true, "authenticated": true, "username": "admin", "role": "admin"}
+        """).RootElement;
+        ValidateAgainstSchema(data, LoadSchema("auth_session"));
+    }
+
+    [Fact]
+    public void AuthUsersSchema_ValidatesSyntheticData()
+    {
+        var data = JsonDocument.Parse("""
+        {"users": [{"id": 1, "username": "admin", "role": "admin", "created_at": "2026-03-12T00:00:00Z"}]}
+        """).RootElement;
+        ValidateAgainstSchema(data, LoadSchema("auth_users"));
+    }
+
+    [Fact]
+    public void AuthApiKeysSchema_ValidatesSyntheticData()
+    {
+        var data = JsonDocument.Parse("""
+        {"api_keys": [{"id": "k1", "name": "CI", "key_prefix": "dc_", "scopes": ["sensors:read"], "role": "admin", "created_by": "admin", "created_at": "2026-03-12T00:00:00Z", "revoked_at": null, "last_used_at": null}]}
+        """).RootElement;
+        ValidateAgainstSchema(data, LoadSchema("auth_api_keys"));
+    }
+
+    [Fact]
+    public void AnalyticsHistorySchema_ValidatesSyntheticData()
+    {
+        var data = JsonDocument.Parse("""
+        {
+            "buckets": [{"sensor_id": "cpu_temp_0", "timestamp_utc": "2026-03-12T10:00:00Z", "avg_value": 55.0, "min_value": 50.0, "max_value": 60.0, "sample_count": 12}],
+            "series": {},
+            "bucket_seconds": 300,
+            "requested_range": {"start": "2026-03-12T10:00:00Z", "end": "2026-03-12T11:00:00Z"},
+            "returned_range": {"start": "2026-03-12T10:00:00Z", "end": "2026-03-12T11:00:00Z"},
+            "retention_limited": false
+        }
+        """).RootElement;
+        ValidateAgainstSchema(data, LoadSchema("analytics_history"));
+    }
+
+    [Fact]
+    public void AnalyticsAnomaliesSchema_ValidatesSyntheticData()
+    {
+        var data = JsonDocument.Parse("""
+        {
+            "anomalies": [{"timestamp_utc": "2026-03-12T10:30:00Z", "sensor_id": "cpu_temp_0", "sensor_name": "CPU", "value": 95.0, "unit": "C", "z_score": 3.5, "mean": 55.0, "stdev": 11.4, "severity": "critical"}],
+            "z_score_threshold": 2.5
+        }
+        """).RootElement;
+        ValidateAgainstSchema(data, LoadSchema("analytics_anomalies"));
+    }
+
+    [Fact]
+    public void AnalyticsReportSchema_ValidatesSyntheticData()
+    {
+        var data = JsonDocument.Parse("""
+        {"generated_at": "2026-03-12T12:00:00Z", "window_hours": 24, "stats": [], "anomalies": [], "top_anomalous_sensors": [], "regressions": []}
+        """).RootElement;
+        ValidateAgainstSchema(data, LoadSchema("analytics_report"));
+    }
+
+    [Fact]
+    public void FanCurvesSchema_ValidatesSyntheticData()
+    {
+        var data = JsonDocument.Parse("""
+        {"curves": [{"id": "c1", "fan_id": "CPU Fan", "enabled": true, "points": [{"temp": 30, "speed": 20}]}]}
+        """).RootElement;
+        ValidateAgainstSchema(data, LoadSchema("fan_curves"));
+    }
+
+    [Fact]
+    public void FanSettingsSchema_ValidatesSyntheticData()
+    {
+        var data = JsonDocument.Parse("""
+        {"fan_settings": [{"fan_id": "CPU Fan", "min_speed_pct": 20, "zero_rpm_capable": false}]}
+        """).RootElement;
+        ValidateAgainstSchema(data, LoadSchema("fan_settings"));
+    }
+
+    [Fact]
+    public void FanStatusSchema_ValidatesSyntheticData()
+    {
+        var data = JsonDocument.Parse("""
+        {"safe_mode": false, "curves_active": 2, "applied_speeds": {"CPU Fan": 45}, "control_sources": {"CPU Fan": ["fan_curve"]}, "startup_safety_active": false}
+        """).RootElement;
+        ValidateAgainstSchema(data, LoadSchema("fan_status"));
+    }
+
+    [Fact]
+    public void NotificationsEmailSchema_ValidatesSyntheticData()
+    {
+        var data = JsonDocument.Parse("""
+        {"settings": {"enabled": true, "smtp_host": "smtp.gmail.com", "smtp_port": 587, "smtp_username": "user@example.com", "has_password": true, "sender_address": "dc@example.com", "recipient_list": ["admin@example.com"], "use_tls": true, "use_ssl": false}}
+        """).RootElement;
+        ValidateAgainstSchema(data, LoadSchema("notifications_email"));
+    }
+
+    [Fact]
+    public void NotificationsPushSchema_ValidatesSyntheticData()
+    {
+        var data = JsonDocument.Parse("""
+        {"subscriptions": [{"id": "sub1", "endpoint": "https://fcm.googleapis.com/fcm/send/abc", "user_agent": "Mozilla/5.0", "created_at": "2026-03-12T00:00:00Z", "last_used_at": null}]}
+        """).RootElement;
+        ValidateAgainstSchema(data, LoadSchema("notifications_push"));
+    }
+
+    [Fact]
+    public void NoiseProfilesSchema_ValidatesSyntheticData()
+    {
+        var data = JsonDocument.Parse("""
+        {"profiles": [{"id": "np1", "fan_id": "CPU Fan", "mode": "quick", "data": [{"rpm": 500, "db": 25.0}], "created_at": "2026-03-12T00:00:00Z", "updated_at": "2026-03-12T00:00:00Z"}]}
+        """).RootElement;
+        ValidateAgainstSchema(data, LoadSchema("noise_profiles"));
+    }
+
+    [Fact]
+    public void ReportSchedulesSchema_ValidatesSyntheticData()
+    {
+        var data = JsonDocument.Parse("""
+        {"schedules": [{"id": "rs1", "frequency": "daily", "time_utc": "08:00", "timezone": "America/New_York", "enabled": true, "last_sent_at": null, "created_at": "2026-03-12T00:00:00Z", "last_error": null, "last_attempted_at": null, "consecutive_failures": 0}]}
+        """).RootElement;
+        ValidateAgainstSchema(data, LoadSchema("report_schedules"));
+    }
+
+    [Fact]
+    public void SchedulerStatusSchema_ValidatesSyntheticData()
+    {
+        var data = JsonDocument.Parse("""
+        {"profile_scheduler": {"running": true, "active_schedule_id": "s1", "last_check_at": "2026-03-12T10:00:00Z"}, "report_scheduler": {"running": true, "last_check_at": "2026-03-12T10:00:00Z", "schedules": []}}
+        """).RootElement;
+        ValidateAgainstSchema(data, LoadSchema("scheduler_status"));
+    }
+
+    // -------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------
 

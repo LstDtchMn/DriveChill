@@ -1,0 +1,29 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GET /api/report-schedules",
+  "type": "object",
+  "required": ["schedules"],
+  "properties": {
+    "schedules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "frequency", "time_utc", "enabled"],
+        "properties": {
+          "id":                    { "type": "string" },
+          "frequency":             { "type": "string" },
+          "time_utc":              { "type": "string" },
+          "timezone":              { "type": "string" },
+          "enabled":               { "type": "boolean" },
+          "last_sent_at":          { "type": ["string", "null"] },
+          "created_at":            { "type": "string" },
+          "last_error":            { "type": ["string", "null"] },
+          "last_attempted_at":     { "type": ["string", "null"] },
+          "consecutive_failures":  { "type": "integer" }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

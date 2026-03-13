@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Audit POST/PUT/PATCH route handlers for request-body validation.
+"""Audit POST/PUT/PATCH/DELETE route handlers for request-body validation.
 
 Scans both backends and reports any POST/PUT/PATCH endpoint that accepts a
-request body without a typed/validated model.
+request body without a typed/validated model.  DELETE routes are included in
+the scan scope but are not required to have a body model.
 
 Python (FastAPI): flags handlers with POST/PUT decorator that have no Pydantic
 BaseModel parameter (e.g. raw dict, no body when one is expected).
@@ -28,9 +29,9 @@ from pathlib import Path
 # Python scanner
 # ---------------------------------------------------------------------------
 
-# Matches @router.post(...), @router.put(...), or @router.patch(...)
+# Matches @router.post(...), @router.put(...), @router.patch(...), or @router.delete(...)
 _PY_ROUTE_RE = re.compile(
-    r"@router\.(post|put|patch)\s*\(",
+    r"@router\.(post|put|patch|delete)\s*\(",
     re.IGNORECASE,
 )
 
@@ -122,6 +123,11 @@ def scan_python(backend_dir: Path) -> list[dict]:
             func_name_m = re.search(r"def (\w+)", lines[def_idx])
             func_name = func_name_m.group(1) if func_name_m else "unknown"
 
+            # DELETE routes don't need a body model — they just need existence
+            # checks handled by the handler.  Skip body-model audit for DELETE.
+            if method == "DELETE":
+                continue
+
             # Skip no-body action routes
             if _py_is_no_body_route(route_path):
                 continue
@@ -144,7 +150,7 @@ def scan_python(backend_dir: Path) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 _CS_ROUTE_RE = re.compile(
-    r"\[(HttpPost|HttpPut|HttpPatch)",
+    r"\[(HttpPost|HttpPut|HttpPatch|HttpDelete)",
     re.IGNORECASE,
 )
 
@@ -193,7 +199,7 @@ def scan_csharp(backend_dir: Path) -> list[dict]:
                 continue
 
             tag = m.group(1)
-            method = "POST" if "Post" in tag else ("PATCH" if "Patch" in tag else "PUT")
+            method = "POST" if "Post" in tag else ("PATCH" if "Patch" in tag else ("DELETE" if "Delete" in tag else "PUT"))
 
             # Check for audit:skip
             context = "\n".join(lines[max(0, i - 1) : min(len(lines), i + 8)])

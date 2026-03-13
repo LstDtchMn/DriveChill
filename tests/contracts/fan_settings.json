@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GET /api/fans/settings",
+  "type": "object",
+  "required": ["fan_settings"],
+  "properties": {
+    "fan_settings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["fan_id"],
+        "properties": {
+          "fan_id":          { "type": "string" },
+          "min_speed_pct":   { "type": "number" },
+          "zero_rpm_capable": { "type": "boolean" }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

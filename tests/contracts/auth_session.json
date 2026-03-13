@@ -1,0 +1,13 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GET /api/auth/session",
+  "type": "object",
+  "required": ["authenticated"],
+  "properties": {
+    "auth_required":  { "type": "boolean" },
+    "authenticated":  { "type": "boolean" },
+    "username":       { "type": "string" },
+    "role":           { "type": "string", "enum": ["admin", "viewer"] }
+  },
+  "additionalProperties": true
+}

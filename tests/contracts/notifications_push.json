@@ -1,0 +1,24 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GET /api/notifications/push-subscriptions",
+  "type": "object",
+  "required": ["subscriptions"],
+  "properties": {
+    "subscriptions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "endpoint"],
+        "properties": {
+          "id":           { "type": "string" },
+          "endpoint":     { "type": "string" },
+          "user_agent":   { "type": ["string", "null"] },
+          "created_at":   { "type": "string" },
+          "last_used_at": { "type": ["string", "null"] }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

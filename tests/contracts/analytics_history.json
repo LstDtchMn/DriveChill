@@ -1,0 +1,27 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GET /api/analytics/history",
+  "type": "object",
+  "required": ["buckets", "bucket_seconds"],
+  "properties": {
+    "buckets":        { "type": "array" },
+    "series":         { "type": "object" },
+    "bucket_seconds": { "type": "integer" },
+    "requested_range": {
+      "type": "object",
+      "properties": {
+        "start": { "type": "string" },
+        "end":   { "type": "string" }
+      }
+    },
+    "returned_range": {
+      "type": "object",
+      "properties": {
+        "start": { "type": "string" },
+        "end":   { "type": "string" }
+      }
+    },
+    "retention_limited": { "type": "boolean" }
+  },
+  "additionalProperties": true
+}

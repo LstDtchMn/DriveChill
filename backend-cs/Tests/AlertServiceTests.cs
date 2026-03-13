@@ -341,6 +341,112 @@ public sealed class AlertServiceTests : IDisposable
         Assert.DoesNotContain("default", activated);
     }
 
+    // -----------------------------------------------------------------------
+    // Rule management
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task AddRule_PersistsInDb()
+    {
+        var rule = AddAboveRule(70);
+        Assert.NotNull(rule.RuleId);
+
+        // Create a fresh AlertService from same DB — rule should reload
+        var svc2 = new AlertService(_db);
+        await svc2.InitializeAsync();
+        var rules = svc2.GetRules();
+        Assert.Single(rules);
+        Assert.Equal(70.0, rules[0].Threshold);
+        svc2.Dispose();
+    }
+
+    [Fact]
+    public async Task DeleteRule_RemovesFromDb()
+    {
+        var rule = AddAboveRule(70);
+        await _svc.DeleteRuleAsync(rule.RuleId);
+
+        var svc2 = new AlertService(_db);
+        await svc2.InitializeAsync();
+        Assert.Empty(svc2.GetRules());
+        svc2.Dispose();
+    }
+
+    [Fact]
+    public async Task DeleteRule_ReturnsFalse_ForUnknownId()
+    {
+        var result = await _svc.DeleteRuleAsync("nonexistent-rule-id");
+        Assert.False(result);
+    }
+
+    [Fact]
+    public void Evaluate_MultiSensor_FiresIndependently()
+    {
+        AddAboveRule(70, "cpu");
+        AddAboveRule(50, "gpu");
+
+        var fired = _svc.Evaluate([
+            Reading("cpu", 75),
+            new SensorReading { Id = "gpu", SensorType = SensorTypeValues.GpuTemp, Value = 55, Unit = "C" },
+        ]);
+
+        Assert.Equal(2, fired.Count);
+    }
+
+    [Fact]
+    public void Evaluate_IgnoresUnmonitoredSensors()
+    {
+        AddAboveRule(70, "cpu");
+
+        var fired = _svc.Evaluate([
+            Reading("unmonitored", 999),
+        ]);
+
+        Assert.Empty(fired);
+    }
+
+    [Fact]
+    public void InjectEvent_AppearsInEvents_ButDoesNotTriggerActions()
+    {
+        var (activated, signal, fn) = MakeSignalingCallback();
+        _svc.SetActivateProfileFn(fn);
+        _svc.SetPreAlertProfile("default");
+
+        _svc.InjectEvent("synthetic", "hdd_temp", "HDD", 55, 50, "above", "SMART trend warning");
+
+        var events = _svc.GetEvents(100);
+        Assert.Single(events);
+        Assert.Equal("synthetic", events[0].RuleId);
+
+        // Should NOT trigger profile callback
+        Assert.False(signal.Wait(100), "InjectEvent should not trigger actions");
+    }
+
+    [Fact]
+    public void DrainInjectedEvents_ReturnsAndClears()
+    {
+        _svc.InjectEvent("s1", "x", "X", 2, 1, "above", "test1");
+        _svc.InjectEvent("s2", "y", "Y", 1, 2, "below", "test2");
+
+        var drained = _svc.DrainInjectedEvents();
+        Assert.Equal(2, drained.Count);
+
+        // Second drain should be empty
+        Assert.Empty(_svc.DrainInjectedEvents());
+    }
+
+    [Fact]
+    public void HasActiveProfileSwitch_ReflectsState()
+    {
+        Assert.False(_svc.HasActiveProfileSwitch);
+        _svc.SetPreAlertProfile("p1");
+        Assert.True(_svc.HasActiveProfileSwitch);
+    }
+
+    // -----------------------------------------------------------------------
+    // Concurrency
+    // -----------------------------------------------------------------------
+
     [Fact]
     public void ConcurrentEvaluateAndMutate_NoDeadlockOrLostUpdates()
     {

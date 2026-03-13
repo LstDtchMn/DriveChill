@@ -23,7 +23,7 @@ const TIME_OPTIONS = [
 
 type FmtFn = (v: number, unit: string) => string;
 
-function Sparkline({ buckets, fmt }: { buckets: AnalyticsBucket[]; fmt: FmtFn }) {
+function _Sparkline({ buckets, fmt }: { buckets: AnalyticsBucket[]; fmt: FmtFn }) {
   const W = 120; const H = 36;
   const sorted = [...buckets].sort((a, b) => new Date(a.timestamp_utc).getTime() - new Date(b.timestamp_utc).getTime());
   if (sorted.length < 2) return null;
@@ -244,7 +244,7 @@ export function AnalyticsPage() {
   const allSensorOptions = stats ?? [];
   const corrXName = allSensorOptions.find((s) => s.sensor_id === corrX)?.sensor_name ?? corrX;
   const corrYName = allSensorOptions.find((s) => s.sensor_id === corrY)?.sensor_name ?? corrY;
-  const coeffColor = corrResult
+  const coeffColor = corrResult && corrResult.coeff !== null
     ? Math.abs(corrResult.coeff) >= 0.7 ? 'var(--success)'
     : Math.abs(corrResult.coeff) >= 0.4 ? 'var(--warning)'
     : 'var(--text-secondary)'

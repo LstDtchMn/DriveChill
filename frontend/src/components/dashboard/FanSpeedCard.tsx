@@ -9,7 +9,7 @@ interface FanSpeedCardProps {
   maxRpm?: number;
 }
 
-export function FanSpeedCard({ name, rpm, percentage, maxRpm = 2000 }: FanSpeedCardProps) {
+export function FanSpeedCard({ name, rpm, percentage, maxRpm: _maxRpm = 2000 }: FanSpeedCardProps) {
   const barWidth = Math.min(100, Math.max(0, percentage));
 
   return (

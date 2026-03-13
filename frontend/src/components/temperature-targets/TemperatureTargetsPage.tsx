@@ -6,7 +6,7 @@ import { useSettingsStore } from '@/stores/settingsStore';
 import { api } from '@/lib/api';
 import { cToF, fToC } from '@/lib/tempUnit';
 import type { TemperatureTarget, SensorReading } from '@/lib/types';
-import { Plus, Trash2, Edit3, ToggleLeft, ToggleRight, Thermometer, Fan, Map, List } from 'lucide-react';
+import { Plus, Trash2, Edit3, ToggleLeft, ToggleRight, Thermometer, Map, List } from 'lucide-react';
 import { useConfirm } from '@/components/ui/ConfirmDialog';
 import { useCanWrite } from '@/hooks/useCanWrite';
 import { ViewerBanner } from '@/components/ui/ViewerBanner';
@@ -300,7 +300,7 @@ function TargetForm({ initial, drives, fans, onSave, onCancel }: TargetFormProps
 // ── Relationship Map ─────────────────────────────────────────────────────────
 
 function RelationshipMap({
-  targets, drives, fans, sensorMap, onEdit, onToggle, onDelete,
+  targets, drives, fans, sensorMap, onEdit, onToggle: _onToggle, onDelete: _onDelete,
 }: {
   targets: TemperatureTarget[];
   drives: SensorReading[];

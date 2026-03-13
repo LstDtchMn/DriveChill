@@ -1,0 +1,29 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GET /api/analytics/anomalies",
+  "type": "object",
+  "required": ["anomalies", "z_score_threshold"],
+  "properties": {
+    "anomalies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["sensor_id", "value", "z_score", "severity"],
+        "properties": {
+          "timestamp_utc": { "type": "string" },
+          "sensor_id":     { "type": "string" },
+          "sensor_name":   { "type": "string" },
+          "value":         { "type": "number" },
+          "unit":          { "type": "string" },
+          "z_score":       { "type": "number" },
+          "mean":          { "type": "number" },
+          "stdev":         { "type": "number" },
+          "severity":      { "type": "string", "enum": ["critical", "warning"] }
+        },
+        "additionalProperties": true
+      }
+    },
+    "z_score_threshold": { "type": "number" }
+  },
+  "additionalProperties": true
+}

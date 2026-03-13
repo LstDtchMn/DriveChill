@@ -524,3 +524,363 @@ class TestVirtualSensorsContract:
             ]
         }
         _validate(data, "virtual_sensors")
+
+
+# ---------------------------------------------------------------------------
+# GET /api/auth/status
+# ---------------------------------------------------------------------------
+
+
+class TestAuthStatusContract:
+    def test_synthetic_response_matches_schema(self):
+        _validate({"auth_enabled": True}, "auth_status")
+
+    def test_missing_field_fails(self):
+        with pytest.raises(jsonschema.ValidationError):
+            _validate({}, "auth_status")
+
+
+# ---------------------------------------------------------------------------
+# GET /api/auth/session
+# ---------------------------------------------------------------------------
+
+
+class TestAuthSessionContract:
+    def test_unauthenticated_matches_schema(self):
+        _validate({"auth_required": True, "authenticated": False}, "auth_session")
+
+    def test_authenticated_matches_schema(self):
+        _validate(
+            {"auth_required": True, "authenticated": True, "username": "admin", "role": "admin"},
+            "auth_session",
+        )
+
+    def test_invalid_role_fails(self):
+        with pytest.raises(jsonschema.ValidationError):
+            _validate(
+                {"authenticated": True, "username": "x", "role": "superuser"},
+                "auth_session",
+            )
+
+
+# ---------------------------------------------------------------------------
+# GET /api/auth/users
+# ---------------------------------------------------------------------------
+
+
+class TestAuthUsersContract:
+    def test_synthetic_response_matches_schema(self):
+        data = {
+            "users": [
+                {"id": 1, "username": "admin", "role": "admin", "created_at": "2026-03-12T00:00:00Z"},
+                {"id": 2, "username": "viewer1", "role": "viewer", "created_at": "2026-03-12T01:00:00Z"},
+            ]
+        }
+        _validate(data, "auth_users")
+
+    def test_empty_users_matches_schema(self):
+        _validate({"users": []}, "auth_users")
+
+
+# ---------------------------------------------------------------------------
+# GET /api/auth/api-keys
+# ---------------------------------------------------------------------------
+
+
+class TestAuthApiKeysContract:
+    def test_synthetic_response_matches_schema(self):
+        data = {
+            "api_keys": [
+                {
+                    "id": "k1",
+                    "name": "CI Key",
+                    "key_prefix": "dc_abc",
+                    "scopes": ["sensors:read", "fans:write"],
+                    "role": "admin",
+                    "created_by": "admin",
+                    "created_at": "2026-03-12T00:00:00Z",
+                    "revoked_at": None,
+                    "last_used_at": None,
+                }
+            ]
+        }
+        _validate(data, "auth_api_keys")
+
+
+# ---------------------------------------------------------------------------
+# GET /api/analytics/history
+# ---------------------------------------------------------------------------
+
+
+class TestAnalyticsHistoryContract:
+    def test_synthetic_response_matches_schema(self):
+        data = {
+            "buckets": [
+                {
+                    "sensor_id": "cpu_temp_0",
+                    "timestamp_utc": "2026-03-12T10:00:00Z",
+                    "avg_value": 55.0,
+                    "min_value": 50.0,
+                    "max_value": 60.0,
+                    "sample_count": 12,
+                }
+            ],
+            "series": {},
+            "bucket_seconds": 300,
+            "requested_range": {"start": "2026-03-12T10:00:00Z", "end": "2026-03-12T11:00:00Z"},
+            "returned_range": {"start": "2026-03-12T10:00:00Z", "end": "2026-03-12T11:00:00Z"},
+            "retention_limited": False,
+        }
+        _validate(data, "analytics_history")
+
+    def test_empty_buckets_matches_schema(self):
+        data = {"buckets": [], "bucket_seconds": 300}
+        _validate(data, "analytics_history")
+
+
+# ---------------------------------------------------------------------------
+# GET /api/analytics/anomalies
+# ---------------------------------------------------------------------------
+
+
+class TestAnalyticsAnomaliesContract:
+    def test_synthetic_response_matches_schema(self):
+        data = {
+            "anomalies": [
+                {
+                    "timestamp_utc": "2026-03-12T10:30:00Z",
+                    "sensor_id": "cpu_temp_0",
+                    "sensor_name": "CPU Temp",
+                    "value": 95.0,
+                    "unit": "°C",
+                    "z_score": 3.5,
+                    "mean": 55.0,
+                    "stdev": 11.4,
+                    "severity": "critical",
+                }
+            ],
+            "z_score_threshold": 2.5,
+        }
+        _validate(data, "analytics_anomalies")
+
+    def test_invalid_severity_fails(self):
+        with pytest.raises(jsonschema.ValidationError):
+            data = {
+                "anomalies": [
+                    {
+                        "sensor_id": "x",
+                        "value": 1,
+                        "z_score": 3,
+                        "severity": "low",
+                    }
+                ],
+                "z_score_threshold": 2.5,
+            }
+            _validate(data, "analytics_anomalies")
+
+
+# ---------------------------------------------------------------------------
+# GET /api/analytics/report
+# ---------------------------------------------------------------------------
+
+
+class TestAnalyticsReportContract:
+    def test_synthetic_response_matches_schema(self):
+        data = {
+            "generated_at": "2026-03-12T12:00:00Z",
+            "window_hours": 24,
+            "stats": [],
+            "anomalies": [],
+            "top_anomalous_sensors": [],
+            "regressions": [],
+        }
+        _validate(data, "analytics_report")
+
+
+# ---------------------------------------------------------------------------
+# GET /api/fans/curves
+# ---------------------------------------------------------------------------
+
+
+class TestFanCurvesContract:
+    def test_synthetic_response_matches_schema(self):
+        data = {
+            "curves": [
+                {
+                    "id": "c1",
+                    "fan_id": "CPU Fan",
+                    "enabled": True,
+                    "points": [{"temp": 30, "speed": 20}, {"temp": 80, "speed": 100}],
+                }
+            ]
+        }
+        _validate(data, "fan_curves")
+
+    def test_empty_curves_matches_schema(self):
+        _validate({"curves": []}, "fan_curves")
+
+
+# ---------------------------------------------------------------------------
+# GET /api/fans/settings
+# ---------------------------------------------------------------------------
+
+
+class TestFanSettingsContract:
+    def test_synthetic_response_matches_schema(self):
+        data = {
+            "fan_settings": [
+                {"fan_id": "CPU Fan", "min_speed_pct": 20, "zero_rpm_capable": False}
+            ]
+        }
+        _validate(data, "fan_settings")
+
+
+# ---------------------------------------------------------------------------
+# GET /api/fans/status
+# ---------------------------------------------------------------------------
+
+
+class TestFanStatusContract:
+    def test_synthetic_response_matches_schema(self):
+        data = {
+            "safe_mode": False,
+            "curves_active": 2,
+            "applied_speeds": {"CPU Fan": 45, "Case Fan": 30},
+            "control_sources": {"CPU Fan": ["fan_curve"], "Case Fan": ["temperature_target"]},
+            "startup_safety_active": False,
+        }
+        _validate(data, "fan_status")
+
+    def test_minimal_matches_schema(self):
+        _validate({"safe_mode": True}, "fan_status")
+
+
+# ---------------------------------------------------------------------------
+# GET /api/notifications/email
+# ---------------------------------------------------------------------------
+
+
+class TestNotificationsEmailContract:
+    def test_synthetic_response_matches_schema(self):
+        data = {
+            "settings": {
+                "enabled": True,
+                "smtp_host": "smtp.gmail.com",
+                "smtp_port": 587,
+                "smtp_username": "user@example.com",
+                "has_password": True,
+                "sender_address": "drivechill@example.com",
+                "recipient_list": ["admin@example.com"],
+                "use_tls": True,
+                "use_ssl": False,
+            }
+        }
+        _validate(data, "notifications_email")
+
+    def test_missing_settings_fails(self):
+        with pytest.raises(jsonschema.ValidationError):
+            _validate({}, "notifications_email")
+
+
+# ---------------------------------------------------------------------------
+# GET /api/notifications/push-subscriptions
+# ---------------------------------------------------------------------------
+
+
+class TestNotificationsPushContract:
+    def test_synthetic_response_matches_schema(self):
+        data = {
+            "subscriptions": [
+                {
+                    "id": "sub1",
+                    "endpoint": "https://fcm.googleapis.com/fcm/send/abc123",
+                    "user_agent": "Mozilla/5.0",
+                    "created_at": "2026-03-12T00:00:00Z",
+                    "last_used_at": None,
+                }
+            ]
+        }
+        _validate(data, "notifications_push")
+
+    def test_empty_subscriptions_matches_schema(self):
+        _validate({"subscriptions": []}, "notifications_push")
+
+
+# ---------------------------------------------------------------------------
+# GET /api/noise-profiles
+# ---------------------------------------------------------------------------
+
+
+class TestNoiseProfilesContract:
+    def test_synthetic_response_matches_schema(self):
+        data = {
+            "profiles": [
+                {
+                    "id": "np1",
+                    "fan_id": "CPU Fan",
+                    "mode": "quick",
+                    "data": [{"rpm": 500, "db": 25.0}, {"rpm": 1200, "db": 38.5}],
+                    "created_at": "2026-03-12T00:00:00Z",
+                    "updated_at": "2026-03-12T00:00:00Z",
+                }
+            ]
+        }
+        _validate(data, "noise_profiles")
+
+    def test_empty_profiles_matches_schema(self):
+        _validate({"profiles": []}, "noise_profiles")
+
+
+# ---------------------------------------------------------------------------
+# GET /api/report-schedules
+# ---------------------------------------------------------------------------
+
+
+class TestReportSchedulesContract:
+    def test_synthetic_response_matches_schema(self):
+        data = {
+            "schedules": [
+                {
+                    "id": "rs1",
+                    "frequency": "daily",
+                    "time_utc": "08:00",
+                    "timezone": "America/New_York",
+                    "enabled": True,
+                    "last_sent_at": None,
+                    "created_at": "2026-03-12T00:00:00Z",
+                    "last_error": None,
+                    "last_attempted_at": None,
+                    "consecutive_failures": 0,
+                }
+            ]
+        }
+        _validate(data, "report_schedules")
+
+
+# ---------------------------------------------------------------------------
+# GET /api/scheduler/status
+# ---------------------------------------------------------------------------
+
+
+class TestSchedulerStatusContract:
+    def test_synthetic_response_matches_schema(self):
+        data = {
+            "profile_scheduler": {
+                "running": True,
+                "active_schedule_id": "s1",
+                "last_check_at": "2026-03-12T10:00:00Z",
+            },
+            "report_scheduler": {
+                "running": True,
+                "last_check_at": "2026-03-12T10:00:00Z",
+                "schedules": [],
+            },
+        }
+        _validate(data, "scheduler_status")
+
+    def test_idle_scheduler_matches_schema(self):
+        data = {
+            "profile_scheduler": {"running": False, "active_schedule_id": None, "last_check_at": None},
+            "report_scheduler": {"running": False, "last_check_at": None, "schedules": []},
+        }
+        _validate(data, "scheduler_status")

@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { api } from '@/lib/api';
-import type { AnalyticsStat, AnalyticsAnomaly } from '@/lib/types';
+import type { AnalyticsStat } from '@/lib/types';
 
 type FmtFn = (v: number, unit: string) => string;
 
@@ -106,7 +106,7 @@ function DeltaCardView({ card, fmt }: { card: DeltaCard; fmt: FmtFn }) {
     }
   }
 
-  const formatDelta = () => {
+  const _formatDelta = () => {
     if (delta === null) return '—';
     const sign = delta > 0 ? '+' : '';
     if (card.unit === 'anomalies') {

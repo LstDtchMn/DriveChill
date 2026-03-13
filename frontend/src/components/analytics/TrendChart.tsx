@@ -194,7 +194,7 @@ export function TrendChart({ buckets, sensorId: _sensorId, unit, fmt, annotation
   );
 
   const showTooltip = useCallback(
-    (clientX: number, clientY: number) => {
+    (clientX: number, _clientY: number) => {
       const rect = svgRef.current?.getBoundingClientRect();
       if (!rect) return;
       const svgX = getSvgX(clientX);
@@ -229,7 +229,7 @@ export function TrendChart({ buckets, sensorId: _sensorId, unit, fmt, annotation
     setTooltip(null);
   };
 
-  const onMouseUp = (e: React.MouseEvent<SVGSVGElement>) => {
+  const onMouseUp = (_e: React.MouseEvent<SVGSVGElement>) => {
     if (dragStart === null || dragEnd === null) return;
     const x1 = Math.min(dragStart, dragEnd);
     const x2 = Math.max(dragStart, dragEnd);

@@ -14,7 +14,7 @@ import { useSettingsStore } from '@/stores/settingsStore';
 import { useCanWrite } from '@/hooks/useCanWrite';
 import type { NoiseProfile, NoiseDataPoint } from '@/lib/types';
 import { AudioMeter } from '@/lib/audioMeter';
-import { Trash2, Mic, MicOff, Play, StopCircle } from 'lucide-react';
+import { Trash2, Mic, MicOff, StopCircle } from 'lucide-react';
 import { useConfirm } from '@/components/ui/ConfirmDialog';
 import { useToast } from '@/components/ui/ToastProvider';
 
@@ -112,7 +112,7 @@ export function NoiseProfiler() {
     meterRef.current = meter;
     try {
       await meter.start();
-    } catch (err) {
+    } catch (_err) {
       setErrorMsg('Microphone access denied. Please allow microphone use and try again.');
       setSweepState('error');
       meter.stop();
@@ -202,7 +202,7 @@ export function NoiseProfiler() {
       setProfiles((prev) => [saved, ...prev]);
       setSweepState('done');
       toast('Noise profile saved', 'success');
-    } catch (err) {
+    } catch (_err) {
       setErrorMsg('Failed to save noise profile.');
       setSweepState('error');
     }

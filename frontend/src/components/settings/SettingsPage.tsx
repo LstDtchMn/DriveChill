@@ -83,7 +83,7 @@ export function SettingsPage() {
   const [appVersion, setAppVersion] = useState('...');
   const [pushSubs, setPushSubs] = useState<PushSubscription[]>([]);
   const [pushSubsBusy, setPushSubsBusy] = useState<Set<string>>(new Set());
-  const [subscribing, setSubscribing] = useState(false);
+  const [subscribing, _setSubscribing] = useState(false);
   const [emailSettings, setEmailSettings] = useState<EmailNotificationSettings | null>(null);
   const [emailPasswordInput, setEmailPasswordInput] = useState('');
   const [emailSaving, setEmailSaving] = useState(false);

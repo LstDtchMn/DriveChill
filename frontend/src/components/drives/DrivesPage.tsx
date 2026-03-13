@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
-import type { DriveSummary, DriveDetail, DriveSelfTestRun, DriveSettings, DriveHealthStatus } from '@/lib/types';
+import type { DriveSummary, DriveDetail, DriveSelfTestRun, DriveHealthStatus } from '@/lib/types';
 import { RefreshCw, HardDrive, Thermometer, ChevronLeft, Activity, AlertTriangle, Wind, Plus } from 'lucide-react';
 import { useAppStore } from '@/stores/appStore';
 import { useSettingsStore } from '@/stores/settingsStore';

@@ -1,0 +1,28 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GET /api/auth/api-keys",
+  "type": "object",
+  "required": ["api_keys"],
+  "properties": {
+    "api_keys": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "scopes"],
+        "properties": {
+          "id":           { "type": "string" },
+          "name":         { "type": "string" },
+          "key_prefix":   { "type": "string" },
+          "scopes":       { "type": "array", "items": { "type": "string" } },
+          "role":         { "type": "string" },
+          "created_by":   { "type": ["string", "null"] },
+          "created_at":   { "type": "string" },
+          "revoked_at":   { "type": ["string", "null"] },
+          "last_used_at": { "type": ["string", "null"] }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}
