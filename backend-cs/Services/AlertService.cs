@@ -119,12 +119,20 @@ public sealed class AlertService : IDisposable
 
     public async Task<bool> DeleteRuleAsync(string ruleId, CancellationToken ct = default)
     {
+        // Check existence under read lock first
+        _rwLock.EnterReadLock();
+        AlertRule? rule;
+        try { rule = _rules.FirstOrDefault(r => r.RuleId == ruleId); }
+        finally { _rwLock.ExitReadLock(); }
+        if (rule == null) return false;
+
+        // DB delete first — if it fails, in-memory state stays consistent
+        await _db.DeleteAlertRuleAsync(ruleId, ct);
+
         bool wasInOrder;
         _rwLock.EnterWriteLock();
         try
         {
-            var rule = _rules.FirstOrDefault(r => r.RuleId == ruleId);
-            if (rule == null) return false;
             _rules.Remove(rule);
             _active.Remove(ruleId);
             wasInOrder = _actionFiredOrder.Remove(ruleId);
@@ -139,7 +147,6 @@ public sealed class AlertService : IDisposable
             }
         }
         finally { _rwLock.ExitWriteLock(); }
-        await _db.DeleteAlertRuleAsync(ruleId, ct);
         if (wasInOrder) HandleActionReeval();
         return true;
     }
@@ -243,7 +250,11 @@ public sealed class AlertService : IDisposable
         {
             _logger.LogInformation("Alert rule {RuleId} firing profile switch to {ProfileId}",
                 rule.RuleId, rule.Action.ProfileId);
-            _ = Task.Run(() => fn(rule.Action.ProfileId));
+            _ = Task.Run(async () =>
+            {
+                try { await fn(rule.Action.ProfileId); }
+                catch (Exception ex) { _logger.LogError(ex, "Alert profile switch to {ProfileId} failed", rule.Action.ProfileId); }
+            });
         }
     }
 
@@ -317,9 +328,17 @@ public sealed class AlertService : IDisposable
 
         // Fire profile callbacks outside the lock to avoid holding it during I/O
         if (switchToProfileId != null && fn != null)
-            _ = Task.Run(() => fn(switchToProfileId));
+            _ = Task.Run(async () =>
+            {
+                try { await fn(switchToProfileId); }
+                catch (Exception ex) { _logger.LogError(ex, "Alert profile re-eval switch to {ProfileId} failed", switchToProfileId); }
+            });
         else if (revertToProfileId != null && fn != null)
-            _ = Task.Run(() => fn(revertToProfileId));
+            _ = Task.Run(async () =>
+            {
+                try { await fn(revertToProfileId); }
+                catch (Exception ex) { _logger.LogError(ex, "Alert profile revert to {ProfileId} failed", revertToProfileId); }
+            });
     }
 
     // -----------------------------------------------------------------------

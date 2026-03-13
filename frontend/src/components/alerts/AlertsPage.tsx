@@ -45,7 +45,7 @@ export function AlertsPage() {
         }
         setProfiles(profileData.profiles || []);
       } catch {
-        // API not available
+        setError('Failed to load alerts. Check your connection.');
       }
     };
     fetchData();

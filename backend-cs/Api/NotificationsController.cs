@@ -124,9 +124,17 @@ public sealed class NotificationsController : ControllerBase
         if (string.IsNullOrEmpty(p256dh) || string.IsNullOrEmpty(auth))
             return BadRequest(new { detail = "p256dh and auth are required" });
 
+        var endpoint = epEl.GetString()!;
+
+        // Duplicate check: if this endpoint is already registered, return the existing subscription
+        var existing = await _db.GetAllPushSubscriptionsAsync(ct);
+        var dup = existing.FirstOrDefault(s => s.Endpoint == endpoint);
+        if (dup != null)
+            return Ok(new { success = true, subscription = ToPushView(dup) });
+
         var sub = new PushSubscriptionRecord
         {
-            Endpoint  = epEl.GetString()!,
+            Endpoint  = endpoint,
             P256dh    = p256dh,
             AuthKey   = auth,
             UserAgent = body.TryGetProperty("user_agent", out var ua) ? ua.GetString() : null,

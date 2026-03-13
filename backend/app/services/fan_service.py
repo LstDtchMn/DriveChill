@@ -649,7 +649,10 @@ class FanService:
             self._ramp_state[fan_id] = speed
 
         for fan_id, speed in applied.items():
-            await self._backend.set_fan_speed(fan_id, speed)
+            try:
+                await self._backend.set_fan_speed(fan_id, speed)
+            except Exception:
+                logger.exception("Failed to set speed on fan %s", fan_id)
 
         self._control_sources = applied_sources
         return applied

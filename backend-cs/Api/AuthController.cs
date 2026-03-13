@@ -67,13 +67,13 @@ public sealed class AuthController : ControllerBase
     public async Task<IActionResult> Setup([FromBody] LoginRequest req, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(req.Username) || req.Username.Length > 128)
-            return BadRequest(new { error = "username must be 1-128 characters" });
+            return BadRequest(new { detail = "username must be 1-128 characters" });
         if (string.IsNullOrWhiteSpace(req.Password) || req.Password.Length < 8 || req.Password.Length > 256)
-            return BadRequest(new { error = "password must be 8-256 characters" });
+            return BadRequest(new { detail = "password must be 8-256 characters" });
 
         var created = await _sessions.SetupAsync(req.Username.Trim(), req.Password, ct);
         if (!created)
-            return Conflict(new { error = "Setup already completed. User exists." });
+            return Conflict(new { detail = "Setup already completed. User exists." });
 
         // Auto-login after setup
         var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
@@ -91,15 +91,15 @@ public sealed class AuthController : ControllerBase
     {
         var ip = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
         if (!_sessions.CheckRateLimit(ip))
-            return StatusCode(429, new { error = "Too many requests. Try again later." });
+            return StatusCode(429, new { detail = "Too many requests. Try again later." });
 
         if (string.IsNullOrWhiteSpace(req.Username) || string.IsNullOrWhiteSpace(req.Password))
-            return BadRequest(new { error = "username and password are required" });
+            return BadRequest(new { detail = "username and password are required" });
 
         var ua = Request.Headers.UserAgent.ToString();
         var tokens = await _sessions.LoginAsync(req.Username.Trim(), req.Password, ip, ua, ct);
         if (tokens == null)
-            return Unauthorized(new { error = "Invalid credentials or account locked" });
+            return Unauthorized(new { detail = "Invalid credentials or account locked" });
 
         SetSessionCookies(tokens.Value.SessionToken, tokens.Value.CsrfToken);
         return Ok(new { success = true, username = req.Username.Trim() });
@@ -145,9 +145,10 @@ public sealed class AuthController : ControllerBase
             return BadRequest(new { detail = "role must be 'admin' or 'viewer'" });
 
         var hash = HashPasswordInternal(req.Password);
+        long userId;
         try
         {
-            await _db.CreateUserAsync(req.Username.Trim(), hash, req.Role, ct);
+            userId = await _db.CreateUserAsync(req.Username.Trim(), hash, req.Role, ct);
         }
         catch (Microsoft.Data.Sqlite.SqliteException ex) when (ex.SqliteErrorCode == 19)
         {
@@ -155,7 +156,7 @@ public sealed class AuthController : ControllerBase
         }
         var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
         LogAuthEvent("user_created", ip, req.Username.Trim(), "success", $"role={req.Role}");
-        return Ok(new { success = true, username = req.Username.Trim(), role = req.Role });
+        return Ok(new { success = true, user_id = userId, username = req.Username.Trim(), role = req.Role });
     }
 
     /// <summary>PUT /api/auth/users/{userId}/role — change role.</summary>
@@ -278,7 +279,7 @@ public sealed class AuthController : ControllerBase
     public async Task<IActionResult> CreateApiKey([FromBody] CreateApiKeyRequest req, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(req.Name))
-            return BadRequest(new { error = "name is required" });
+            return BadRequest(new { detail = "name is required" });
 
         // Determine caller's role so the key's effective role can be capped.
         var callerRole = "admin";

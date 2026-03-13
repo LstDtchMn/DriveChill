@@ -68,9 +68,13 @@ public sealed class ProfilesController : ControllerBase
     [HttpDelete("{id}")]
     public async Task<IActionResult> DeleteProfile(string id, CancellationToken ct = default)
     {
-        return await _db.DeleteProfileAsync(id, ct)
-            ? Ok(new { ok = true })
-            : NotFound(new { detail = "Profile not found" });
+        var profile = await _db.GetProfileAsync(id, ct);
+        if (profile is null)
+            return NotFound(new { detail = "Profile not found" });
+        if (profile.IsActive)
+            return Conflict(new { detail = "Cannot delete the active profile. Activate a different profile first." });
+        await _db.DeleteProfileAsync(id, ct);
+        return Ok(new { success = true });
     }
 
     /// <summary>PUT /api/profiles/{id}/activate -- load curves into FanService.</summary>

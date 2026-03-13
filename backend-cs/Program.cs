@@ -107,6 +107,11 @@ internal static class Program
                 await host.WaitForShutdownAsync(cts.Token);
             }
             catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"FATAL: Host startup failed: {ex.Message}");
+                Application.ExitThread();
+            }
         });
 
         // Auto-open browser after Kestrel has had time to bind
@@ -265,14 +270,9 @@ internal static class Program
             context.Response.Headers["X-Content-Type-Options"] = "nosniff";
             context.Response.Headers["X-Frame-Options"] = "DENY";
             context.Response.Headers["Referrer-Policy"] = "strict-origin-when-cross-origin";
-            // Explicitly allow ws:// and wss:// so the WebSocket connection works
-            // even in browsers where 'self' alone does not cover the ws/wss
-            // scheme mapping.  Use the request Host so CSP works for any
-            // deployment (not just localhost).  This is safe: CSP is a browser-side
-            // directive and the Host header reflects the origin the browser used.
-            var wsHost = context.Request.Host.HasValue
-                ? context.Request.Host.ToString()
-                : $"localhost:{settings.Port}";
+            // CSP uses a configured origin instead of reflecting the Host header
+            // (attacker-controlled Host could inject malicious CSP directives).
+            var wsHost = $"localhost:{settings.Port}";
             context.Response.Headers["Content-Security-Policy"] =
                 "default-src 'self'; " +
                 // Next.js static export injects inline bootstrap scripts.

@@ -265,7 +265,7 @@ export function SettingsPage() {
     fetchPushSubs();
     fetchEmailSettings();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isAdmin]);
 
   const handleSave = async () => {
     if (!settings) return;

@@ -204,15 +204,19 @@ public sealed class FanService
         Dictionary<string, string> sources;
         lock (_controlSourcesLock) sources = new Dictionary<string, string>(_controlSources);
 
+        // Flatten safe_mode to match Python's contract: { active: bool, released: bool, reason: str|null }
+        string? reason = null;
+        if (_tempPanic) reason = "temp_panic";
+        else if (_sensorPanic) reason = "sensor_failure";
+        else if (_released) reason = "released";
+
         return new
         {
             safe_mode = new
             {
+                active = _sensorPanic || _tempPanic,
                 released = _released,
-                sensor_panic = _sensorPanic,
-                temp_panic = _tempPanic,
-                panic_cpu_temp = PanicCpuTemp,
-                panic_gpu_temp = PanicGpuTemp,
+                reason,
             },
             curves_active = activeCurves,
             applied_speeds = speeds,
@@ -509,7 +513,10 @@ public sealed class FanService
                 : "profile";
 
             // Enforce per-fan minimum speed floor (zero-RPM fans are exempt at 0%)
-            _fanSettings.TryGetValue(fanId, out var fs);
+            FanSettingsModel? fs;
+            _rwl.EnterReadLock();
+            try { _fanSettings.TryGetValue(fanId, out fs); }
+            finally { _rwl.ExitReadLock(); }
             if (fs is { MinSpeedPct: > 0 })
             {
                 if (finalSpeed == 0 && fs.ZeroRpmCapable)

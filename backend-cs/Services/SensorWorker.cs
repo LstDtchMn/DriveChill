@@ -163,7 +163,7 @@ public sealed class SensorWorker : BackgroundService
                     foreach (var evt in allEvents)
                         DriveChillMetrics.AlertEventsTotal.WithLabels(evt.RuleId, evt.Condition).Inc();
 
-                    // Dispatch all delivery channels concurrently (fire-and-forget).
+                    // Fire-and-forget — DispatchAsync returns void and logs its own errors.
                     _alertDelivery.DispatchAsync(allEvents);
                 }
 

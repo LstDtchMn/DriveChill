@@ -163,7 +163,11 @@ public sealed class UpdateController : ControllerBase
             using var doc      = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
             var root           = doc.RootElement;
             var latestTag      = root.GetProperty("tag_name").GetString()?.TrimStart('v') ?? "";
-            var releaseUrl     = root.GetProperty("html_url").GetString()  ?? "";
+            var rawReleaseUrl  = root.GetProperty("html_url").GetString()  ?? "";
+            // Sanitize release URL — only allow https:// scheme to prevent open redirect
+            var releaseUrl     = Uri.TryCreate(rawReleaseUrl, UriKind.Absolute, out var releaseUri)
+                                 && releaseUri.Scheme == "https"
+                                 ? rawReleaseUrl : "";
             var updateAvail    = CompareVersions(latestTag, _settings.AppVersion) > 0;
 
             _cachedResult = new CheckResult(

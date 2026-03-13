@@ -356,6 +356,12 @@ public sealed class DbService : IDisposable
                 """;
             await cmd.ExecuteNonQueryAsync(ct);
 
+            // Enable WAL mode for better concurrent read/write performance
+            // (matches Python backend's WAL mode setting).
+            await using var walCmd = conn.CreateCommand();
+            walCmd.CommandText = "PRAGMA journal_mode=WAL;";
+            await walCmd.ExecuteNonQueryAsync(ct);
+
             // Run file-based migrations (replaces the old hardcoded ALTER TABLE loop).
             // MigrationRunner tracks applied versions in a schema_version table,
             // backs up before applying, and rolls back on failure.
@@ -1760,7 +1766,11 @@ public sealed class DbService : IDisposable
         }
         else if (!preservePassword)
         {
-            storedPassword = CredentialEncryption.Encrypt(s.SmtpPassword, _settings.SecretKey);
+            // Guard: don't double-encrypt an already-encrypted value
+            if (s.SmtpPassword.StartsWith("v1:"))
+                storedPassword = s.SmtpPassword;
+            else
+                storedPassword = CredentialEncryption.Encrypt(s.SmtpPassword, _settings.SecretKey);
         }
 
         await using var conn = new SqliteConnection(_connStr);
@@ -1840,18 +1850,19 @@ public sealed class DbService : IDisposable
         return Convert.ToInt32(await cmd.ExecuteScalarAsync(ct)) > 0;
     }
 
-    public async Task CreateUserAsync(string username, string passwordHash, string role = "admin", CancellationToken ct = default)
+    public async Task<long> CreateUserAsync(string username, string passwordHash, string role = "admin", CancellationToken ct = default)
     {
         await EnsureInitialisedAsync(ct);
         await using var conn = new SqliteConnection(_connStr);
         await conn.OpenAsync(ct);
         await using var cmd = conn.CreateCommand();
-        cmd.CommandText = "INSERT INTO users (username, password_hash, role, created_at) VALUES ($u, $h, $r, $t)";
+        cmd.CommandText = "INSERT INTO users (username, password_hash, role, created_at) VALUES ($u, $h, $r, $t); SELECT last_insert_rowid();";
         cmd.Parameters.AddWithValue("$u", username);
         cmd.Parameters.AddWithValue("$h", passwordHash);
         cmd.Parameters.AddWithValue("$r", role);
         cmd.Parameters.AddWithValue("$t", DateTimeOffset.UtcNow.ToString("o"));
-        await cmd.ExecuteNonQueryAsync(ct);
+        var result = await cmd.ExecuteScalarAsync(ct);
+        return result is long id ? id : 0;
     }
 
     public async Task<(string Username, string PasswordHash)?> GetUserAsync(string username, CancellationToken ct = default)

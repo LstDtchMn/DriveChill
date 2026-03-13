@@ -234,7 +234,11 @@ export function SystemOverview() {
               <div
                 key={machine.id}
                 className="card p-4 animate-card-enter"
+                role="button"
+                tabIndex={0}
+                aria-label={`View ${machine.name} details`}
                 onClick={() => setSelectedMachineId(machine.id)}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedMachineId(machine.id); } }}
                 style={{ cursor: 'pointer', transition: 'opacity 0.15s' }}
                 onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.opacity = '0.8'; }}
                 onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.opacity = '1'; }}

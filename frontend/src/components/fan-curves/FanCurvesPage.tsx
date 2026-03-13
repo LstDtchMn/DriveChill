@@ -192,7 +192,7 @@ export function FanCurvesPage() {
       const saved = await api.updateCurve(updated);
       const serverId = saved?.id ?? updated.id;
       const serverCurve = { ...updated, id: serverId };
-      setCurves(curves.map((c) => (c.id === selectedCurve ? serverCurve : c)));
+      setCurves((prev) => prev.map((c) => (c.id === selectedCurve ? serverCurve : c)));
       if (serverId !== selectedCurve) setSelectedCurve(serverId);
     } catch (err) {
       if (err instanceof APIError && err.status === 409) {
@@ -208,7 +208,7 @@ export function FanCurvesPage() {
           const saved = await api.updateCurve(updated, true);
           const serverId = saved?.id ?? updated.id;
           const serverCurve = { ...updated, id: serverId };
-          setCurves(curves.map((c) => (c.id === selectedCurve ? serverCurve : c)));
+          setCurves((prev) => prev.map((c) => (c.id === selectedCurve ? serverCurve : c)));
           if (serverId !== selectedCurve) setSelectedCurve(serverId);
         } catch {
           toast('Failed to save curve.', 'error');
@@ -221,14 +221,14 @@ export function FanCurvesPage() {
 
   const handleToggleSensor = (sensorId: string) => {
     if (!selectedCurve) return;
-    const curve = curves.find((c) => c.id === selectedCurve);
-    if (!curve) return;
-    const ids = curve.sensor_ids ?? [];
-    const next = ids.includes(sensorId)
-      ? ids.filter((s) => s !== sensorId)
-      : [...ids, sensorId];
-    const updated = { ...curve, sensor_ids: next };
-    setCurves(curves.map((c) => (c.id === selectedCurve ? updated : c)));
+    setCurves((prev) => prev.map((c) => {
+      if (c.id !== selectedCurve) return c;
+      const ids = c.sensor_ids ?? [];
+      const next = ids.includes(sensorId)
+        ? ids.filter((s) => s !== sensorId)
+        : [...ids, sensorId];
+      return { ...c, sensor_ids: next };
+    }));
   };
 
   const [creatingCurve, setCreatingCurve] = useState(false);

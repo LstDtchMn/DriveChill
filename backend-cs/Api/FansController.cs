@@ -40,7 +40,9 @@ public sealed class FansController : ControllerBase
             return BadRequest(new { detail = "speed must be 0–100" });
 
         var ok = _fans.SetSpeed(req.FanId, req.Speed);
-        return ok ? Ok(new { ok = true }) : NotFound(new { detail = $"Fan '{req.FanId}' not found" });
+        return ok
+            ? Ok(new { success = true, fan_id = req.FanId, speed = req.Speed })
+            : NotFound(new { detail = $"Fan '{req.FanId}' not found" });
     }
 
     /// <summary>POST /api/fans/{fanId}/auto — return fan to motherboard control.</summary>
@@ -48,7 +50,7 @@ public sealed class FansController : ControllerBase
     public IActionResult SetAuto(string fanId)
     {
         var ok = _fans.SetAuto(fanId);
-        return ok ? Ok(new { ok = true }) : NotFound(new { detail = $"Fan '{fanId}' not found" });
+        return ok ? Ok(new { success = true }) : NotFound(new { detail = $"Fan '{fanId}' not found" });
     }
 
     // -----------------------------------------------------------------------
@@ -107,7 +109,7 @@ public sealed class FansController : ControllerBase
     public IActionResult DeleteCurve(string curveId)
     {
         _fans.DeleteCurve(curveId);
-        return Ok(new { ok = true });
+        return Ok(new { success = true });
     }
 
     // -----------------------------------------------------------------------
