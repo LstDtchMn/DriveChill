@@ -25,24 +25,6 @@ public sealed class SensorsController : ControllerBase
         return Ok(snap);
     }
 
-    /// <summary>GET /api/sensors/history — DEPRECATED, use /api/analytics/history instead.</summary>
-    [HttpGet("history")]
-    [Obsolete("Use /api/analytics/history instead")]
-    public async Task<IActionResult> GetHistory(
-        [FromQuery(Name = "sensor_id")] string sensorId,
-        [FromQuery] double hours = 1,
-        CancellationToken ct = default)
-    {
-        if (string.IsNullOrWhiteSpace(sensorId))
-            return BadRequest(new { detail ="sensor_id is required" });
-
-        var since = DateTimeOffset.UtcNow.AddHours(-hours);
-        var rows  = await _db.GetHistoryAsync(sensorId, since, ct);
-        Response.Headers["Deprecation"] = "true";
-        Response.Headers["Link"] = "</api/analytics/history>; rel=\"successor-version\"";
-        return Ok(rows);
-    }
-
     /// <summary>GET /api/sensors/export?hours=24 — CSV download.</summary>
     [HttpGet("export")]
     public async Task<IActionResult> Export(

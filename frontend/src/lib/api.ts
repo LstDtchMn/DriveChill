@@ -204,8 +204,7 @@ export const api = {
     }),
   deleteSensorLabel: (sensorId: string) =>
     fetchAPI(`/api/sensors/${encodeURIComponent(sensorId)}/label`, { method: 'DELETE' }),
-  getHistory: (sensorId?: string, hours = 1) =>
-    fetchAPI<{ data: any[] }>(`/api/sensors/history?hours=${hours}${sensorId ? `&sensor_id=${encodeURIComponent(sensorId)}` : ''}`),
+  // getHistory removed — use api.analytics.getHistory() instead
 
   // Fans
   getFans: () => fetchAPI<{ fans: string[] }>('/api/fans'),
@@ -330,7 +329,7 @@ export const api = {
       `/api/machines/${encodeURIComponent(machineId)}/snapshot`
     ),
   verifyMachine: (machineId: string) =>
-    fetchAPI<{ success: boolean; status: string; snapshot?: import('./types').MachineSnapshot; error?: string }>(
+    fetchAPI<{ success: boolean; status: string; latency_ms?: number; snapshot?: import('./types').MachineSnapshot; error?: string }>(
       `/api/machines/${encodeURIComponent(machineId)}/verify`,
       { method: 'POST' }
     ),

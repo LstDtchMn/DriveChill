@@ -16,6 +16,10 @@ public sealed class FanService
     private readonly VirtualSensorService? _virtualSensorSvc;
 
     private readonly ReaderWriterLockSlim _rwl = new();
+    // Serialise all hardware fan-speed writes to avoid concurrent I/O to the
+    // same controller (USB HID / WMI / LHM).  The RWL protects in-memory
+    // state; this mutex protects the physical bus.
+    private readonly SemaphoreSlim _hwMutex = new(1, 1);
     // fanId → curve (null means auto/manual)
     private readonly Dictionary<string, FanCurve?> _curves = new();
     // fanId → last applied speed percent (used to avoid redundant hardware calls)
@@ -236,16 +240,21 @@ public sealed class FanService
             if (!_sensorPanic)
             {
                 _sensorPanic = true;
-                _rwl.EnterWriteLock();
+                _hwMutex.Wait();
                 try
                 {
-                    foreach (var fanId in _hw.GetFanIds())
+                    _rwl.EnterWriteLock();
+                    try
                     {
-                        _hw.SetFanSpeed(fanId, 100);
-                        _lastApplied[fanId] = 100;
+                        foreach (var fanId in _hw.GetFanIds())
+                        {
+                            _hw.SetFanSpeed(fanId, 100);
+                            _lastApplied[fanId] = 100;
+                        }
                     }
+                    finally { _rwl.ExitWriteLock(); }
                 }
-                finally { _rwl.ExitWriteLock(); }
+                finally { _hwMutex.Release(); }
                 lock (_controlSourcesLock)
                 {
                     _controlSources.Clear();
@@ -275,16 +284,21 @@ public sealed class FanService
         if (shouldPanic && !_tempPanic)
         {
             _tempPanic = true;
-            _rwl.EnterWriteLock();
+            _hwMutex.Wait();
             try
             {
-                foreach (var fanId in _hw.GetFanIds())
+                _rwl.EnterWriteLock();
+                try
                 {
-                    _hw.SetFanSpeed(fanId, 100);
-                    _lastApplied[fanId] = 100;
+                    foreach (var fanId in _hw.GetFanIds())
+                    {
+                        _hw.SetFanSpeed(fanId, 100);
+                        _lastApplied[fanId] = 100;
+                    }
                 }
+                finally { _rwl.ExitWriteLock(); }
             }
-            finally { _rwl.ExitWriteLock(); }
+            finally { _hwMutex.Release(); }
             lock (_controlSourcesLock)
             {
                 _controlSources.Clear();
@@ -331,7 +345,9 @@ public sealed class FanService
             _lastApplied[fanId] = speedPercent;
         }
         finally { _rwl.ExitWriteLock(); }
-        return _hw.SetFanSpeed(fanId, speedPercent);
+        _hwMutex.Wait();
+        try { return _hw.SetFanSpeed(fanId, speedPercent); }
+        finally { _hwMutex.Release(); }
     }
 
     public bool SetAuto(string fanId)
@@ -435,8 +451,13 @@ public sealed class FanService
             else
             {
                 var startupFanIds = _hw.GetFanIds();
-                foreach (var fanId in startupFanIds)
-                    _hw.SetFanSpeed(fanId, StartupSafetySpeed);
+                _hwMutex.Wait();
+                try
+                {
+                    foreach (var fanId in startupFanIds)
+                        _hw.SetFanSpeed(fanId, StartupSafetySpeed);
+                }
+                finally { _hwMutex.Release(); }
                 lock (_controlSourcesLock)
                 {
                     _controlSources.Clear();
@@ -574,8 +595,13 @@ public sealed class FanService
         // Apply speeds and record under write lock to avoid concurrent dictionary mutation
         if (toApply.Count > 0)
         {
-            foreach (var (fanId, speed) in toApply)
-                _hw.SetFanSpeed(fanId, speed);
+            _hwMutex.Wait();
+            try
+            {
+                foreach (var (fanId, speed) in toApply)
+                    _hw.SetFanSpeed(fanId, speed);
+            }
+            finally { _hwMutex.Release(); }
 
             _rwl.EnterWriteLock();
             try

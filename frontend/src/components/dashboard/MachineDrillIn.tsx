@@ -28,6 +28,8 @@ export function MachineDrillIn({ machine, onClose }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [releaseMsg, setReleaseMsg] = useState<string | null>(null);
+  const [verifying, setVerifying] = useState(false);
+  const [verifyResult, setVerifyResult] = useState<{ status: string; latency_ms?: number } | null>(null);
 
   const fetchState = useCallback(async () => {
     setLoading(true);
@@ -58,6 +60,21 @@ export function MachineDrillIn({ machine, onClose }: Props) {
       setBusy(false);
     }
   }, [machine.id, busy, fetchState]);
+
+  const handleVerify = useCallback(async () => {
+    if (verifying) return;
+    setVerifying(true);
+    setVerifyResult(null);
+    try {
+      const r = await api.verifyMachine(machine.id);
+      setVerifyResult({ status: r.status ?? 'unknown', latency_ms: r.latency_ms });
+    } catch (err) {
+      setVerifyResult({ status: 'error' });
+      setError(err instanceof Error ? err.message : 'Health check failed');
+    } finally {
+      setVerifying(false);
+    }
+  }, [machine.id, verifying]);
 
   const handleRelease = useCallback(async () => {
     if (busy) return;
@@ -113,6 +130,26 @@ export function MachineDrillIn({ machine, onClose }: Props) {
         >
           {machine.base_url}
         </span>
+        {canWrite && (
+          <button
+            className="btn-secondary"
+            disabled={verifying}
+            onClick={handleVerify}
+            style={{ fontSize: '0.8rem', padding: '4px 10px', marginLeft: 'auto', flexShrink: 0 }}
+          >
+            {verifying ? 'Checking…' : 'Check Now'}
+          </button>
+        )}
+        {verifyResult && (
+          <span className="text-xs" style={{
+            color: verifyResult.status === 'online' ? 'var(--success)' : 'var(--danger)',
+            flexShrink: 0,
+          }}>
+            {verifyResult.status === 'online'
+              ? `Online${verifyResult.latency_ms != null ? ` (${verifyResult.latency_ms}ms)` : ''}`
+              : verifyResult.status === 'error' ? 'Check failed' : verifyResult.status}
+          </span>
+        )}
       </div>
 
       {/* Persistent last_error from machine record */}

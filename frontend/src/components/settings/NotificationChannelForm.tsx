@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Pencil, X } from 'lucide-react';
 import type { NotificationChannel, NotificationChannelType } from '@/lib/types';
 import { api } from '@/lib/api';
@@ -16,7 +16,7 @@ const CHANNEL_HINTS: Record<NotificationChannelType, string> = {
   slack: '— { "webhook_url": "https://hooks.slack.com/services/..." }',
   ntfy: '— { "topic": "my-alerts", "url": "https://ntfy.sh" }',
   generic_webhook: '— { "url": "https://...", "hmac_secret": "optional" }',
-  mqtt: '— { "broker_url": "mqtt://host:1883", "topic_prefix": "drivechill", "username": "", "password": "", "client_id": "drivechill-hub", "qos": 1, "retain": false, "publish_telemetry": false }',
+  mqtt: '',
 };
 
 const CHANNEL_PLACEHOLDERS: Record<NotificationChannelType, string> = {
@@ -24,7 +24,7 @@ const CHANNEL_PLACEHOLDERS: Record<NotificationChannelType, string> = {
   slack: '{ "webhook_url": "" }',
   ntfy: '{ "topic": "", "url": "https://ntfy.sh" }',
   generic_webhook: '{ "url": "" }',
-  mqtt: '{\n  "broker_url": "mqtt://192.168.1.100:1883",\n  "topic_prefix": "drivechill",\n  "username": "",\n  "password": "",\n  "client_id": "drivechill-hub",\n  "qos": 1,\n  "retain": false,\n  "publish_telemetry": false\n}',
+  mqtt: '',
 };
 
 const CHANNEL_TYPE_LABELS: Record<NotificationChannelType, string> = {
@@ -35,12 +35,100 @@ const CHANNEL_TYPE_LABELS: Record<NotificationChannelType, string> = {
   mqtt: 'MQTT',
 };
 
+interface MqttConfig {
+  broker_url: string;
+  topic_prefix: string;
+  username: string;
+  password: string;
+  client_id: string;
+  qos: number;
+  retain: boolean;
+  publish_telemetry: boolean;
+}
+
+const DEFAULT_MQTT: MqttConfig = {
+  broker_url: 'mqtt://192.168.1.100:1883',
+  topic_prefix: 'drivechill',
+  username: '',
+  password: '',
+  client_id: 'drivechill-hub',
+  qos: 1,
+  retain: false,
+  publish_telemetry: false,
+};
+
+function MqttConfigFields({ mqtt, onChange }: { mqtt: MqttConfig; onChange: (m: MqttConfig) => void }) {
+  const inputStyle = { background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)' };
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="text-xs block mb-1" style={{ color: 'var(--text-secondary)' }}>Broker URL</label>
+          <input className="w-full p-2 rounded text-xs" style={inputStyle}
+            value={mqtt.broker_url} onChange={e => onChange({ ...mqtt, broker_url: e.target.value })}
+            placeholder="mqtt://192.168.1.100:1883" />
+        </div>
+        <div>
+          <label className="text-xs block mb-1" style={{ color: 'var(--text-secondary)' }}>Topic Prefix</label>
+          <input className="w-full p-2 rounded text-xs" style={inputStyle}
+            value={mqtt.topic_prefix} onChange={e => onChange({ ...mqtt, topic_prefix: e.target.value })}
+            placeholder="drivechill" />
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="text-xs block mb-1" style={{ color: 'var(--text-secondary)' }}>Username</label>
+          <input className="w-full p-2 rounded text-xs" style={inputStyle}
+            value={mqtt.username} onChange={e => onChange({ ...mqtt, username: e.target.value })}
+            placeholder="(optional)" />
+        </div>
+        <div>
+          <label className="text-xs block mb-1" style={{ color: 'var(--text-secondary)' }}>Password</label>
+          <input className="w-full p-2 rounded text-xs" type="password" style={inputStyle}
+            value={mqtt.password} onChange={e => onChange({ ...mqtt, password: e.target.value })}
+            placeholder="(optional)" />
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="text-xs block mb-1" style={{ color: 'var(--text-secondary)' }}>Client ID</label>
+          <input className="w-full p-2 rounded text-xs" style={inputStyle}
+            value={mqtt.client_id} onChange={e => onChange({ ...mqtt, client_id: e.target.value })}
+            placeholder="drivechill-hub" />
+        </div>
+        <div>
+          <label className="text-xs block mb-1" style={{ color: 'var(--text-secondary)' }}>QoS</label>
+          <select className="w-full p-2 rounded text-xs" style={inputStyle}
+            value={mqtt.qos} onChange={e => onChange({ ...mqtt, qos: Number(e.target.value) })}>
+            <option value={0}>0 — At most once</option>
+            <option value={1}>1 — At least once</option>
+            <option value={2}>2 — Exactly once</option>
+          </select>
+        </div>
+      </div>
+      <div className="flex items-center gap-4">
+        <label className="flex items-center gap-2 text-xs cursor-pointer" style={{ color: 'var(--text-secondary)' }}>
+          <input type="checkbox" checked={mqtt.retain}
+            onChange={e => onChange({ ...mqtt, retain: e.target.checked })} />
+          Retain messages
+        </label>
+        <label className="flex items-center gap-2 text-xs cursor-pointer" style={{ color: 'var(--text-secondary)' }}>
+          <input type="checkbox" checked={mqtt.publish_telemetry}
+            onChange={e => onChange({ ...mqtt, publish_telemetry: e.target.checked })} />
+          Publish telemetry (sensor data every poll)
+        </label>
+      </div>
+    </div>
+  );
+}
+
 export function NotificationChannelForm({ isAdmin, toast, confirm }: NotificationChannelFormProps) {
   const [channels, setChannels] = useState<NotificationChannel[]>([]);
   const [name, setName] = useState('');
   const [type, setType] = useState<NotificationChannelType>('discord');
   const [enabled, setEnabled] = useState(true);
   const [config, setConfig] = useState('');
+  const [mqttConfig, setMqttConfig] = useState<MqttConfig>({ ...DEFAULT_MQTT });
   const [editId, setEditId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [testingId, setTestingId] = useState<string | null>(null);
@@ -50,22 +138,34 @@ export function NotificationChannelForm({ isAdmin, toast, confirm }: Notificatio
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const resetForm = () => {
+  const resetForm = useCallback(() => {
     setEditId(null);
     setName('');
     setType('discord');
     setEnabled(true);
     setConfig('');
-  };
+    setMqttConfig({ ...DEFAULT_MQTT });
+  }, []);
 
-  const handleSave = async () => {
-    let parsed: Record<string, unknown>;
+  const getConfigPayload = useCallback((): Record<string, unknown> | null => {
+    if (type === 'mqtt') {
+      if (!mqttConfig.broker_url.trim()) {
+        toast('Broker URL is required.', 'error');
+        return null;
+      }
+      return { ...mqttConfig };
+    }
     try {
-      parsed = config.trim() ? JSON.parse(config) : {};
+      return config.trim() ? JSON.parse(config) : {};
     } catch {
       toast('Config must be valid JSON.', 'error');
-      return;
+      return null;
     }
+  }, [type, mqttConfig, config, toast]);
+
+  const handleSave = async () => {
+    const parsed = getConfigPayload();
+    if (parsed === null) return;
     setBusy(true);
     try {
       if (editId) {
@@ -137,7 +237,22 @@ export function NotificationChannelForm({ isAdmin, toast, confirm }: Notificatio
                         setName(ch.name);
                         setType(ch.type);
                         setEnabled(ch.enabled);
-                        setConfig(JSON.stringify(ch.config, null, 2));
+                        if (ch.type === 'mqtt' && ch.config) {
+                          const c = ch.config as Record<string, unknown>;
+                          setMqttConfig({
+                            broker_url: (c.broker_url as string) ?? DEFAULT_MQTT.broker_url,
+                            topic_prefix: (c.topic_prefix as string) ?? DEFAULT_MQTT.topic_prefix,
+                            username: (c.username as string) ?? '',
+                            password: (c.password as string) ?? '',
+                            client_id: (c.client_id as string) ?? DEFAULT_MQTT.client_id,
+                            qos: typeof c.qos === 'number' ? c.qos : DEFAULT_MQTT.qos,
+                            retain: typeof c.retain === 'boolean' ? c.retain : DEFAULT_MQTT.retain,
+                            publish_telemetry: typeof c.publish_telemetry === 'boolean' ? c.publish_telemetry : DEFAULT_MQTT.publish_telemetry,
+                          });
+                          setConfig('');
+                        } else {
+                          setConfig(JSON.stringify(ch.config, null, 2));
+                        }
                       }}>
                       <Pencil size={12} />
                     </button>
@@ -196,16 +311,20 @@ export function NotificationChannelForm({ isAdmin, toast, confirm }: Notificatio
               Enabled
             </label>
           </div>
-          <div>
-            <label className="text-xs block mb-1" style={{ color: 'var(--text-secondary)' }}>
-              Config (JSON)
-              <span style={{ opacity: 0.6, marginLeft: 4 }}>{CHANNEL_HINTS[type]}</span>
-            </label>
-            <textarea className="w-full p-2 rounded text-xs font-mono" rows={type === 'mqtt' ? 10 : 4}
-              style={{ background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', resize: 'vertical' }}
-              value={config} onChange={e => setConfig(e.target.value)}
-              placeholder={CHANNEL_PLACEHOLDERS[type]} />
-          </div>
+          {type === 'mqtt' ? (
+            <MqttConfigFields mqtt={mqttConfig} onChange={setMqttConfig} />
+          ) : (
+            <div>
+              <label className="text-xs block mb-1" style={{ color: 'var(--text-secondary)' }}>
+                Config (JSON)
+                <span style={{ opacity: 0.6, marginLeft: 4 }}>{CHANNEL_HINTS[type]}</span>
+              </label>
+              <textarea className="w-full p-2 rounded text-xs font-mono" rows={4}
+                style={{ background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', resize: 'vertical' }}
+                value={config} onChange={e => setConfig(e.target.value)}
+                placeholder={CHANNEL_PLACEHOLDERS[type]} />
+            </div>
+          )}
           <div className="flex gap-2">
             <button className="btn-primary text-xs px-4 py-2" disabled={busy || !name.trim()}
               onClick={handleSave}>
