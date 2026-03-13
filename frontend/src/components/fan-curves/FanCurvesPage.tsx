@@ -13,6 +13,7 @@ import { useConfirm } from '@/components/ui/ConfirmDialog';
 import { useToast } from '@/components/ui/ToastProvider';
 import { useCanWrite } from '@/hooks/useCanWrite';
 import { ViewerBanner } from '@/components/ui/ViewerBanner';
+import { ScheduleCalendarGrid } from './ScheduleCalendarGrid';
 
 const DEFAULT_POINTS: FanCurvePoint[] = [
   { temp: 30, speed: 20 },
@@ -467,9 +468,7 @@ export function FanCurvesPage() {
       )}
 
       {activeTab === 'schedule' && (
-        <div style={{ padding: '20px', color: 'var(--text-secondary)', textAlign: 'center' }}>
-          Schedule calendar loading...
-        </div>
+        <ScheduleCalendarGrid />
       )}
 
       {/* Fan Benchmarks */}
