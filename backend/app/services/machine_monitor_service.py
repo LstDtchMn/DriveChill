@@ -16,6 +16,7 @@ import httpx
 from app.config import settings
 from app.db.repositories.machine_repo import MachineRepo
 from app.utils.url_security import validate_outbound_url_at_request_time
+from app.services.ip_pinning_transport import IPPinningTransport
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,12 @@ class MachineMonitorService:
     async def start(self) -> None:
         """Start the background polling loop for all enabled machines."""
         self._running = True
-        self._client = httpx.AsyncClient(follow_redirects=False)
+        self._client = httpx.AsyncClient(
+            transport=IPPinningTransport(
+                allow_private=settings.allow_private_outbound_targets,
+            ),
+            follow_redirects=False,
+        )
         self._task = asyncio.create_task(self._poll_loop())
 
     async def stop(self) -> None:
