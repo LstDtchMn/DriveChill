@@ -172,8 +172,13 @@ public sealed class FanService
     public void ReleaseFanControl()
     {
         _released = true;
-        foreach (var fanId in _hw.GetFanIds())
-            _hw.SetFanAuto(fanId);
+        _hwMutex.Wait();
+        try
+        {
+            foreach (var fanId in _hw.GetFanIds())
+                _hw.SetFanAuto(fanId);
+        }
+        finally { _hwMutex.Release(); }
     }
 
     /// <summary>Resume software control after release.</summary>

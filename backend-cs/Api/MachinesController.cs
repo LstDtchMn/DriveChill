@@ -148,7 +148,8 @@ public sealed class MachinesController : ControllerBase
             if (key.MachineId == machineId && _clientPool.TryRemove(key, out var stale))
                 stale.Dispose();
         }
-        _creationLocks.TryRemove(machineId, out _);
+        if (_creationLocks.TryRemove(machineId, out var sem))
+            sem.Dispose();
 
         return Ok(new { success = true });
     }

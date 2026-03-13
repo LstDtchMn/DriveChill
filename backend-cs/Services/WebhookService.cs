@@ -19,12 +19,13 @@ public sealed class WebhookService
     // ── Integration health tracking ──────────────────────────────────────
     private long _successCount;
     private long _failureCount;
+    private volatile string? _lastError;
+    private readonly object _deliveryTimeLock = new();
     private DateTimeOffset? _lastDeliveryAt;
-    private string? _lastError;
 
     public long SuccessCount => Interlocked.Read(ref _successCount);
     public long FailureCount => Interlocked.Read(ref _failureCount);
-    public DateTimeOffset? LastDeliveryAt => _lastDeliveryAt;
+    public DateTimeOffset? LastDeliveryAt { get { lock (_deliveryTimeLock) return _lastDeliveryAt; } }
     public string? LastError => _lastError;
 
     public WebhookService(SettingsStore store, IHttpClientFactory httpClientFactory, AppSettings appSettings)
@@ -178,7 +179,7 @@ public sealed class WebhookService
 
             if (success)
             {
-                _lastDeliveryAt = DateTimeOffset.UtcNow;
+                lock (_deliveryTimeLock) _lastDeliveryAt = DateTimeOffset.UtcNow;
                 Interlocked.Increment(ref _successCount);
                 _lastError = null;
                 return;
