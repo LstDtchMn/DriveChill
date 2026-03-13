@@ -235,6 +235,7 @@ export function FanCurvesPage() {
     }));
   };
 
+  const [activeTab, setActiveTab] = useState<'curves' | 'schedule' | 'benchmarks'>('curves');
   const [creatingCurve, setCreatingCurve] = useState(false);
   const handleNewCurve = async () => {
     if (creatingCurve) return;
@@ -268,6 +269,35 @@ export function FanCurvesPage() {
       <ViewerBanner />
       <PresetSelector />
 
+      {/* Tab bar */}
+      <div style={{
+        display: 'flex',
+        borderBottom: '1px solid var(--border)',
+        marginBottom: '16px',
+        gap: '0',
+      }}>
+        {(['curves', 'schedule', 'benchmarks'] as const).map(tab => (
+          <button
+            key={tab}
+            onClick={() => setActiveTab(tab)}
+            style={{
+              padding: '10px 20px',
+              background: 'none',
+              border: 'none',
+              borderBottom: activeTab === tab ? '2px solid var(--accent)' : '2px solid transparent',
+              color: activeTab === tab ? 'var(--accent)' : 'var(--text-secondary)',
+              cursor: 'pointer',
+              fontWeight: activeTab === tab ? 600 : 400,
+              fontSize: '14px',
+              textTransform: 'capitalize',
+            }}
+          >
+            {tab === 'curves' ? 'Curves' : tab === 'schedule' ? 'Schedule' : 'Benchmarks'}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === 'curves' && (
       <div className="border-t pt-6" style={{ borderColor: 'var(--border)' }}>
         <div className="flex items-center justify-between gap-2 mb-4 flex-wrap">
           <h3 className="section-title">Custom Curves</h3>
@@ -434,9 +464,16 @@ export function FanCurvesPage() {
           </div>
         )}
       </div>
+      )}
+
+      {activeTab === 'schedule' && (
+        <div style={{ padding: '20px', color: 'var(--text-secondary)', textAlign: 'center' }}>
+          Schedule calendar loading...
+        </div>
+      )}
 
       {/* Fan Benchmarks */}
-      {allFans.length > 0 && (
+      {activeTab === 'benchmarks' && allFans.length > 0 && (
         <div className="border-t pt-6" style={{ borderColor: 'var(--border)' }}>
           <h3 className="section-title mb-4">Fan Benchmarks</h3>
           <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
